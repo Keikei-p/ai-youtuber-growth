@@ -49,6 +49,11 @@ class Settings:
         "stable-diffusion-v1-5/stable-diffusion-v1-5",
     )
 
+    studio_gpu_retries: int = int(os.getenv("STUDIO_GPU_RETRIES", "2"))
+    studio_cpu_fallback: bool = (
+        os.getenv("STUDIO_CPU_FALLBACK", "true").lower() == "true"
+    )
+
     youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
     youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
     youtube_contains_synthetic_media: bool = (
