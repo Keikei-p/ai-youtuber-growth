@@ -6,7 +6,12 @@ from pathlib import Path
 from config import settings
 from gpu_manager import release_torch_cuda_cache, unload_ollama_model
 from runtime_control import ai_video_enabled, guest_image_auto_enabled
-from storage import active_guests, mark_guest_used, update_video_output
+from storage import (
+    active_guests,
+    get_channel_state,
+    mark_guest_used,
+    update_video_output,
+)
 from self_improvement import effective_scene_image_count, record_failure
 from studio.asset_store import GENERATED_ROOT
 from studio.image_generator import (
@@ -159,6 +164,12 @@ def _ai_video_prompt(item: dict) -> str:
 
 def _generate_ai_video_asset(item: dict) -> str | None:
     if not ai_video_enabled():
+        return None
+    if get_channel_state("runtime_resource_mode", "").strip() == "urgent":
+        print(
+            "[PIPELINE][AI-VIDEO] 投稿が近いためAI動画素材を省略し、"
+            "軽い本編制作を優先します。"
+        )
         return None
     try:
         print(f"[PIPELINE][AI-VIDEO] #{item['id']} 短いAI動画素材を生成")
