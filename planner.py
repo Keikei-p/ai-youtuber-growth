@@ -40,6 +40,10 @@ def plan_ideas(character: dict, recent: list[dict], count: int | None = None) ->
         "growth_strategy",
         "まだ十分な分析データがない。テーマを分散し、実績型・改善型・新規実験を混ぜる。"
     )
+    improvement = get_channel_state(
+        "ai_improvement_report",
+        ""
+    )
 
     if not client.available():
         return FALLBACK_IDEAS[:count]
@@ -53,6 +57,9 @@ AI YouTuber本人が自分でチャンネルを成長させている、という
 
 現在の成長戦略:
 {strategy}
+
+AI改善センターの最新提案:
+{improvement or "まだなし"}
 
 直近動画:
 {json.dumps(recent, ensure_ascii=False)}
