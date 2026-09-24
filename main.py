@@ -55,28 +55,39 @@ def render_results(results: list[dict], character: dict) -> None:
             item["media_error"] = str(exc)
             print(f"[MEDIA] #{item['id']} 失敗: {exc}")
 
-def upload_results(results: list[dict]) -> None:
-    if settings.dry_run:
+def upload_results(
+    results: list[dict],
+    *,
+    privacy_status: str | None = None,
+    force: bool = False,
+    max_items: int | None = None,
+) -> None:
+    if settings.dry_run and not force:
         print("[UPLOAD] DRY_RUN=true のためYouTube投稿は実行しません。")
         return
 
     from youtube.uploader import upload_video
 
-    for item in results:
-        output = item.get("output_path")
-        if not output:
-            continue
+    effective_privacy = privacy_status or settings.youtube_privacy_status
+    candidates = [item for item in results if item.get("output_path")]
+    if max_items is not None:
+        candidates = candidates[:max_items]
+
+    for item in candidates:
         try:
             youtube_id = upload_video(
-                video_path=Path(output),
+                video_path=Path(item["output_path"]),
                 title=item["title"],
                 description=item.get("description", ""),
-                privacy_status=settings.youtube_privacy_status,
+                privacy_status=effective_privacy,
             )
             item["youtube_video_id"] = youtube_id
             item["status"] = "uploaded"
             mark_uploaded(item["id"], youtube_id)
-            print(f"[UPLOAD] #{item['id']} -> YouTube ID {youtube_id}")
+            print(
+                f"[UPLOAD] #{item['id']} -> YouTube ID {youtube_id} "
+                f"[{effective_privacy}]"
+            )
         except Exception as exc:
             item["upload_error"] = str(exc)
             print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
@@ -121,12 +132,16 @@ def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict 
     print(f"[SKIP] 安全テンプレートも品質チェックNG: {issues}")
     return None
 
-def run_generation(render: bool = False, upload: bool = False) -> list[dict]:
+def run_generation(
+    render: bool = False,
+    upload: bool = False,
+    target_override: int | None = None,
+) -> list[dict]:
     ensure_runtime_dirs()
     init_db()
     character = load_character()
     recent = recent_videos(30)
-    target = settings.posts_per_day
+    target = target_override or settings.posts_per_day
     results: list[dict] = []
 
     for generation_round in range(1, settings.max_generation_rounds + 1):
@@ -187,6 +202,17 @@ def run_generation(render: bool = False, upload: bool = False) -> list[dict]:
     export_json(PLAN_DIR / f"{stamp}.json", results)
     return results
 
+def run_private_upload_test() -> list[dict]:
+    print("[TEST-UPLOAD] 1本だけ生成し、YouTubeへ必ず非公開(private)で投稿します。")
+    results = run_generation(render=True, upload=False, target_override=1)
+    upload_results(
+        results,
+        privacy_status="private",
+        force=True,
+        max_items=1,
+    )
+    return results
+
 def run_learning() -> None:
     ensure_runtime_dirs()
     init_db()
@@ -216,6 +242,11 @@ def main() -> None:
     parser.add_argument("--show", action="store_true", help="生成結果を詳しく表示")
     parser.add_argument("--render", action="store_true", help="VOICEVOX+FFmpegでShorts動画まで生成")
     parser.add_argument("--upload", action="store_true", help="生成動画をYouTubeへ投稿")
+    parser.add_argument(
+        "--test-upload",
+        action="store_true",
+        help="1本だけ生成してYouTubeへ必ず非公開でテスト投稿",
+    )
     parser.add_argument("--learn", action="store_true", help="投稿済み動画を分析して学習メモを保存")
     args = parser.parse_args()
 
@@ -223,8 +254,13 @@ def main() -> None:
         run_learning()
         return
 
-    results = run_generation(render=args.render or args.upload, upload=args.upload)
-    print(f"\n生成完了: {len(results)}本 / 目標 {settings.posts_per_day}本")
+    if args.test_upload:
+        results = run_private_upload_test()
+    else:
+        results = run_generation(render=args.render or args.upload, upload=args.upload)
+
+    target = 1 if args.test_upload else settings.posts_per_day
+    print(f"\n生成完了: {len(results)}本 / 目標 {target}本")
     for item in results:
         print(f"- #{item['id']} {item['title']} [{item['status']}]")
         if args.show:
