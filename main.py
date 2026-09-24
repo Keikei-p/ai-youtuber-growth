@@ -7,6 +7,7 @@ from pathlib import Path
 from config import settings
 from guest_manager import select_guest_for_next_video
 from metadata import build_metadata
+from runtime_control import posts_per_day
 from media_cleanup import cleanup_all_uploaded_media, cleanup_uploaded_media
 from paths import AUDIO_DIR, CHARACTER_FILE, PLAN_DIR, VIDEO_DIR, ensure_runtime_dirs
 from planner import plan_ideas
@@ -152,7 +153,7 @@ def run_generation(
     init_db()
     character = load_character()
     recent = recent_videos(30)
-    target = target_override or settings.posts_per_day
+    target = target_override or posts_per_day()
     results: list[dict] = []
 
     for generation_round in range(1, settings.max_generation_rounds + 1):
@@ -302,7 +303,7 @@ def main() -> None:
     else:
         results = run_generation(render=args.render or args.upload, upload=args.upload)
 
-    target = 1 if args.test_upload else settings.posts_per_day
+    target = 1 if args.test_upload else posts_per_day()
     print(f"\n生成完了: {len(results)}本 / 目標 {target}本")
     for item in results:
         print(f"- #{item['id']} {item['title']} [{item['status']}]")
