@@ -57,6 +57,7 @@ from storage import (
     get_channel_state,
     init_db,
     queued_items,
+    set_channel_state,
     video_by_id,
 )
 from voice.voicevox import VoicevoxClient
@@ -365,6 +366,12 @@ def _status_payload() -> dict:
         "current_job": current_job,
         "current_job_started_at": current_job_started_at,
         "autostart_enabled": _windows_autostart_enabled(),
+        "wake_task_enabled": (
+            get_channel_state("wake_task_enabled", "false")
+            .strip()
+            .lower()
+            == "true"
+        ),
         "log_tail": _read_log_tail(),
     }
 
@@ -395,6 +402,87 @@ def _install_windows_autostart() -> str:
         )
 
     return "PC起動時のWebアプリ自動起動を登録しました。"
+
+
+def _run_automation_script(
+    script_name: str,
+    *args: str,
+) -> str:
+    if os.name != "nt":
+        raise RuntimeError("Windows専用機能です。")
+
+    script = ROOT / "automation" / script_name
+    if not script.exists():
+        raise FileNotFoundError(str(script))
+
+    powershell = shutil.which("powershell")
+    if not powershell:
+        raise RuntimeError("powershell.exe が見つかりません。")
+
+    process = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            *[str(arg) for arg in args],
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        creationflags=(
+            subprocess.CREATE_NO_WINDOW
+            if os.name == "nt" else 0
+        ),
+    )
+    output = ((process.stdout or "") + "\n" + (process.stderr or "")).strip()
+    if process.returncode != 0:
+        raise RuntimeError(
+            output[-3000:]
+            or f"{script_name} の実行に失敗しました。"
+        )
+    return output or "完了"
+
+
+def _install_wake_task(interval_minutes: int = 60) -> str:
+    output = _run_automation_script(
+        "install_windows_task.ps1",
+        "-IntervalMinutes",
+        str(max(15, int(interval_minutes))),
+    )
+    set_channel_state("wake_task_enabled", "true")
+    return output
+
+
+def _remove_wake_task() -> str:
+    output = _run_automation_script(
+        "remove_windows_task.ps1",
+    )
+    set_channel_state("wake_task_enabled", "false")
+    return output
+
+
+def _night_test_mode() -> str:
+    # 無料・安全なローカルテスト。YouTubeには自動投稿しない。
+    set_automation_enabled(True)
+    set_auto_upload_enabled(False)
+    set_upload_privacy("private")
+    set_ai_video_enabled(False)
+    wake_output = _install_wake_task(60)
+    return (
+        "夜間テスト運用を有効化しました。\n"
+        "・自動運転: ON\n"
+        "・YouTube自動投稿: OFF\n"
+        "・公開設定: private\n"
+        "・AI動画実験: OFF\n"
+        "・スリープ復帰チェック: 60分ごと\n\n"
+        + wake_output
+    )
 
 
 def _update_and_restart() -> None:
@@ -667,6 +755,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         <button onclick="runAction('autostart_on')">自動起動を登録</button>
         <button onclick="runAction('autostart_off')">解除</button>
       </div>
+      <div class="row"><span>スリープ復帰自動運転</span><span id="wakeTaskStatus" class="badge"></span></div>
+      <div class="actions" style="margin-top:10px">
+        <button class="primary" onclick="runNightTest()">夜間テスト運用を開始</button>
+        <button onclick="runAction('wake_task_on')">スリープ復帰を登録</button>
+        <button onclick="runAction('wake_task_off')">解除</button>
+      </div>
+      <div class="small" style="margin-top:8px">夜間テストではローカル動画だけ制作し、YouTube自動投稿はOFFにします。</div>
       <div class="actions" style="margin-top:12px">
         <button onclick="updateRestart()">最新版へ更新して再起動</button>
       </div>
@@ -713,6 +808,8 @@ async function refresh(){
     if(document.activeElement!==guestNewEvery) guestNewEvery.value=state.guest_new_every;
     autostartStatus.textContent=state.autostart_enabled?'登録済み':'未登録';
     autostartStatus.className='badge '+(state.autostart_enabled?'ok':'');
+    wakeTaskStatus.textContent=state.wake_task_enabled?'登録済み':'未登録';
+    wakeTaskStatus.className='badge '+(state.wake_task_enabled?'ok':'');
     if(state.current_job){
       lastCycle.textContent='実行中: '+state.current_job+' / 開始 '+(state.current_job_started_at||'');
     }
@@ -871,6 +968,11 @@ async function saveOperationSettings(){
 async function runPrivateTest(){
   if(!confirm('動画を1本生成してYouTubeへ非公開でテスト投稿します。実行しますか？')) return;
   await runAction('private_test');
+}
+async function runNightTest(){
+  const data=await api('/api/action',{action:'night_test'});
+  alert(data.message);
+  refresh();
 }
 async function updateRestart(){
   if(!confirm('GitHubの最新版を取り込み、Webアプリを再起動します。よろしいですか？')) return;
@@ -1169,6 +1271,18 @@ class Handler(BaseHTTPRequestHandler):
                     "autostart_off": (
                         "PC自動起動解除",
                         lambda: print(_remove_windows_autostart()),
+                    ),
+                    "wake_task_on": (
+                        "スリープ復帰自動運転登録",
+                        lambda: print(_install_wake_task(60)),
+                    ),
+                    "wake_task_off": (
+                        "スリープ復帰自動運転解除",
+                        lambda: print(_remove_wake_task()),
+                    ),
+                    "night_test": (
+                        "夜間テスト運用",
+                        lambda: print(_night_test_mode()),
                     ),
                     "update_restart": (
                         "最新版更新と再起動",
