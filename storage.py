@@ -45,8 +45,19 @@ def init_db() -> None:
 def recent_videos(limit: int = 20) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id, idea, angle, title, script, status, views, avg_view_percentage, ctr "
-            "FROM videos ORDER BY id DESC LIMIT ?",
+            """
+            SELECT
+                v.id, v.idea, v.angle, v.title, v.script, v.status,
+                v.views, v.likes, v.comments, v.avg_view_percentage, v.ctr,
+                (
+                    SELECT ln.note FROM learning_notes ln
+                    WHERE ln.video_id = v.id
+                    ORDER BY ln.id DESC LIMIT 1
+                ) AS learning_note
+            FROM videos v
+            ORDER BY v.id DESC
+            LIMIT ?
+            """,
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -64,6 +75,51 @@ def update_video_output(video_id: int, output_path: str, status: str = "rendered
         conn.execute(
             "UPDATE videos SET output_path = ?, status = ? WHERE id = ?",
             (output_path, status, video_id),
+        )
+
+def mark_uploaded(video_id: int, youtube_video_id: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE videos SET youtube_video_id = ?, status = 'uploaded' WHERE id = ?",
+            (youtube_video_id, video_id),
+        )
+
+def uploaded_videos(limit: int = 20) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, script, youtube_video_id, views, likes, comments, avg_view_percentage
+            FROM videos
+            WHERE youtube_video_id IS NOT NULL
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+def update_metrics(video_id: int, metrics: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE videos
+            SET views = ?, likes = ?, comments = ?, avg_view_percentage = ?
+            WHERE id = ?
+            """,
+            (
+                int(metrics.get("views") or 0),
+                int(metrics.get("likes") or 0),
+                int(metrics.get("comments") or 0),
+                float(metrics.get("averageViewPercentage") or 0),
+                video_id,
+            ),
+        )
+
+def save_learning_note(video_id: int, note: str, score: float) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO learning_notes (video_id, note, score) VALUES (?, ?, ?)",
+            (video_id, note, score),
         )
 
 def export_json(path: Path, payload: Any) -> None:
