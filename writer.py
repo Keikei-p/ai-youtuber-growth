@@ -36,6 +36,10 @@ def write_script(character: dict, idea: dict, recent: list[dict]) -> dict:
         "growth_strategy",
         "まだ十分な分析データがないため、テンポと冒頭3秒を優先して実験する。"
     )
+    improvement = get_channel_state(
+        "ai_improvement_report",
+        ""
+    )
 
     prompt = f"""
 あなたはYouTube Shortsの脚本AIです。
@@ -45,6 +49,9 @@ def write_script(character: dict, idea: dict, recent: list[dict]) -> dict:
 
 現在の成長戦略:
 {strategy}
+
+AI改善センターの最新提案:
+{improvement or "まだなし"}
 
 今回の企画:
 {json.dumps(idea, ensure_ascii=False)}
@@ -92,6 +99,10 @@ def rewrite_script(
         "growth_strategy",
         "テンポと冒頭3秒を優先して改善する。"
     )
+    improvement = get_channel_state(
+        "ai_improvement_report",
+        ""
+    )
 
     prompt = f"""
 あなたはYouTube Shortsの脚本修正AIです。
@@ -103,6 +114,9 @@ def rewrite_script(
 
 現在の成長戦略:
 {strategy}
+
+AI改善センターの最新提案:
+{improvement or "まだなし"}
 
 企画:
 {json.dumps(idea, ensure_ascii=False)}
