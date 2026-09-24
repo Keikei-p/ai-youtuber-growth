@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from config import settings
@@ -11,8 +12,10 @@ from storage import (
     mark_queue_error,
     mark_queue_uploaded,
     mark_uploaded,
-    queue_for_day,
+    occupied_schedule_times,
     queue_video,
+    queued_items,
+    update_queue_schedule,
 )
 from youtube.uploader import upload_video
 
@@ -41,52 +44,140 @@ def _slot_datetimes(day) -> list[datetime]:
         )
     return sorted(slots)
 
-def prepare_today() -> None:
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+def _next_free_slots(start: datetime, count: int, days: int = 14) -> list[datetime]:
+    occupied = occupied_schedule_times()
+    slots: list[datetime] = []
+
+    for offset in range(days + 1):
+        day = (start + timedelta(days=offset)).date()
+        for slot in _slot_datetimes(day):
+            key = slot.isoformat(timespec="minutes")
+            if slot <= start:
+                continue
+            if key in occupied:
+                continue
+            slots.append(slot)
+            if len(slots) >= count:
+                return slots
+
+    return slots
+
+def reschedule_missed() -> int:
+    """
+    投稿時刻を大きく過ぎた queued 動画は、その場でまとめて投稿せず、
+    次の空き投稿枠へ順番に繰り越す。
+    """
     init_db()
     now = _now()
-    day_prefix = now.date().isoformat()
-    existing = queue_for_day(day_prefix)
-    slots = _slot_datetimes(now.date())
+    cutoff = now - timedelta(minutes=max(settings.post_grace_minutes, 0))
+    queued = queued_items()
 
-    if not slots:
-        print("[SCHEDULE] POST_TIMES が空です。")
-        return
-
-    target = min(settings.posts_per_day, len(slots))
-    missing = target - len(existing)
-    if missing <= 0:
-        print(f"[SCHEDULE] 今日の投稿キューは準備済み: {len(existing)}本")
-        return
-
-    used = {item["scheduled_for"] for item in existing}
-    free_slots = [
-        slot for slot in slots
-        if slot.isoformat(timespec="minutes") not in used
+    overdue = [
+        item
+        for item in queued
+        if _parse_iso(item["scheduled_for"]) < cutoff
     ]
 
-    print(f"[SCHEDULE] 今日の不足 {missing}本を生成してキューへ追加します。")
-    results = run_generation(render=True, upload=False, target_override=missing)
+    if not overdue:
+        return 0
 
-    queued = 0
+    free_slots = _next_free_slots(now, len(overdue))
+    moved = 0
+
+    for item, slot in zip(overdue, free_slots):
+        new_time = slot.isoformat(timespec="minutes")
+        update_queue_schedule(item["queue_id"], new_time)
+        moved += 1
+        print(
+            f"[RESCHEDULE] #{item['video_id']} "
+            f"{item['scheduled_for']} -> {new_time}"
+        )
+
+    if moved < len(overdue):
+        print(
+            f"[WARN] 繰り越し対象{len(overdue)}本のうち"
+            f"{moved}本しか空き枠を確保できませんでした。"
+        )
+
+    return moved
+
+def prepare_upcoming() -> None:
+    """
+    常に「次の投稿枠」を POSTS_PER_DAY 本ぶん先回りして準備する。
+    夜に実行した場合は自動的に翌日の枠へ回る。
+    """
+    init_db()
+    reschedule_missed()
+
+    now = _now()
+    queued = queued_items()
+    future_queued = [
+        item
+        for item in queued
+        if _parse_iso(item["scheduled_for"]) > now
+    ]
+
+    target = settings.posts_per_day
+    missing = max(target - len(future_queued), 0)
+
+    if missing <= 0:
+        print(
+            f"[SCHEDULE] 次の投稿キューは準備済み: "
+            f"{len(future_queued)}本"
+        )
+        return
+
+    free_slots = _next_free_slots(now, missing)
+    if not free_slots:
+        print("[SCHEDULE] 空いている投稿時刻を確保できませんでした。")
+        return
+
+    print(
+        f"[SCHEDULE] 次の投稿枠に不足している"
+        f"{min(missing, len(free_slots))}本を生成します。"
+    )
+
+    results = run_generation(
+        render=True,
+        upload=False,
+        target_override=min(missing, len(free_slots)),
+    )
+
+    queued_count = 0
     for item, slot in zip(results, free_slots):
         if not item.get("output_path"):
-            print(f"[SCHEDULE] #{item['id']} は動画未生成のためキューへ入れません。")
+            print(
+                f"[SCHEDULE] #{item['id']} は動画未生成のため"
+                "キューへ入れません。"
+            )
             continue
 
         scheduled_for = slot.isoformat(timespec="minutes")
         queue_video(item["id"], scheduled_for)
-        queued += 1
+        queued_count += 1
         print(
             f"[SCHEDULE] #{item['id']} {item['title']} -> "
             f"{slot.strftime('%Y-%m-%d %H:%M')}"
         )
 
-    print(f"[SCHEDULE] {queued}本を追加しました。")
+    print(f"[SCHEDULE] {queued_count}本を投稿キューへ追加しました。")
 
 def run_due() -> None:
     init_db()
+    reschedule_missed()
+
     now = _now()
-    rows = due_queue(now.isoformat(timespec="minutes"))
+    oldest_allowed = now - timedelta(
+        minutes=max(settings.post_grace_minutes, 0)
+    )
+
+    rows = due_queue(
+        now.isoformat(timespec="minutes"),
+        oldest_allowed.isoformat(timespec="minutes"),
+    )
 
     if not rows:
         print("[SCHEDULE] 現在、投稿時刻を迎えた動画はありません。")
@@ -106,9 +197,12 @@ def run_due() -> None:
                 raise FileNotFoundError("動画ファイルのパスがありません")
 
             youtube_id = upload_video(
-                video_path=__import__("pathlib").Path(output_path),
+                video_path=Path(output_path),
                 title=row["title"],
-                description="AIが自分で企画・制作・分析しながら成長するチャンネルです。",
+                description=(
+                    "AIが自分で企画・制作・分析しながら"
+                    "成長するチャンネルです。"
+                ),
                 privacy_status=settings.auto_upload_privacy,
             )
             mark_uploaded(row["video_id"], youtube_id)
@@ -127,39 +221,70 @@ def run_due() -> None:
                 f"(試行 {row.get('attempts', 0) + 1}/5): {exc}"
             )
 
-def show_today() -> None:
+def show_queue() -> None:
     init_db()
+    reschedule_missed()
+
     now = _now()
-    rows = queue_for_day(now.date().isoformat())
-    print(f"=== {now.date().isoformat()} 投稿キュー ===")
+    rows = queued_items()
+
+    print(f"=== 投稿キュー / 現在 {now.strftime('%Y-%m-%d %H:%M')} ===")
     if not rows:
         print("まだありません。")
         return
 
     for row in rows:
+        scheduled = _parse_iso(row["scheduled_for"])
+        relation = "次回以降" if scheduled > now else "投稿時刻内"
         print(
             f"{row['scheduled_for']} | #{row['video_id']} | "
-            f"{row['status']} | {row['title']}"
+            f"{relation} | {row['title']}"
         )
 
 def tick() -> None:
-    prepare_today()
+    prepare_upcoming()
     run_due()
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AI YouTuber 自動投稿スケジューラ")
-    parser.add_argument("--prepare", action="store_true", help="今日の動画を生成して投稿キューを作る")
-    parser.add_argument("--run-due", action="store_true", help="投稿時刻を迎えた動画を投稿する")
-    parser.add_argument("--show", action="store_true", help="今日の投稿キューを表示する")
-    parser.add_argument("--tick", action="store_true", help="準備と期限到来投稿を1回実行する")
+    parser = argparse.ArgumentParser(
+        description="AI YouTuber 自動投稿スケジューラ"
+    )
+    parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="次の投稿枠ぶん動画を生成してキューを準備",
+    )
+    parser.add_argument(
+        "--run-due",
+        action="store_true",
+        help="投稿時刻を迎えた動画を投稿",
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="現在の投稿キューを表示",
+    )
+    parser.add_argument(
+        "--repair",
+        action="store_true",
+        help="投稿時刻を大きく過ぎた動画を次の空き枠へ移動",
+    )
+    parser.add_argument(
+        "--tick",
+        action="store_true",
+        help="準備・繰り越し・期限到来投稿を1回実行",
+    )
     args = parser.parse_args()
 
     if args.prepare:
-        prepare_today()
+        prepare_upcoming()
     elif args.run_due:
         run_due()
     elif args.show:
-        show_today()
+        show_queue()
+    elif args.repair:
+        moved = reschedule_missed()
+        print(f"[RESCHEDULE] 合計 {moved}本を繰り越しました。")
     else:
         tick()
 
