@@ -13,5 +13,6 @@ class Settings:
     voicevox_speaker: int = int(os.getenv("VOICEVOX_SPEAKER", "3"))
     font_path: str = os.getenv("FONT_PATH", r"C:\Windows\Fonts\meiryo.ttc")
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
+    youtube_privacy_status: str = os.getenv("YOUTUBE_PRIVACY_STATUS", "private")
 
 settings = Settings()
