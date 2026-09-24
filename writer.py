@@ -40,6 +40,10 @@ def write_script(character: dict, idea: dict, recent: list[dict]) -> dict:
         "ai_improvement_report",
         ""
     )
+    autonomous_guidance = get_channel_state(
+        "autonomous_script_guidance",
+        "",
+    )
 
     prompt = f"""
 あなたはYouTube Shortsの脚本AIです。
@@ -52,6 +56,9 @@ def write_script(character: dict, idea: dict, recent: list[dict]) -> dict:
 
 AI改善センターの最新提案:
 {improvement or "まだなし"}
+
+自動学習した話し方ガイダンス:
+{autonomous_guidance or "まだなし"}
 
 今回の企画:
 {json.dumps(idea, ensure_ascii=False)}
@@ -103,6 +110,10 @@ def rewrite_script(
         "ai_improvement_report",
         ""
     )
+    autonomous_guidance = get_channel_state(
+        "autonomous_script_guidance",
+        "",
+    )
 
     prompt = f"""
 あなたはYouTube Shortsの脚本修正AIです。
@@ -117,6 +128,9 @@ def rewrite_script(
 
 AI改善センターの最新提案:
 {improvement or "まだなし"}
+
+自動学習した話し方ガイダンス:
+{autonomous_guidance or "まだなし"}
 
 企画:
 {json.dumps(idea, ensure_ascii=False)}
