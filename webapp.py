@@ -65,6 +65,7 @@ _current_job = ""
 _current_job_started_at: str | None = None
 _stop_event = threading.Event()
 _wake_event = threading.Event()
+_http_server: ThreadingHTTPServer | None = None
 
 
 def _append_log(text: str) -> None:
@@ -340,6 +341,49 @@ def _install_windows_autostart() -> str:
     return "PC起動時のWebアプリ自動起動を登録しました。"
 
 
+def _update_and_restart() -> None:
+    git = shutil.which("git")
+    if not git:
+        raise RuntimeError("Gitが見つかりません")
+
+    status = subprocess.run(
+        [git, "status", "--porcelain"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    if status.stdout.strip():
+        raise RuntimeError(
+            "ローカル変更があるため自動更新を中止しました。"
+            "未保存の変更を確認してください。"
+        )
+
+    pull = subprocess.run(
+        [git, "pull", "--ff-only"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    print(pull.stdout.strip() or "Already up to date.")
+
+    helper = ROOT / "restart_helper.pyw"
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    subprocess.Popen(
+        [str(pythonw), str(helper)],
+        cwd=str(ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=(
+            subprocess.CREATE_NO_WINDOW
+            if os.name == "nt" else 0
+        ),
+    )
+
+    if _http_server is not None:
+        threading.Timer(0.8, _http_server.shutdown).start()
+
 def _remove_windows_autostart() -> str:
     if os.name != "nt":
         return "Windows以外ではこの自動起動解除は使えません。"
@@ -468,6 +512,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         <button onclick="runAction('autostart_on')">自動起動を登録</button>
         <button onclick="runAction('autostart_off')">解除</button>
       </div>
+      <div class="actions" style="margin-top:12px">
+        <button onclick="updateRestart()">最新版へ更新して再起動</button>
+      </div>
     </section>
 
     <section class="card full">
@@ -554,6 +601,12 @@ async function saveOperationSettings(){
 async function runPrivateTest(){
   if(!confirm('動画を1本生成してYouTubeへ非公開でテスト投稿します。実行しますか？')) return;
   await runAction('private_test');
+}
+async function updateRestart(){
+  if(!confirm('GitHubの最新版を取り込み、Webアプリを再起動します。よろしいですか？')) return;
+  const data=await api('/api/action',{action:'update_restart'});
+  alert(data.message+'\n数秒後に自動で再起動します。');
+  setTimeout(()=>location.reload(),5000);
 }
 async function runAction(action){
   const data=await api('/api/action',{action});
@@ -658,6 +711,10 @@ class Handler(BaseHTTPRequestHandler):
                         "PC自動起動解除",
                         lambda: print(_remove_windows_autostart()),
                     ),
+                    "update_restart": (
+                        "最新版更新と再起動",
+                        _update_and_restart,
+                    ),
                 }
 
                 if action not in actions:
@@ -683,12 +740,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run(open_browser: bool = True) -> None:
+    global _http_server
+
     init_db()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     url = f"http://{HOST}:{PORT}"
 
     try:
         server = ThreadingHTTPServer((HOST, PORT), Handler)
+        _http_server = server
     except OSError:
         if open_browser:
             webbrowser.open(url)
