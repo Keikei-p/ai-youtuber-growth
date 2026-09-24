@@ -115,6 +115,7 @@ def _make_frame(
     title: str,
     text: str,
     character_name: str,
+    guest_name: str | None,
     path: Path,
     index: int,
     total: int,
@@ -176,6 +177,18 @@ def _make_frame(
         font=small_font,
         fill=(225, 230, 240, 235),
     )
+    if guest_name:
+        draw.rounded_rectangle(
+            (65, 400, 590, 470),
+            radius=22,
+            fill=(8, 12, 20, 190),
+        )
+        draw.text(
+            (90, 415),
+            f"Guest: {guest_name}",
+            font=small_font,
+            fill=(255, 235, 170, 255),
+        )
     draw.text(
         (900, 345),
         f"{index + 1}/{total}",
@@ -207,6 +220,7 @@ def render_short(
     audio_path: Path,
     output_path: Path,
     character_name: str,
+    guest_name: str | None = None,
 ) -> Path:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg が見つかりません。FFmpegをインストールしてください。")
@@ -220,7 +234,15 @@ def render_short(
     frames: list[Path] = []
     for i, chunk in enumerate(chunks):
         frame = work / f"frame_{i:03d}.png"
-        _make_frame(title, chunk, character_name, frame, i, len(chunks))
+        _make_frame(
+            title,
+            chunk,
+            character_name,
+            guest_name,
+            frame,
+            i,
+            len(chunks),
+        )
         frames.append(frame)
 
     concat = work / "concat.txt"
