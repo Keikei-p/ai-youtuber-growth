@@ -10,6 +10,10 @@ from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
 from main import run_generation
+from self_improvement import (
+    maybe_run_improvement_review,
+    record_failure,
+)
 from runtime_control import (
     auto_upload_enabled,
     post_times,
@@ -262,6 +266,14 @@ def run_due() -> None:
                 )
         except Exception as exc:
             mark_queue_error(row["queue_id"], str(exc))
+            record_failure(
+                "youtube.upload",
+                exc,
+                {
+                    "video_id": row.get("video_id"),
+                    "queue_id": row.get("queue_id"),
+                },
+            )
             print(
                 f"[AUTO-UPLOAD] #{row['video_id']} 失敗 "
                 f"(試行 {row.get('attempts', 0) + 1}/5): {exc}"
@@ -290,6 +302,11 @@ def show_queue() -> None:
 def tick() -> None:
     # 先に過去動画を学習し、その最新戦略で次の動画を作る。
     run_growth_cycle()
+    try:
+        maybe_run_improvement_review(min_hours=12)
+    except Exception as exc:
+        record_failure("improvement.review", exc)
+        print(f"[IMPROVEMENT] AI改善分析をスキップ: {exc}")
     prepare_upcoming()
     run_due()
 
