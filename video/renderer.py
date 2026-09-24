@@ -91,7 +91,18 @@ def _backgrounds() -> list[Path]:
                 files.append(path)
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
-def _load_background(index: int) -> Image.Image:
+def _load_background(
+    index: int,
+    background_image_path: str | None = None,
+) -> Image.Image:
+    if background_image_path:
+        explicit = Path(background_image_path)
+        if explicit.exists():
+            with Image.open(explicit) as raw:
+                bg = _cover(raw.convert("RGB"), (WIDTH, HEIGHT))
+            bg = bg.filter(ImageFilter.GaussianBlur(radius=1.0))
+            return ImageEnhance.Brightness(bg).enhance(0.64)
+
     files = _backgrounds()
     if not files:
         return _gradient_background(index)
@@ -122,8 +133,15 @@ def _character_image_path() -> Path | None:
     return None
 
 
-def _paste_character(canvas: Image.Image) -> None:
-    path = _character_image_path()
+def _paste_character(
+    canvas: Image.Image,
+    character_image_path: str | None = None,
+) -> None:
+    path = (
+        Path(character_image_path)
+        if character_image_path and Path(character_image_path).exists()
+        else _character_image_path()
+    )
     if path is None:
         return
 
@@ -169,11 +187,16 @@ def _make_frame(
     character_name: str,
     guest_name: str | None,
     guest_image_path: str | None,
+    character_image_path: str | None,
+    background_image_path: str | None,
     path: Path,
     index: int,
     total: int,
 ) -> None:
-    base = _load_background(index).convert("RGBA")
+    base = _load_background(
+        index,
+        background_image_path=background_image_path,
+    ).convert("RGBA")
 
     # 中央の視認性を確保
     overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
@@ -181,7 +204,10 @@ def _make_frame(
     od.rectangle((0, 0, WIDTH, HEIGHT), fill=(0, 0, 0, 28))
     base = Image.alpha_composite(base, overlay)
 
-    _paste_character(base)
+    _paste_character(
+        base,
+        character_image_path=character_image_path,
+    )
     _paste_guest(base, guest_image_path)
 
     draw = ImageDraw.Draw(base)
@@ -276,6 +302,8 @@ def render_short(
     character_name: str,
     guest_name: str | None = None,
     guest_image_path: str | None = None,
+    character_image_path: str | None = None,
+    background_image_path: str | None = None,
 ) -> Path:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg が見つかりません。FFmpegをインストールしてください。")
@@ -295,6 +323,8 @@ def render_short(
             character_name,
             guest_name,
             guest_image_path,
+            character_image_path,
+            background_image_path,
             frame,
             i,
             len(chunks),
