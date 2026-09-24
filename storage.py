@@ -41,6 +41,17 @@ def init_db() -> None:
             score REAL,
             FOREIGN KEY(video_id) REFERENCES videos(id)
         );
+
+        CREATE TABLE IF NOT EXISTS posting_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL UNIQUE,
+            scheduled_for TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            uploaded_at TEXT,
+            error TEXT,
+            FOREIGN KEY(video_id) REFERENCES videos(id)
+        );
         """)
 
 def recent_videos(limit: int = 20) -> list[dict[str, Any]]:
@@ -121,6 +132,72 @@ def save_learning_note(video_id: int, note: str, score: float) -> None:
         conn.execute(
             "INSERT INTO learning_notes (video_id, note, score) VALUES (?, ?, ?)",
             (video_id, note, score),
+        )
+
+def queue_video(video_id: int, scheduled_for: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO posting_queue (video_id, scheduled_for, status)
+            VALUES (?, ?, 'queued')
+            """,
+            (video_id, scheduled_for),
+        )
+
+def queue_for_day(day_prefix: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                q.id AS queue_id, q.video_id, q.scheduled_for, q.status,
+                q.uploaded_at, q.error, v.title, v.script, v.output_path,
+                v.youtube_video_id
+            FROM posting_queue q
+            JOIN videos v ON v.id = q.video_id
+            WHERE q.scheduled_for LIKE ?
+            ORDER BY q.scheduled_for ASC
+            """,
+            (f"{day_prefix}%",),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+def due_queue(now_iso: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                q.id AS queue_id, q.video_id, q.scheduled_for,
+                v.title, v.script, v.output_path
+            FROM posting_queue q
+            JOIN videos v ON v.id = q.video_id
+            WHERE q.status = 'queued'
+              AND q.scheduled_for <= ?
+            ORDER BY q.scheduled_for ASC
+            """,
+            (now_iso,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+def mark_queue_uploaded(queue_id: int, uploaded_at: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE posting_queue
+            SET status = 'uploaded', uploaded_at = ?, error = NULL
+            WHERE id = ?
+            """,
+            (uploaded_at, queue_id),
+        )
+
+def mark_queue_error(queue_id: int, error: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE posting_queue
+            SET status = 'error', error = ?
+            WHERE id = ?
+            """,
+            (error[:1000], queue_id),
         )
 
 def export_json(path: Path, payload: Any) -> None:
