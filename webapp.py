@@ -723,6 +723,18 @@ class Handler(BaseHTTPRequestHandler):
 
                 label, func = actions[action]
 
+                if action == "update_restart":
+                    result = _run_captured(label, func)
+                    _append_log(result.get("message", ""))
+                    self._json(
+                        {
+                            "ok": result["ok"],
+                            "message": result["message"],
+                        },
+                        200 if result["ok"] else 500,
+                    )
+                    return
+
                 def runner():
                     result = _run_captured(label, func)
                     _append_log(result.get("message", ""))
