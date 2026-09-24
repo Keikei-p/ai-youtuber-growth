@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: python -m py_compile main.py scheduler.py growth_engine.py learner.py planner.py writer.py storage.py youtube/analytics.py
+      - run: python -m py_compile main.py scheduler.py growth_engine.py learner.py planner.py writer.py storage.py metadata.py guest_manager.py guest_visual.py video/renderer.py youtube/uploader.py youtube/analytics.py
       - run: python main.py --show
         env:
           POSTS_PER_DAY: "3"
