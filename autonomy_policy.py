@@ -82,7 +82,27 @@ def request_approval(
 ) -> int:
     _ensure_table()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    payload_json = json.dumps(
+        payload or {},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
     with connect() as conn:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM approval_requests
+            WHERE status = 'pending'
+              AND action_type = ?
+              AND payload_json = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (action_type, payload_json),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+
         cur = conn.execute(
             """
             INSERT INTO approval_requests (
@@ -94,7 +114,7 @@ def request_approval(
                 action_type,
                 title[:300],
                 reason[:2000],
-                json.dumps(payload or {}, ensure_ascii=False),
+                payload_json,
             ),
         )
         return int(cur.lastrowid)
