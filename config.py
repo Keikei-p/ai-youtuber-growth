@@ -29,6 +29,7 @@ class Settings:
 
     app_timezone: str = os.getenv("APP_TIMEZONE", "Asia/Tokyo")
     post_times: str = os.getenv("POST_TIMES", "09:00,15:00,21:00")
+    auto_upload_enabled: bool = os.getenv("AUTO_UPLOAD_ENABLED", "false").lower() == "true"
     auto_upload_privacy: str = os.getenv("AUTO_UPLOAD_PRIVACY", "private")
 
     font_path: str = os.getenv("FONT_PATH", r"C:\Windows\Fonts\meiryo.ttc")
