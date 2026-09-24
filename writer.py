@@ -4,14 +4,14 @@ from ai_client import OllamaClient
 
 def fallback_script(character: dict, idea: dict) -> dict:
     name = character["name"]
-    hook = idea["hook"]
+    hook = idea.get("hook") or "今日もAIが自分で企画して動画を作っています。"
     body = (
         f"{hook}"
-        f" 私は{name}。人間が毎回操作しなくても、自分で企画して成長するAI YouTuberです。"
+        f" 私は{name}。自分で企画して、結果を分析しながら成長するAI YouTuberです。"
         f" 今日のテーマは「{idea['idea']}」。"
-        " まだ始まったばかりだから、失敗も全部データにします。"
-        " この動画の結果も次の企画に反映します。"
-        " 次に試してほしいことがあればコメントで教えてください。"
+        " 今回もこの動画の反応を記録して、次の企画と話し方を変えていきます。"
+        " うまくいかなかったところも隠さず、次の動画で改善します。"
+        " どこを変えたらもっと面白くなるか、コメントで一つだけ教えてください。"
     )
     return {
         "title": f"{idea['idea']} #AIYouTuber #Shorts",
@@ -37,6 +37,7 @@ def write_script(character: dict, idea: dict, recent: list[dict]) -> dict:
 
 30〜45秒で読み切れる日本語Shorts脚本を作ってください。
 条件:
+- scriptは必ず90〜260文字程度
 - 1文目は企画のhookを活かす
 - 自己紹介を毎回長く入れない
 - テンポ優先
@@ -52,4 +53,50 @@ JSONだけ:
     data = client.generate_json(prompt)
     if not isinstance(data, dict):
         raise ValueError("Writer output must be a JSON object")
+    return data
+
+def rewrite_script(
+    character: dict,
+    idea: dict,
+    recent: list[dict],
+    previous: dict,
+    issues: list[str],
+) -> dict:
+    client = OllamaClient()
+    if not client.available():
+        return fallback_script(character, idea)
+
+    prompt = f"""
+あなたはYouTube Shortsの脚本修正AIです。
+以下の脚本は品質チェックで不合格でした。問題点を直し、同じ企画のまま完成版にしてください。
+
+キャラクター:
+{json.dumps(character, ensure_ascii=False)}
+
+企画:
+{json.dumps(idea, ensure_ascii=False)}
+
+不合格だった内容:
+{json.dumps(previous, ensure_ascii=False)}
+
+問題点:
+{json.dumps(issues, ensure_ascii=False)}
+
+直近動画:
+{json.dumps(recent[:10], ensure_ascii=False)}
+
+必須条件:
+- scriptは90〜260文字程度
+- 冒頭3秒にフック
+- 同じ脚本のコピー禁止
+- AIであることを隠さない
+- 虚偽、無断転載、危険行為、誹謗中傷は禁止
+- 不合格理由を必ず解消する
+
+JSONだけ:
+{{"title":"...", "script":"...", "description":"..."}}
+"""
+    data = client.generate_json(prompt)
+    if not isinstance(data, dict):
+        raise ValueError("Writer rewrite output must be a JSON object")
     return data
