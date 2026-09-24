@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -87,11 +88,65 @@ def _run_captured(label: str, func) -> dict:
         _job_lock.release()
 
 
+def _candidate_voicevox_paths() -> list[Path]:
+    candidates: list[Path] = []
+    if settings.voicevox_exe:
+        candidates.append(Path(settings.voicevox_exe))
+
+    if os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        program_files = Path(os.environ.get("ProgramFiles", "C:/Program Files"))
+        candidates.extend([
+            local / "Programs" / "VOICEVOX" / "VOICEVOX.exe",
+            local / "VOICEVOX" / "VOICEVOX.exe",
+            program_files / "VOICEVOX" / "VOICEVOX.exe",
+        ])
+
+    return [p for p in candidates if str(p) and p.exists()]
+
+def _ensure_local_services() -> None:
+    if not OllamaClient().available():
+        ollama = shutil.which("ollama")
+        if ollama:
+            try:
+                subprocess.Popen(
+                    [ollama, "serve"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=(
+                        subprocess.CREATE_NO_WINDOW
+                        if os.name == "nt" else 0
+                    ),
+                )
+                time.sleep(2)
+                _append_log("[SERVICE] Ollama自動起動を実行")
+            except Exception as exc:
+                _append_log(f"[SERVICE] Ollama自動起動失敗: {exc}")
+
+    if not VoicevoxClient().available():
+        paths = _candidate_voicevox_paths()
+        if paths:
+            try:
+                subprocess.Popen(
+                    [str(paths[0])],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=(
+                        subprocess.CREATE_NO_WINDOW
+                        if os.name == "nt" else 0
+                    ),
+                )
+                time.sleep(6)
+                _append_log(f"[SERVICE] VOICEVOX自動起動: {paths[0]}")
+            except Exception as exc:
+                _append_log(f"[SERVICE] VOICEVOX自動起動失敗: {exc}")
+
 def _cycle_worker() -> None:
     global _last_cycle_at, _last_cycle_result
     while not _stop_event.is_set():
         try:
             if automation_enabled():
+                _ensure_local_services()
                 result = _run_captured("自動サイクル", tick)
                 with _state_lock:
                     _last_cycle_at = datetime.now().isoformat(timespec="seconds")
@@ -509,6 +564,8 @@ class Handler(BaseHTTPRequestHandler):
 def run(open_browser: bool = True) -> None:
     init_db()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    _ensure_local_services()
 
     worker = threading.Thread(
         target=_cycle_worker,
