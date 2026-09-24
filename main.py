@@ -5,15 +5,82 @@ from datetime import datetime
 from pathlib import Path
 
 from config import settings
+from learner import build_learning_note
 from planner import plan_ideas
 from reviewer import review_script
-from storage import init_db, recent_videos, save_video, export_json
+from storage import (
+    export_json,
+    init_db,
+    mark_uploaded,
+    recent_videos,
+    save_learning_note,
+    save_video,
+    update_metrics,
+    update_video_output,
+    uploaded_videos,
+)
 from writer import write_script
 
 def load_character() -> dict:
     return json.loads(Path("character/character.json").read_text(encoding="utf-8"))
 
-def run_plan_only() -> list[dict]:
+def render_results(results: list[dict], character: dict) -> None:
+    from voice.voicevox import VoicevoxClient
+    from video.renderer import render_short
+
+    voice = VoicevoxClient()
+    if not voice.available():
+        print("[MEDIA] VOICEVOXが起動していないため動画生成をスキップしました。")
+        return
+
+    stamp = datetime.now().strftime("%Y%m%d")
+    for item in results:
+        audio_path = Path(f"output/audio/{stamp}_{item['id']}.wav")
+        video_path = Path(f"output/videos/{stamp}_{item['id']}.mp4")
+        try:
+            voice.synthesize(item["script"], audio_path)
+            render_short(
+                title=item["title"],
+                script=item["script"],
+                audio_path=audio_path,
+                output_path=video_path,
+                character_name=character["name"],
+            )
+            item["output_path"] = str(video_path)
+            item["status"] = "rendered"
+            update_video_output(item["id"], str(video_path))
+            print(f"[MEDIA] #{item['id']} -> {video_path}")
+        except Exception as exc:
+            item["media_error"] = str(exc)
+            print(f"[MEDIA] #{item['id']} 失敗: {exc}")
+
+def upload_results(results: list[dict]) -> None:
+    if settings.dry_run:
+        print("[UPLOAD] DRY_RUN=true のためYouTube投稿は実行しません。")
+        return
+
+    from youtube.uploader import upload_video
+
+    for item in results:
+        output = item.get("output_path")
+        if not output:
+            continue
+        try:
+            youtube_id = upload_video(
+                video_path=Path(output),
+                title=item["title"],
+                description=item.get("description", ""),
+                privacy_status=settings.youtube_privacy_status,
+            )
+            item["youtube_video_id"] = youtube_id
+            item["status"] = "uploaded"
+            mark_uploaded(item["id"], youtube_id)
+            print(f"[UPLOAD] #{item['id']} -> YouTube ID {youtube_id}")
+        except Exception as exc:
+            item["upload_error"] = str(exc)
+            print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
+
+def run_generation(render: bool = False, upload: bool = False) -> list[dict]:
     init_db()
     character = load_character()
     recent = recent_videos(30)
@@ -47,19 +114,54 @@ def run_plan_only() -> list[dict]:
         results.append(result)
         recent.insert(0, result)
 
+    if render or upload:
+        render_results(results, character)
+    if upload:
+        upload_results(results)
+
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     export_json(Path(f"output/plans/{stamp}.json"), results)
     return results
 
+def run_learning() -> None:
+    init_db()
+    videos = uploaded_videos(20)
+    if not videos:
+        print("[LEARN] 分析対象の投稿済み動画がまだありません。")
+        return
+
+    from youtube.analytics import fetch_video_metrics
+
+    for video in videos:
+        try:
+            metrics = fetch_video_metrics(video["youtube_video_id"])
+            update_metrics(video["id"], metrics)
+            note, score = build_learning_note(metrics)
+            save_learning_note(video["id"], note, score)
+            print(
+                f"[LEARN] #{video['id']} views={metrics.get('views', 0)} "
+                f"retention={metrics.get('averageViewPercentage', 0)} score={score}"
+            )
+            print(f"        {note}")
+        except Exception as exc:
+            print(f"[LEARN] #{video['id']} 失敗: {exc}")
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="成長型AI YouTuber v1")
     parser.add_argument("--show", action="store_true", help="生成結果を詳しく表示")
+    parser.add_argument("--render", action="store_true", help="VOICEVOX+FFmpegでShorts動画まで生成")
+    parser.add_argument("--upload", action="store_true", help="生成動画をYouTubeへ投稿")
+    parser.add_argument("--learn", action="store_true", help="投稿済み動画を分析して学習メモを保存")
     args = parser.parse_args()
 
-    results = run_plan_only()
+    if args.learn:
+        run_learning()
+        return
+
+    results = run_generation(render=args.render or args.upload, upload=args.upload)
     print(f"\n生成完了: {len(results)}本 / 目標 {settings.posts_per_day}本")
     for item in results:
-        print(f"- #{item['id']} {item['title']}")
+        print(f"- #{item['id']} {item['title']} [{item['status']}]")
         if args.show:
             print(item["script"])
             print()
