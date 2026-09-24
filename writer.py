@@ -1,6 +1,8 @@
 from __future__ import annotations
 import json
+
 from ai_client import OllamaClient
+from storage import get_channel_state
 
 def fallback_script(character: dict, idea: dict) -> dict:
     name = character["name"]
@@ -24,10 +26,19 @@ def write_script(character: dict, idea: dict, recent: list[dict]) -> dict:
     if not client.available():
         return fallback_script(character, idea)
 
+    strategy = get_channel_state(
+        "growth_strategy",
+        "まだ十分な分析データがないため、テンポと冒頭3秒を優先して実験する。"
+    )
+
     prompt = f"""
 あなたはYouTube Shortsの脚本AIです。
+
 キャラクター:
 {json.dumps(character, ensure_ascii=False)}
+
+現在の成長戦略:
+{strategy}
 
 今回の企画:
 {json.dumps(idea, ensure_ascii=False)}
@@ -36,16 +47,21 @@ def write_script(character: dict, idea: dict, recent: list[dict]) -> dict:
 {json.dumps(recent[:10], ensure_ascii=False)}
 
 30〜45秒で読み切れる日本語Shorts脚本を作ってください。
+
 条件:
+- 成長戦略を話し方と構成に反映する
 - scriptは必ず90〜260文字程度
 - 1文目は企画のhookを活かす
+- 結論を遅らせない
 - 自己紹介を毎回長く入れない
 - テンポ優先
 - 具体的で、同じ言い回しを繰り返さない
 - AIであることを隠さない
+- 成長型チャンネルだと自然に伝わる
 - 最後に自然な一言だけ視聴者参加を促す
 - 虚偽、無断転載、危険行為、誹謗中傷は禁止
 - タイトルは煽りすぎない
+- 過去の成功内容そのものをコピーしない
 
 JSONだけ:
 {{"title":"...", "script":"...", "description":"..."}}
@@ -66,12 +82,21 @@ def rewrite_script(
     if not client.available():
         return fallback_script(character, idea)
 
+    strategy = get_channel_state(
+        "growth_strategy",
+        "テンポと冒頭3秒を優先して改善する。"
+    )
+
     prompt = f"""
 あなたはYouTube Shortsの脚本修正AIです。
-以下の脚本は品質チェックで不合格でした。問題点を直し、同じ企画のまま完成版にしてください。
+以下の脚本は品質チェックで不合格でした。
+問題点を直し、同じ企画のまま完成版にしてください。
 
 キャラクター:
 {json.dumps(character, ensure_ascii=False)}
+
+現在の成長戦略:
+{strategy}
 
 企画:
 {json.dumps(idea, ensure_ascii=False)}
@@ -88,10 +113,11 @@ def rewrite_script(
 必須条件:
 - scriptは90〜260文字程度
 - 冒頭3秒にフック
+- 不合格理由を必ず解消する
+- 成長戦略を反映する
 - 同じ脚本のコピー禁止
 - AIであることを隠さない
 - 虚偽、無断転載、危険行為、誹謗中傷は禁止
-- 不合格理由を必ず解消する
 
 JSONだけ:
 {{"title":"...", "script":"...", "description":"..."}}
