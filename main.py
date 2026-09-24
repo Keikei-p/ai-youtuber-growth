@@ -19,7 +19,7 @@ from storage import (
     update_video_output,
     uploaded_videos,
 )
-from writer import write_script
+from writer import fallback_script, rewrite_script, write_script
 
 def load_character() -> dict:
     return json.loads(Path("character/character.json").read_text(encoding="utf-8"))
@@ -80,39 +80,102 @@ def upload_results(results: list[dict]) -> None:
             item["upload_error"] = str(exc)
             print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
 
+def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict | None:
+    try:
+        written = write_script(character, idea, recent)
+    except Exception as exc:
+        print(f"[WRITE] 初回生成失敗: {exc}")
+        written = fallback_script(character, idea)
+
+    for retry in range(settings.max_script_retries + 1):
+        ok, issues = review_script(written["title"], written["script"], recent)
+        if ok:
+            if retry:
+                print(f"[REPAIR] {retry}回の修正で品質チェックOK")
+            return written
+
+        print(f"[REPAIR] 品質チェックNG: {issues} / 修正 {retry + 1}/{settings.max_script_retries}")
+
+        if retry >= settings.max_script_retries:
+            break
+
+        try:
+            written = rewrite_script(
+                character=character,
+                idea=idea,
+                recent=recent,
+                previous=written,
+                issues=issues,
+            )
+        except Exception as exc:
+            print(f"[REPAIR] AI修正失敗: {exc}")
+            written = fallback_script(character, idea)
+
+    # 最後の安全弁。AIが何度失敗しても固定テンプレートで予定本数を欠けにくくする。
+    fallback = fallback_script(character, idea)
+    ok, issues = review_script(fallback["title"], fallback["script"], recent)
+    if ok:
+        print("[REPAIR] 安全テンプレートへ切り替えて品質チェックOK")
+        return fallback
+
+    print(f"[SKIP] 安全テンプレートも品質チェックNG: {issues}")
+    return None
+
 def run_generation(render: bool = False, upload: bool = False) -> list[dict]:
     init_db()
     character = load_character()
     recent = recent_videos(30)
-    ideas = plan_ideas(character, recent, settings.posts_per_day)
-
+    target = settings.posts_per_day
     results: list[dict] = []
-    for idea in ideas:
-        written = write_script(character, idea, recent)
-        ok, issues = review_script(written["title"], written["script"], recent)
 
-        if not ok:
-            print(f"[SKIP] 品質チェックNG: {issues}")
+    for generation_round in range(1, settings.max_generation_rounds + 1):
+        remaining = target - len(results)
+        if remaining <= 0:
+            break
+
+        print(f"[PLAN] 第{generation_round}ラウンド: 残り{remaining}本を生成")
+        try:
+            ideas = plan_ideas(character, recent, remaining)
+        except Exception as exc:
+            print(f"[PLAN] 企画生成失敗: {exc}")
+            ideas = []
+
+        if not ideas:
+            print("[PLAN] 企画が生成されなかったため次ラウンドへ")
             continue
 
-        video_id = save_video(
-            idea=idea["idea"],
-            angle=idea.get("angle", ""),
-            title=written["title"],
-            script=written["script"],
-            status="planned",
-        )
+        for idea in ideas:
+            if len(results) >= target:
+                break
 
-        result = {
-            "id": video_id,
-            "idea": idea,
-            "title": written["title"],
-            "script": written["script"],
-            "description": written.get("description", ""),
-            "status": "planned",
-        }
-        results.append(result)
-        recent.insert(0, result)
+            written = _make_valid_script(character, idea, recent)
+            if not written:
+                continue
+
+            video_id = save_video(
+                idea=idea["idea"],
+                angle=idea.get("angle", ""),
+                title=written["title"],
+                script=written["script"],
+                status="planned",
+            )
+
+            result = {
+                "id": video_id,
+                "idea": idea,
+                "title": written["title"],
+                "script": written["script"],
+                "description": written.get("description", ""),
+                "status": "planned",
+            }
+            results.append(result)
+            recent.insert(0, result)
+
+    if len(results) < target:
+        print(
+            f"[WARN] 予定{target}本に対して{len(results)}本。"
+            "最大生成ラウンドに達したため、この実行ではここまでにします。"
+        )
 
     if render or upload:
         render_results(results, character)
