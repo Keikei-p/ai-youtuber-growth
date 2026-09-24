@@ -27,6 +27,16 @@ from runtime_control import (
     automation_enabled,
     set_auto_upload_enabled,
     set_automation_enabled,
+    guest_appearance_every,
+    guest_new_every,
+    post_times,
+    posts_per_day,
+    set_auto_upload_enabled,
+    set_automation_enabled,
+    set_guest_appearance_every,
+    set_guest_new_every,
+    set_post_times,
+    set_posts_per_day,
     set_upload_privacy,
     set_web_interval_seconds,
     upload_privacy,
@@ -52,7 +62,10 @@ _job_lock = threading.Lock()
 _state_lock = threading.Lock()
 _last_cycle_at: str | None = None
 _last_cycle_result = "未実行"
+_current_job = ""
+_current_job_started_at: str | None = None
 _stop_event = threading.Event()
+_wake_event = threading.Event()
 
 
 def _append_log(text: str) -> None:
@@ -63,8 +76,14 @@ def _append_log(text: str) -> None:
 
 
 def _run_captured(label: str, func) -> dict:
+    global _current_job, _current_job_started_at
+
     if not _job_lock.acquire(blocking=False):
         return {"ok": False, "message": "別の処理を実行中です。"}
+
+    with _state_lock:
+        _current_job = label
+        _current_job_started_at = datetime.now().isoformat(timespec="seconds")
 
     buf = io.StringIO()
     try:
@@ -85,6 +104,9 @@ def _run_captured(label: str, func) -> dict:
             "output": output,
         }
     finally:
+        with _state_lock:
+            _current_job = ""
+            _current_job_started_at = None
         _job_lock.release()
 
 
@@ -155,7 +177,8 @@ def _cycle_worker() -> None:
             _append_log(f"[WEB] background cycle error: {exc}")
 
         wait_for = web_interval_seconds()
-        _stop_event.wait(wait_for)
+        _wake_event.clear()
+        _wake_event.wait(wait_for)
 
 
 def _read_log_tail(max_chars: int = 12000) -> str:
@@ -221,26 +244,49 @@ def _growth_status() -> dict:
     }
 
 
+def _windows_autostart_enabled() -> bool:
+    if os.name != "nt":
+        return False
+
+    try:
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            key_path,
+            0,
+            winreg.KEY_READ,
+        ) as key:
+            winreg.QueryValueEx(key, "AIYouTuberGrowthWeb")
+        return True
+    except (FileNotFoundError, OSError):
+        return False
+
 def _status_payload() -> dict:
     with _state_lock:
         last_cycle_at = _last_cycle_at
         last_cycle_result = _last_cycle_result
+        current_job = _current_job
+        current_job_started_at = _current_job_started_at
 
     return {
         "automation_enabled": automation_enabled(),
         "auto_upload_enabled": auto_upload_enabled(),
         "privacy": upload_privacy(),
         "interval_seconds": web_interval_seconds(),
-        "posts_per_day": settings.posts_per_day,
-        "post_times": settings.post_times,
-        "guest_every": settings.guest_appearance_every,
-        "guest_new_every": settings.guest_new_every,
+        "posts_per_day": posts_per_day(),
+        "post_times": post_times(),
+        "guest_every": guest_appearance_every(),
+        "guest_new_every": guest_new_every(),
         "services": _service_status(),
         "queue": _queue_status(),
         "guests": _guest_status(),
         "growth": _growth_status(),
         "last_cycle_at": last_cycle_at,
         "last_cycle_result": last_cycle_result,
+        "current_job": current_job,
+        "current_job_started_at": current_job_started_at,
+        "autostart_enabled": _windows_autostart_enabled(),
         "log_tail": _read_log_tail(),
     }
 
@@ -353,10 +399,11 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
 
     <section class="card">
       <h2>運用設定</h2>
-      <div class="row"><span>1日投稿数</span><strong id="postsPerDay"></strong></div>
-      <div class="row"><span>投稿時刻</span><strong id="postTimes"></strong></div>
-      <div class="row"><span>ゲスト出演</span><strong id="guestEvery"></strong></div>
-      <div class="row"><span>新ゲスト</span><strong id="guestNewEvery"></strong></div>
+      <div class="row"><span>1日投稿数</span><input id="postsPerDay" type="number" min="1" max="10" style="width:92px"></div>
+      <div class="row"><span>投稿時刻</span><input id="postTimes" placeholder="09:00,15:00,21:00" style="width:190px"></div>
+      <div class="row"><span>ゲスト出演</span><input id="guestEvery" type="number" min="0" max="100" style="width:92px"></div>
+      <div class="row"><span>新ゲスト</span><input id="guestNewEvery" type="number" min="0" max="500" style="width:92px"></div>
+      <div class="actions" style="margin-top:12px"><button class="primary" onclick="saveOperationSettings()">運用設定を保存</button></div>
     </section>
 
     <section class="card wide">
@@ -386,6 +433,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
     <section class="card">
       <h2>PC自動起動</h2>
       <p class="small">PCを起動した時に、このWebアプリを自動で起動できます。</p>
+      <div class="row"><span>現在</span><span id="autostartStatus" class="badge"></span></div>
       <div class="actions">
         <button onclick="runAction('autostart_on')">自動起動を登録</button>
         <button onclick="runAction('autostart_off')">解除</button>
@@ -426,10 +474,15 @@ async function refresh(){
       ['Ollama',state.services.ollama],['VOICEVOX',state.services.voicevox],
       ['FFmpeg',state.services.ffmpeg],['YouTube認証',state.services.youtube_token]
     ].map(x=>'<div class="row"><span>'+x[0]+'</span>'+badge(x[1])+'</div>').join('');
-    postsPerDay.textContent=state.posts_per_day+'本';
-    postTimes.textContent=state.post_times;
-    guestEvery.textContent=state.guest_every+'本に1回';
-    guestNewEvery.textContent=state.guest_new_every+'本ごと';
+    if(document.activeElement!==postsPerDay) postsPerDay.value=state.posts_per_day;
+    if(document.activeElement!==postTimes) postTimes.value=state.post_times;
+    if(document.activeElement!==guestEvery) guestEvery.value=state.guest_every;
+    if(document.activeElement!==guestNewEvery) guestNewEvery.value=state.guest_new_every;
+    autostartStatus.textContent=state.autostart_enabled?'登録済み':'未登録';
+    autostartStatus.className='badge '+(state.autostart_enabled?'ok':'');
+    if(state.current_job){
+      lastCycle.textContent='実行中: '+state.current_job+' / 開始 '+(state.current_job_started_at||'');
+    }
     queue.innerHTML=state.queue.length?state.queue.map(x=>'<div class="q"><b>'+escapeHtml(x.title)+'</b><div class="small">'+x.scheduled_for+' / #'+x.video_id+' / retry '+x.attempts+'</div></div>').join(''):'<div class="small">キューなし</div>';
     guests.innerHTML=state.guests.length?state.guests.map(x=>'<div class="row"><span>'+escapeHtml(x.name)+'</span><span class="small">'+x.appearances+'回 '+(x.has_image?'画像あり':'画像未生成')+'</span></div>').join(''):'<div class="small">まだゲストなし</div>';
     strategy.textContent=state.growth.strategy;
@@ -449,6 +502,17 @@ async function savePrivacy(){
   await api('/api/settings',{privacy:v});refresh()
 }
 async function saveInterval(){await api('/api/settings',{interval_seconds:Number(interval.value)});refresh()}
+async function saveOperationSettings(){
+  const body={
+    posts_per_day:Number(postsPerDay.value),
+    post_times:postTimes.value,
+    guest_every:Number(guestEvery.value),
+    guest_new_every:Number(guestNewEvery.value)
+  };
+  const data=await api('/api/settings',body);
+  alert(data.message);
+  refresh();
+}
 async function runAction(action){
   const data=await api('/api/action',{action});
   alert(data.message);
@@ -509,7 +573,17 @@ class Handler(BaseHTTPRequestHandler):
                     set_upload_privacy(str(body["privacy"]))
                 if "interval_seconds" in body:
                     set_web_interval_seconds(int(body["interval_seconds"]))
-                self._json({"ok": True, "message": "設定を保存しました。"})
+                if "posts_per_day" in body:
+                    set_posts_per_day(int(body["posts_per_day"]))
+                if "post_times" in body:
+                    set_post_times(str(body["post_times"]))
+                if "guest_every" in body:
+                    set_guest_appearance_every(int(body["guest_every"]))
+                if "guest_new_every" in body:
+                    set_guest_new_every(int(body["guest_new_every"]))
+
+                _wake_event.set()
+                self._json({"ok": True, "message": "設定を保存しました。自動運転へ反映します。"})
                 return
 
             if path == "/api/action":
@@ -529,6 +603,7 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                     "guest": ("ゲスト生成確認", maybe_create_guest),
                     "cleanup": ("投稿済みファイル掃除", run_cleanup_uploaded),
+                    "services": ("AIサービス起動確認", _ensure_local_services),
                     "autostart_on": (
                         "PC自動起動登録",
                         lambda: print(_install_windows_autostart()),
@@ -564,6 +639,14 @@ class Handler(BaseHTTPRequestHandler):
 def run(open_browser: bool = True) -> None:
     init_db()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    url = f"http://{HOST}:{PORT}"
+
+    try:
+        server = ThreadingHTTPServer((HOST, PORT), Handler)
+    except OSError:
+        if open_browser:
+            webbrowser.open(url)
+        return
 
     _ensure_local_services()
 
@@ -573,9 +656,6 @@ def run(open_browser: bool = True) -> None:
         daemon=True,
     )
     worker.start()
-
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    url = f"http://{HOST}:{PORT}"
 
     print(f"[WEB] ミライ管理画面: {url}")
     if open_browser:
