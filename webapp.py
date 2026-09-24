@@ -412,6 +412,39 @@ def _update_and_restart() -> None:
     if _http_server is not None:
         threading.Timer(0.8, _http_server.shutdown).start()
 
+def _install_studio_dependencies() -> None:
+    requirements = ROOT / "requirements-studio.txt"
+    if not requirements.exists():
+        raise FileNotFoundError("requirements-studio.txt が見つかりません")
+
+    python = Path(sys.executable)
+    if os.name == "nt" and python.name.lower() == "pythonw.exe":
+        python = python.with_name("python.exe")
+
+    print("[STUDIO] AIスタジオ依存関係を導入します。")
+    process = subprocess.run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(requirements),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = (process.stdout or "") + "\n" + (process.stderr or "")
+    print(output[-12000:])
+    if process.returncode != 0:
+        raise RuntimeError(
+            "AIスタジオの導入に失敗しました。ログを確認してください。"
+        )
+    print("[STUDIO] 導入完了。画像生成を実行できます。")
+
+
 def _remove_windows_autostart() -> str:
     if os.name != "nt":
         return "Windows以外ではこの自動起動解除は使えません。"
@@ -525,6 +558,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
     <section class="card full">
       <h2>AIスタジオ</h2>
       <div id="studioStatus" class="studio-status small"></div>
+      <div class="actions" style="margin-bottom:12px">
+        <button id="studioInstallBtn" onclick="runAction('studio_install')">AIスタジオをPCへ導入</button>
+      </div>
       <div class="row"><span>ゲスト画像を自動生成</span><button id="guestImageAutoBtn" onclick="toggleGuestImageAuto()"></button></div>
       <div class="actions" style="margin-top:12px">
         <select id="miraiExpression">
@@ -622,6 +658,7 @@ async function refresh(){
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
     const backend=state.studio.selected||'未接続';
     studioStatus.textContent='画像エンジン: '+backend+' / Diffusers '+(state.studio.diffusers_installed?'導入済み':'未導入')+' / WebUI '+(state.studio.webui_available?'接続中':'未接続')+' / Model: '+state.studio.model;
+    studioInstallBtn.style.display=state.studio.diffusers_installed?'none':'inline-block';
     studioGuestSelect.innerHTML=state.guests.length?state.guests.map(x=>'<option value="'+x.id+'">'+escapeHtml(x.name)+'</option>').join(''):'<option value="">ゲストなし</option>';
     studioAssets.innerHTML=state.studio_assets.length?state.studio_assets.map(x=>{
       const img=x.url?'<img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy">':'';
@@ -860,6 +897,10 @@ class Handler(BaseHTTPRequestHandler):
                     "guest": ("ゲスト生成確認", maybe_create_guest),
                     "cleanup": ("投稿済みファイル掃除", run_cleanup_uploaded),
                     "services": ("AIサービス起動確認", _ensure_local_services),
+                    "studio_install": (
+                        "AIスタジオ導入",
+                        _install_studio_dependencies,
+                    ),
                     "autostart_on": (
                         "PC自動起動登録",
                         lambda: print(_install_windows_autostart()),
