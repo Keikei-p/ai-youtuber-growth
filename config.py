@@ -33,6 +33,8 @@ class Settings:
     auto_upload_enabled: bool = os.getenv("AUTO_UPLOAD_ENABLED", "false").lower() == "true"
     auto_upload_privacy: str = os.getenv("AUTO_UPLOAD_PRIVACY", "private")
 
+    cleanup_after_upload: bool = os.getenv("CLEANUP_AFTER_UPLOAD", "true").lower() == "true"
+
     font_path: str = os.getenv("FONT_PATH", r"C:\Windows\Fonts\meiryo.ttc")
 
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
