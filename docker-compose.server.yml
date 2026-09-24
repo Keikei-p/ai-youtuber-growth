@@ -26,14 +26,19 @@ services:
       OLLAMA_MODEL: "qwen2.5:7b"
       VOICEVOX_URL: "http://voicevox:50021"
       VOICEVOX_SPEAKER: "3"
+      APP_ROOT: "/app"
+      DATA_DIR: "/app/data"
+      OUTPUT_DIR: "/app/output"
+      CHARACTER_FILE: "/app/character/character.json"
+      YOUTUBE_CLIENT_SECRET_FILE: "/app/secrets/client_secret.json"
+      YOUTUBE_TOKEN_FILE: "/app/secrets/token.json"
       FONT_PATH: "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
       DRY_RUN: "true"
       YOUTUBE_PRIVACY_STATUS: "private"
     volumes:
       - ./data:/app/data
       - ./output:/app/output
-      - ./client_secret.json:/app/client_secret.json:ro
-      - ./token.json:/app/token.json
+      - ./secrets:/app/secrets
     command: ["python", "main.py", "--render"]
     profiles: ["run"]
 
