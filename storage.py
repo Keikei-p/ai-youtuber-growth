@@ -3,8 +3,9 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Any
+from paths import DATA_DIR
 
-DB_PATH = Path("data/memory.db")
+DB_PATH = DATA_DIR / "memory.db"
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
