@@ -321,3 +321,20 @@ def improvement_state() -> dict:
         "scene_images": effective_scene_image_count(),
         "recent_failures": recent_failures(8),
     }
+
+
+def maybe_run_improvement_review(min_hours: int = 12) -> dict | None:
+    raw = get_channel_state("ai_improvement_reviewed_at", "").strip()
+    if raw:
+        try:
+            last = datetime.fromisoformat(raw)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            age_hours = (
+                datetime.now(timezone.utc) - last
+            ).total_seconds() / 3600
+            if age_hours < max(1, int(min_hours)):
+                return None
+        except Exception:
+            pass
+    return run_improvement_review()
