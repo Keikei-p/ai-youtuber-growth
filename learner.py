@@ -145,7 +145,7 @@ def build_channel_strategy(history: list[dict]) -> str:
 - 日本語の文章だけを返す
 """
     try:
-        strategy = client.generate_text(prompt).strip()
+        strategy = client.generate(prompt).strip()
         return strategy or fallback
     except Exception:
         return fallback
