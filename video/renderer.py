@@ -342,7 +342,7 @@ def _render_motion_segment(
 
     vf = (
         f"zoompan=z='{zoom}':x='{x}':y='{y}':"
-        f"d={frames}:s={WIDTH}x{HEIGHT}:fps=30,"
+        f"d=1:s={WIDTH}x{HEIGHT}:fps=30,"
         "format=yuv420p"
     )
 
@@ -352,6 +352,8 @@ def _render_motion_segment(
             "-y",
             "-loop",
             "1",
+            "-framerate",
+            "30",
             "-i",
             str(frame_path),
             "-vf",
@@ -478,25 +480,13 @@ def render_short(
 
     cmd += [
         "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "18",
-        "-profile:v",
-        "high",
-        "-level",
-        "4.1",
-        "-r",
-        "30",
-        "-movflags",
-        "+faststart",
-        "-pix_fmt",
-        "yuv420p",
+        "copy",
         "-c:a",
         "aac",
         "-b:a",
-        "160k",
+        "192k",
+        "-movflags",
+        "+faststart",
         "-shortest",
         str(output_path),
     ]
