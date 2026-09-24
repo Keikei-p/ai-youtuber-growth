@@ -21,12 +21,10 @@ from ai_client import OllamaClient
 from config import settings
 from growth_engine import show_growth_state
 from guest_manager import maybe_create_guest
-from main import run_cleanup_uploaded, run_generation
+from main import run_cleanup_uploaded, run_generation, run_private_upload_test
 from runtime_control import (
     auto_upload_enabled,
     automation_enabled,
-    set_auto_upload_enabled,
-    set_automation_enabled,
     guest_appearance_every,
     guest_new_every,
     post_times,
@@ -46,6 +44,7 @@ from scheduler import prepare_upcoming, run_due, tick
 from storage import (
     active_guests,
     analytics_history,
+    dashboard_videos,
     get_channel_state,
     init_db,
     queued_items,
@@ -166,6 +165,7 @@ def _ensure_local_services() -> None:
 def _cycle_worker() -> None:
     global _last_cycle_at, _last_cycle_result
     while not _stop_event.is_set():
+        _wake_event.clear()
         try:
             if automation_enabled():
                 _ensure_local_services()
@@ -177,7 +177,6 @@ def _cycle_worker() -> None:
             _append_log(f"[WEB] background cycle error: {exc}")
 
         wait_for = web_interval_seconds()
-        _wake_event.clear()
         _wake_event.wait(wait_for)
 
 
@@ -209,6 +208,24 @@ def _queue_status() -> list[dict]:
         for row in rows[:20]
     ]
 
+
+def _video_status() -> list[dict]:
+    rows = dashboard_videos(20)
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "status": row["status"],
+            "queue_status": row.get("queue_status"),
+            "scheduled_for": row.get("scheduled_for"),
+            "youtube_video_id": row.get("youtube_video_id"),
+            "guest_name": row.get("guest_name"),
+            "views": row.get("views") or 0,
+            "error": row.get("queue_error"),
+            "has_local_file": bool(row.get("output_path")),
+        }
+        for row in rows
+    ]
 
 def _guest_status() -> list[dict]:
     rows = active_guests(20)
@@ -269,6 +286,8 @@ def _status_payload() -> dict:
         current_job = _current_job
         current_job_started_at = _current_job_started_at
 
+    services = _service_status()
+
     return {
         "automation_enabled": automation_enabled(),
         "auto_upload_enabled": auto_upload_enabled(),
@@ -278,8 +297,10 @@ def _status_payload() -> dict:
         "post_times": post_times(),
         "guest_every": guest_appearance_every(),
         "guest_new_every": guest_new_every(),
-        "services": _service_status(),
+        "services": services,
+        "system_ready": all(services.values()),
         "queue": _queue_status(),
+        "videos": _video_status(),
         "guests": _guest_status(),
         "growth": _growth_status(),
         "last_cycle_at": last_cycle_at,
@@ -395,6 +416,9 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
     <section class="card">
       <h2>システム状態</h2>
       <div id="services"></div>
+      <div class="actions" style="margin-top:12px">
+        <button onclick="runAction('services')">AIサービスを起動/再確認</button>
+      </div>
     </section>
 
     <section class="card">
@@ -413,6 +437,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         <button onclick="runAction('prepare')">次の動画を準備</button>
         <button onclick="runAction('due')">投稿時刻を確認</button>
         <button onclick="runAction('generate_one')">1本だけ生成</button>
+        <button onclick="runPrivateTest()">非公開テスト投稿1本</button>
       </div>
     </section>
 
@@ -422,6 +447,11 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div class="actions" style="margin-top:12px">
         <button onclick="runAction('guest')">新ゲスト候補を確認/生成</button>
       </div>
+    </section>
+
+    <section class="card full">
+      <h2>最近の動画</h2>
+      <div id="videos" class="queue"></div>
     </section>
 
     <section class="card wide">
@@ -470,6 +500,7 @@ async function refresh(){
     privacy.value=state.privacy;
     interval.value=String(state.interval_seconds);
     lastCycle.textContent='最終サイクル: '+(state.last_cycle_at||'未実行')+' / '+state.last_cycle_result;
+    document.title=(state.system_ready?'✓ ':'⚠ ')+'ミライ AI YouTuber 管理';
     services.innerHTML=[
       ['Ollama',state.services.ollama],['VOICEVOX',state.services.voicevox],
       ['FFmpeg',state.services.ffmpeg],['YouTube認証',state.services.youtube_token]
@@ -485,6 +516,13 @@ async function refresh(){
     }
     queue.innerHTML=state.queue.length?state.queue.map(x=>'<div class="q"><b>'+escapeHtml(x.title)+'</b><div class="small">'+x.scheduled_for+' / #'+x.video_id+' / retry '+x.attempts+'</div></div>').join(''):'<div class="small">キューなし</div>';
     guests.innerHTML=state.guests.length?state.guests.map(x=>'<div class="row"><span>'+escapeHtml(x.name)+'</span><span class="small">'+x.appearances+'回 '+(x.has_image?'画像あり':'画像未生成')+'</span></div>').join(''):'<div class="small">まだゲストなし</div>';
+    videos.innerHTML=state.videos.length?state.videos.map(x=>{
+      const yt=x.youtube_video_id?' / YouTube投稿済み':'';
+      const slot=x.scheduled_for?' / '+x.scheduled_for:'';
+      const guest=x.guest_name?' / Guest '+escapeHtml(x.guest_name):'';
+      const err=x.error?'<div class="small" style="color:#ff9aa8">エラー: '+escapeHtml(x.error)+'</div>':'';
+      return '<div class="q"><b>#'+x.id+' '+escapeHtml(x.title)+'</b><div class="small">'+escapeHtml(x.status||'')+slot+yt+guest+' / '+x.views+' views</div>'+err+'</div>';
+    }).join(''):'<div class="small">まだ動画履歴がありません。</div>';
     strategy.textContent=state.growth.strategy;
     analytics.innerHTML=state.growth.recent.map(x=>'<div class="row"><span>#'+x.video_id+' '+escapeHtml(x.title)+'</span><span class="small">'+x.checkpoint_hours+'h / score '+Number(x.score).toFixed(1)+' / '+x.views+' views</span></div>').join('');
     logs.textContent=state.log_tail;
@@ -512,6 +550,10 @@ async function saveOperationSettings(){
   const data=await api('/api/settings',body);
   alert(data.message);
   refresh();
+}
+async function runPrivateTest(){
+  if(!confirm('動画を1本生成してYouTubeへ非公開でテスト投稿します。実行しますか？')) return;
+  await runAction('private_test');
 }
 async function runAction(action){
   const data=await api('/api/action',{action});
@@ -568,7 +610,10 @@ class Handler(BaseHTTPRequestHandler):
                 if "automation_enabled" in body:
                     set_automation_enabled(bool(body["automation_enabled"]))
                 if "auto_upload_enabled" in body:
-                    set_auto_upload_enabled(bool(body["auto_upload_enabled"]))
+                    enabled = bool(body["auto_upload_enabled"])
+                    if enabled and not Path(settings.youtube_token_file).exists():
+                        raise ValueError("YouTube認証が未完了のため自動投稿をONにできません")
+                    set_auto_upload_enabled(enabled)
                 if "privacy" in body:
                     set_upload_privacy(str(body["privacy"]))
                 if "interval_seconds" in body:
@@ -593,6 +638,7 @@ class Handler(BaseHTTPRequestHandler):
                     "cycle": ("1サイクル", tick),
                     "prepare": ("動画準備", prepare_upcoming),
                     "due": ("投稿時刻確認", run_due),
+                    "private_test": ("非公開テスト投稿", run_private_upload_test),
                     "generate_one": (
                         "1本生成",
                         lambda: run_generation(
