@@ -7,6 +7,8 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     posts_per_day: int = int(os.getenv("POSTS_PER_DAY", "3"))
+    max_script_retries: int = int(os.getenv("MAX_SCRIPT_RETRIES", "3"))
+    max_generation_rounds: int = int(os.getenv("MAX_GENERATION_ROUNDS", "3"))
     ollama_url: str = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
     voicevox_url: str = os.getenv("VOICEVOX_URL", "http://127.0.0.1:50021")
