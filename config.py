@@ -35,6 +35,16 @@ class Settings:
 
     cleanup_after_upload: bool = os.getenv("CLEANUP_AFTER_UPLOAD", "true").lower() == "true"
 
+    guest_appearance_every: int = int(os.getenv("GUEST_APPEARANCE_EVERY", "7"))
+    guest_new_every: int = int(os.getenv("GUEST_NEW_EVERY", "18"))
+    guest_max_active: int = int(os.getenv("GUEST_MAX_ACTIVE", "6"))
+
+    youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
+    youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
+    youtube_contains_synthetic_media: bool = (
+        os.getenv("YOUTUBE_CONTAINS_SYNTHETIC_MEDIA", "false").lower() == "true"
+    )
+
     font_path: str = os.getenv("FONT_PATH", r"C:\Windows\Fonts\meiryo.ttc")
 
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
