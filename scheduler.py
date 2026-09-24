@@ -10,7 +10,12 @@ from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
 from main import run_generation
-from runtime_control import auto_upload_enabled, upload_privacy
+from runtime_control import (
+    auto_upload_enabled,
+    post_times,
+    posts_per_day,
+    upload_privacy,
+)
 from media_cleanup import cleanup_uploaded_media
 from storage import (
     due_queue,
@@ -34,7 +39,7 @@ def _now() -> datetime:
 
 def _slot_datetimes(day) -> list[datetime]:
     slots: list[datetime] = []
-    for raw in settings.post_times.split(","):
+    for raw in post_times().split(","):
         raw = raw.strip()
         if not raw:
             continue
@@ -147,7 +152,7 @@ def prepare_upcoming() -> None:
         if _parse_iso(item["scheduled_for"]) > now
     ]
 
-    target = settings.posts_per_day
+    target = posts_per_day()
     missing = max(target - len(future_queued), 0)
 
     if missing <= 0:
