@@ -1,9 +1,12 @@
 from __future__ import annotations
 import argparse
+import json
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
 from main import run_generation
@@ -19,6 +22,7 @@ from storage import (
     queued_items,
     update_queue_schedule,
 )
+from voice.voicevox import VoicevoxClient
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -106,6 +110,23 @@ def reschedule_missed() -> int:
 
     return moved
 
+def _generation_runtime_ready() -> bool:
+    problems: list[str] = []
+    if not OllamaClient().available():
+        problems.append("Ollama")
+    if not VoicevoxClient().available():
+        problems.append("VOICEVOX")
+    if not shutil.which("ffmpeg"):
+        problems.append("FFmpeg")
+
+    if problems:
+        print(
+            "[SCHEDULE] 動画生成を見送ります。未起動/未検出: "
+            + ", ".join(problems)
+        )
+        return False
+    return True
+
 def prepare_upcoming() -> None:
     """
     常に「次の投稿枠」を POSTS_PER_DAY 本ぶん先回りして準備する。
@@ -113,6 +134,9 @@ def prepare_upcoming() -> None:
     """
     init_db()
     reschedule_missed()
+
+    if not _generation_runtime_ready():
+        return
 
     now = _now()
     queued = queued_items()
@@ -201,11 +225,15 @@ def run_due() -> None:
             youtube_id = upload_video(
                 video_path=Path(output_path),
                 title=row["title"],
-                description=(
+                description=row.get("description") or (
                     "AIが自分で企画・制作・分析しながら"
                     "成長するチャンネルです。"
                 ),
+                tags=json.loads(row.get("tags_json") or "[]"),
                 privacy_status=settings.auto_upload_privacy,
+                category_id=settings.youtube_category_id,
+                default_language=settings.youtube_default_language,
+                contains_synthetic_media=settings.youtube_contains_synthetic_media,
             )
             mark_uploaded(row["video_id"], youtube_id)
             mark_queue_uploaded(
