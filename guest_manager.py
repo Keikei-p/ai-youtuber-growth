@@ -13,7 +13,6 @@ from storage import (
     active_guests,
     create_guest,
     guest_performance,
-    mark_guest_used,
     retire_guest,
     video_count,
 )
@@ -135,20 +134,8 @@ def _retire_if_needed() -> None:
         retire_guest(int(row["id"]))
         print(f"[GUEST] {row['name']} を通常ローテーションから外しました。")
 
-def maybe_create_guest() -> dict | None:
-    count = video_count()
+def create_guest_now() -> dict:
     guests = active_guests(100)
-    should_create = (
-        not guests
-        or (
-            guest_new_every() > 0
-            and count > 0
-            and count % guest_new_every() == 0
-        )
-    )
-    if not should_create:
-        return None
-
     profile = _generate_guest(len(guests))
     guest_id = create_guest(
         name=profile["name"],
@@ -175,6 +162,22 @@ def maybe_create_guest() -> dict | None:
         "image_path": image_path,
     }
 
+
+def maybe_create_guest() -> dict | None:
+    count = video_count()
+    guests = active_guests(100)
+    should_create = (
+        not guests
+        or (
+            guest_new_every() > 0
+            and count > 0
+            and count % guest_new_every() == 0
+        )
+    )
+    if not should_create:
+        return None
+    return create_guest_now()
+
 def select_guest_for_next_video(offset: int = 0) -> dict | None:
     maybe_create_guest()
 
@@ -191,8 +194,6 @@ def select_guest_for_next_video(offset: int = 0) -> dict | None:
         created = maybe_create_guest()
         if not created:
             return None
-        guest_id = int(created["id"])
-        mark_guest_used(guest_id)
         return created
 
     performance = {int(x["id"]): x for x in guest_performance()}
@@ -226,6 +227,5 @@ def select_guest_for_next_video(offset: int = 0) -> dict | None:
         **profile,
         "image_path": image_path,
     }
-    mark_guest_used(int(selected["id"]))
     print(f"[GUEST] 今回のゲスト: {selected['name']}")
     return result
