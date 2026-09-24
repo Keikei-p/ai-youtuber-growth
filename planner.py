@@ -1,7 +1,9 @@
 from __future__ import annotations
 import json
+
 from ai_client import OllamaClient
 from config import settings
+from storage import get_channel_state
 
 FALLBACK_IDEAS = [
     {
@@ -34,6 +36,10 @@ FALLBACK_IDEAS = [
 def plan_ideas(character: dict, recent: list[dict], count: int | None = None) -> list[dict]:
     count = count or settings.posts_per_day
     client = OllamaClient()
+    strategy = get_channel_state(
+        "growth_strategy",
+        "まだ十分な分析データがない。テーマを分散し、実績型・改善型・新規実験を混ぜる。"
+    )
 
     if not client.available():
         return FALLBACK_IDEAS[:count]
@@ -45,22 +51,30 @@ AI YouTuber本人が自分でチャンネルを成長させている、という
 キャラクター:
 {json.dumps(character, ensure_ascii=False)}
 
+現在の成長戦略:
+{strategy}
+
 直近動画:
 {json.dumps(recent, ensure_ascii=False)}
 
-今日の企画を{count}本作ってください。
-条件:
-- 3本とも明確に違うテーマ・切り口
+次の企画を{count}本作ってください。
+
+重要:
+- 成長戦略を反映する
+- ただし成功動画の内容をそのままコピーしない
+- countが3以上なら、実績の良い型1本・改善型1本・新規実験1本を混ぜる
+- 各企画は明確に違うテーマ・切り口
 - 30〜45秒で成立
 - 冒頭3秒に強いフック
-- 過去動画の単純コピー禁止
+- 直近動画と同じ言い回しを避ける
 - AIであることを隠さない
 - 誇張・誤情報・著作権侵害につながる企画は禁止
-- 視聴者がAIの成長を追いたくなる要素を入れる
+- 視聴者がミライの成長を追いたくなる要素を入れる
+- 分析データが少ない時は断定せず実験を続ける
 
 JSON配列だけで返してください。
 各要素:
-{{"idea":"...", "angle":"...", "hook":"..."}}
+{{"idea":"...", "angle":"...", "hook":"...", "experiment_type":"proven|improve|new"}}
 """
     data = client.generate_json(prompt)
     if not isinstance(data, list):
