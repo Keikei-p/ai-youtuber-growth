@@ -58,6 +58,16 @@ class Settings:
         os.getenv("STUDIO_SCENE_IMAGES_PER_VIDEO", "2")
     )
 
+    # AI動画は1070では重いため初期OFF。ON時も1本ずつ直列生成。
+    ai_video_enabled: bool = (
+        os.getenv("AI_VIDEO_ENABLED", "false").lower() == "true"
+    )
+    ai_video_backend: str = os.getenv("AI_VIDEO_BACKEND", "animatediff")
+    ai_video_frames: int = int(os.getenv("AI_VIDEO_FRAMES", "8"))
+    ai_video_steps: int = int(os.getenv("AI_VIDEO_STEPS", "12"))
+    ai_video_width: int = int(os.getenv("AI_VIDEO_WIDTH", "384"))
+    ai_video_height: int = int(os.getenv("AI_VIDEO_HEIGHT", "576"))
+
     youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
     youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
     youtube_contains_synthetic_media: bool = (
