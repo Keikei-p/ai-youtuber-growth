@@ -44,6 +44,10 @@ def plan_ideas(character: dict, recent: list[dict], count: int | None = None) ->
         "ai_improvement_report",
         ""
     )
+    autonomous_guidance = get_channel_state(
+        "autonomous_planner_guidance",
+        "",
+    )
 
     if not client.available():
         return FALLBACK_IDEAS[:count]
@@ -60,6 +64,9 @@ AI YouTuber本人が自分でチャンネルを成長させている、という
 
 AI改善センターの最新提案:
 {improvement or "まだなし"}
+
+自動学習した企画ガイダンス:
+{autonomous_guidance or "まだなし"}
 
 直近動画:
 {json.dumps(recent, ensure_ascii=False)}
