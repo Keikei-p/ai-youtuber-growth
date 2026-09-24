@@ -94,7 +94,20 @@ def _backgrounds() -> list[Path]:
 def _load_background(
     index: int,
     background_image_path: str | None = None,
+    background_image_paths: list[str] | None = None,
 ) -> Image.Image:
+    candidates = [
+        Path(path)
+        for path in (background_image_paths or [])
+        if path and Path(path).exists()
+    ]
+    if candidates:
+        explicit = candidates[index % len(candidates)]
+        with Image.open(explicit) as raw:
+            bg = _cover(raw.convert("RGB"), (WIDTH, HEIGHT))
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=1.0))
+        return ImageEnhance.Brightness(bg).enhance(0.64)
+
     if background_image_path:
         explicit = Path(background_image_path)
         if explicit.exists():
@@ -189,6 +202,7 @@ def _make_frame(
     guest_image_path: str | None,
     character_image_path: str | None,
     background_image_path: str | None,
+    background_image_paths: list[str] | None,
     path: Path,
     index: int,
     total: int,
@@ -196,6 +210,7 @@ def _make_frame(
     base = _load_background(
         index,
         background_image_path=background_image_path,
+        background_image_paths=background_image_paths,
     ).convert("RGBA")
 
     # 中央の視認性を確保
@@ -304,6 +319,7 @@ def render_short(
     guest_image_path: str | None = None,
     character_image_path: str | None = None,
     background_image_path: str | None = None,
+    background_image_paths: list[str] | None = None,
 ) -> Path:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg が見つかりません。FFmpegをインストールしてください。")
@@ -325,6 +341,7 @@ def render_short(
             guest_image_path,
             character_image_path,
             background_image_path,
+            background_image_paths,
             frame,
             i,
             len(chunks),
