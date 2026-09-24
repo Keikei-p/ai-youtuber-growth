@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import Path
 
 from config import settings
-from learner import build_learning_note
 from media_cleanup import cleanup_all_uploaded_media, cleanup_uploaded_media
 from paths import AUDIO_DIR, CHARACTER_FILE, PLAN_DIR, VIDEO_DIR, ensure_runtime_dirs
 from planner import plan_ideas
@@ -15,11 +14,8 @@ from storage import (
     init_db,
     mark_uploaded,
     recent_videos,
-    save_learning_note,
     save_video,
-    update_metrics,
     update_video_output,
-    uploaded_videos,
 )
 from writer import fallback_script, rewrite_script, write_script
 
@@ -221,28 +217,12 @@ def run_private_upload_test() -> list[dict]:
     return results
 
 def run_learning() -> None:
+    from growth_engine import run_growth_cycle, show_growth_state
+
     ensure_runtime_dirs()
     init_db()
-    videos = uploaded_videos(20)
-    if not videos:
-        print("[LEARN] 分析対象の投稿済み動画がまだありません。")
-        return
-
-    from youtube.analytics import fetch_video_metrics
-
-    for video in videos:
-        try:
-            metrics = fetch_video_metrics(video["youtube_video_id"])
-            update_metrics(video["id"], metrics)
-            note, score = build_learning_note(metrics)
-            save_learning_note(video["id"], note, score)
-            print(
-                f"[LEARN] #{video['id']} views={metrics.get('views', 0)} "
-                f"retention={metrics.get('averageViewPercentage', 0)} score={score}"
-            )
-            print(f"        {note}")
-        except Exception as exc:
-            print(f"[LEARN] #{video['id']} 失敗: {exc}")
+    run_growth_cycle()
+    show_growth_state()
 
 def run_cleanup_uploaded() -> None:
     init_db()
@@ -262,7 +242,16 @@ def main() -> None:
         action="store_true",
         help="1本だけ生成してYouTubeへ必ず非公開でテスト投稿",
     )
-    parser.add_argument("--learn", action="store_true", help="投稿済み動画を分析して学習メモを保存")
+    parser.add_argument(
+        "--learn",
+        action="store_true",
+        help="24h/72h/7dの成長分析を実行して戦略を更新",
+    )
+    parser.add_argument(
+        "--growth-status",
+        action="store_true",
+        help="現在のミライの成長戦略と最近の分析を表示",
+    )
     parser.add_argument(
         "--cleanup-uploaded",
         action="store_true",
@@ -272,6 +261,11 @@ def main() -> None:
 
     if args.learn:
         run_learning()
+        return
+
+    if args.growth_status:
+        from growth_engine import show_growth_state
+        show_growth_state()
         return
 
     if args.cleanup_uploaded:
