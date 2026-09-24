@@ -26,6 +26,7 @@ from guest_manager import create_guest_now
 from main import run_cleanup_uploaded, run_generation, run_private_upload_test
 from paths import VIDEO_DIR
 from runtime_control import (
+    ai_video_enabled,
     auto_upload_enabled,
     automation_enabled,
     guest_appearance_every,
@@ -33,6 +34,7 @@ from runtime_control import (
     guest_new_every,
     post_times,
     posts_per_day,
+    set_ai_video_enabled,
     set_auto_upload_enabled,
     set_automation_enabled,
     set_guest_appearance_every,
@@ -63,6 +65,11 @@ from studio.image_generator import (
     generate_mirai_image,
     studio_status,
 )
+from studio.video_generator import (
+    ai_video_status,
+    generate_animatediff_clip,
+)
+from self_improvement import improvement_state, run_improvement_review
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -337,6 +344,9 @@ def _status_payload() -> dict:
         "guest_every": guest_appearance_every(),
         "guest_new_every": guest_new_every(),
         "guest_image_auto_enabled": guest_image_auto_enabled(),
+        "ai_video_enabled": ai_video_enabled(),
+        "ai_video": ai_video_status(),
+        "improvement": improvement_state(),
         "studio": studio_status(),
         "gpu": gpu_snapshot(),
         "studio_assets": _studio_assets(),
@@ -588,6 +598,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         <button id="studioInstallBtn" onclick="runAction('studio_install')">AIスタジオをPCへ導入</button>
       </div>
       <div class="row"><span>ゲスト画像を自動生成</span><button id="guestImageAutoBtn" onclick="toggleGuestImageAuto()"></button></div>
+      <div class="row"><span>AI動画素材を自動生成</span><button id="aiVideoBtn" onclick="toggleAiVideo()"></button></div>
+      <div id="aiVideoStatus" class="small" style="margin:8px 0 12px"></div>
       <div class="actions" style="margin-top:12px">
         <select id="miraiExpression">
           <option value="normal">ミライ通常</option>
@@ -617,6 +629,16 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div id="videos" class="library-list"></div>
       <h3 style="font-size:14px;margin:20px 0 10px">生成画像</h3>
       <div id="libraryImages" class="library-images"></div>
+    </section>
+
+    <section class="card full">
+      <h2>AI改善センター</h2>
+      <p class="small">失敗を記録し、同じ失敗を繰り返さないよう負荷設定を学習します。コード変更案は勝手に適用しません。</p>
+      <div class="actions" style="margin-bottom:12px">
+        <button class="primary" onclick="runImprovementReview()">失敗と成績をAI分析</button>
+      </div>
+      <div id="improvementReport" class="strategy"></div>
+      <div id="failureHistory" style="margin-top:12px"></div>
     </section>
 
     <section class="card wide">
@@ -686,6 +708,9 @@ async function refresh(){
     guests.innerHTML=state.guests.length?state.guests.map(x=>'<div class="row"><span>'+escapeHtml(x.name)+'</span><span class="small">'+x.appearances+'回 '+(x.has_image?'画像あり':'画像未生成')+'</span></div>').join(''):'<div class="small">まだゲストなし</div>';
     guestImageAutoBtn.textContent=state.guest_image_auto_enabled?'ON':'OFF';
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
+    aiVideoBtn.textContent=state.ai_video_enabled?'ON':'OFF';
+    aiVideoBtn.className=state.ai_video_enabled?'danger':'';
+    aiVideoStatus.textContent='AI動画: '+(state.ai_video.available?'利用可能':'未準備')+' / '+escapeHtml(state.ai_video.backend||'')+' / '+state.ai_video.frames+' frames / '+state.ai_video.steps+' steps / '+state.ai_video.size.join('x')+(state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF');
     const backend=state.studio.selected||'未接続';
     const gpu=state.studio.gpu_name||state.gpu.name||'CPU';
     const cuda=state.studio.cuda_available?('CUDA '+(state.studio.cuda_version||'')):'CUDA未検出';
@@ -731,11 +756,20 @@ async function refresh(){
         +'<div class="library-meta">'+local+yt+queue+guest+'</div>'
         +err+preview+'</div>';
     }).join(''):'<div class="small">まだ動画履歴がありません。</div>';
-    libraryImages.innerHTML=state.studio_assets.length?state.studio_assets.slice(0,30).map(x=>{
+    libraryImages.innerHTML=state.studio_assets.length?state.studio_assets.slice(0,40).map(x=>{
       if(!x.url) return '';
       const label=(x.meta&&x.meta.guest_name)?x.meta.guest_name:(x.meta&&x.meta.expression)?('ミライ '+x.meta.expression):(x.meta&&x.meta.theme)?x.meta.theme:x.type;
-      return '<div><img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy"><div class="small">'+escapeHtml(label||x.type||'画像')+'</div></div>';
-    }).join(''):'<div class="small">まだ生成画像がありません。</div>';
+      const isVideo=(x.type==='ai_video'||x.type==='motion_video'||String(x.url).toLowerCase().endsWith('.mp4'));
+      const media=isVideo
+        ? '<video controls preload="none" style="width:100%;border-radius:10px;background:#000" src="'+escapeHtml(x.url)+'"></video>'
+        : '<img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy">';
+      return '<div>'+media+'<div class="small">'+escapeHtml(label||x.type||'素材')+'</div></div>';
+    }).join(''):'<div class="small">まだ生成素材がありません。</div>';
+    const report=(state.improvement&&state.improvement.report)||{};
+    improvementReport.textContent=report.summary||'まだAI改善分析を実行していません。';
+    failureHistory.innerHTML=(state.improvement&&state.improvement.recent_failures||[]).length
+      ? state.improvement.recent_failures.map(x=>'<div class="row"><span>'+escapeHtml(x.stage)+'</span><span class="small">'+escapeHtml(x.created_at)+' / '+escapeHtml(String(x.message||'').slice(0,120))+'</span></div>').join('')
+      : '<div class="small">記録された失敗はまだありません。</div>';
     strategy.textContent=state.growth.strategy;
     analytics.innerHTML=state.growth.recent.map(x=>'<div class="row"><span>#'+x.video_id+' '+escapeHtml(x.title)+'</span><span class="small">'+x.checkpoint_hours+'h / score '+Number(x.score).toFixed(1)+' / '+x.views+' views</span></div>').join('');
     logs.textContent=state.log_tail;
@@ -746,6 +780,16 @@ async function toggleAutomation(){await api('/api/settings',{automation_enabled:
 async function toggleGuestImageAuto(){
   await api('/api/settings',{guest_image_auto_enabled:!state.guest_image_auto_enabled});
   refresh();
+}
+async function toggleAiVideo(){
+  if(!state.ai_video_enabled && !confirm('AI動画はGTX 1070では重い処理です。1本ずつ直列生成でONにしますか？')) return;
+  await api('/api/settings',{ai_video_enabled:!state.ai_video_enabled});
+  refresh();
+}
+async function runImprovementReview(){
+  const data=await api('/api/action',{action:'improvement_review'});
+  alert(data.message);
+  setTimeout(refresh,1000);
 }
 async function runStudioMirai(){
   const data=await api('/api/action',{action:'studio_mirai',expression:miraiExpression.value});
@@ -986,6 +1030,8 @@ class Handler(BaseHTTPRequestHandler):
                     set_guest_image_auto_enabled(
                         bool(body["guest_image_auto_enabled"])
                     )
+                if "ai_video_enabled" in body:
+                    set_ai_video_enabled(bool(body["ai_video_enabled"]))
 
                 _wake_event.set()
                 self._json({"ok": True, "message": "設定を保存しました。自動運転へ反映します。"})
@@ -1053,6 +1099,14 @@ class Handler(BaseHTTPRequestHandler):
                     "guest": ("新ゲスト生成", create_guest_now),
                     "cleanup": ("投稿済みファイル掃除", run_cleanup_uploaded),
                     "services": ("AIサービス起動確認", _ensure_local_services),
+                    "improvement_review": (
+                        "AI改善分析",
+                        lambda: print(json.dumps(
+                            run_improvement_review(),
+                            ensure_ascii=False,
+                            indent=2,
+                        )),
+                    ),
                     "studio_install": (
                         "AIスタジオ導入",
                         _install_studio_dependencies,
