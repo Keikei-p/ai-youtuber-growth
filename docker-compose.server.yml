@@ -1,0 +1,41 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+
+  voicevox:
+    image: voicevox/voicevox_engine:cpu-latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:50021:50021"
+
+  app:
+    build: .
+    depends_on:
+      - ollama
+      - voicevox
+    environment:
+      POSTS_PER_DAY: "3"
+      MAX_SCRIPT_RETRIES: "3"
+      MAX_GENERATION_ROUNDS: "3"
+      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "qwen2.5:7b"
+      VOICEVOX_URL: "http://voicevox:50021"
+      VOICEVOX_SPEAKER: "3"
+      FONT_PATH: "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+      DRY_RUN: "true"
+      YOUTUBE_PRIVACY_STATUS: "private"
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./client_secret.json:/app/client_secret.json:ro
+      - ./token.json:/app/token.json
+    command: ["python", "main.py", "--render"]
+    profiles: ["run"]
+
+volumes:
+  ollama_data:
