@@ -68,6 +68,20 @@ class Settings:
     ai_video_width: int = int(os.getenv("AI_VIDEO_WIDTH", "384"))
     ai_video_height: int = int(os.getenv("AI_VIDEO_HEIGHT", "576"))
 
+    # 省負荷自動運転。手動実行時はユーザー操作を優先。
+    resource_min_idle_seconds: int = int(
+        os.getenv("RESOURCE_MIN_IDLE_SECONDS", "45")
+    )
+    resource_min_memory_mb: int = int(
+        os.getenv("RESOURCE_MIN_MEMORY_MB", "2500")
+    )
+    resource_min_gpu_free_mb: int = int(
+        os.getenv("RESOURCE_MIN_GPU_FREE_MB", "1800")
+    )
+    resource_urgent_minutes: int = int(
+        os.getenv("RESOURCE_URGENT_MINUTES", "60")
+    )
+
     youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
     youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
     youtube_contains_synthetic_media: bool = (
