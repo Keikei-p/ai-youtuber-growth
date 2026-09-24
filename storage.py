@@ -138,8 +138,8 @@ def dashboard_videos(limit: int = 30) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT
-                v.id, v.title, v.status, v.output_path, v.youtube_video_id,
-                v.uploaded_at, v.views, v.likes, v.comments,
+                v.id, v.created_at, v.title, v.status, v.output_path,
+                v.youtube_video_id, v.uploaded_at, v.views, v.likes, v.comments,
                 v.avg_view_percentage, v.description, v.tags_json,
                 g.name AS guest_name,
                 q.scheduled_for, q.status AS queue_status, q.error AS queue_error
@@ -152,6 +152,24 @@ def dashboard_videos(limit: int = 30) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+def video_by_id(video_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                v.id, v.created_at, v.title, v.status, v.output_path,
+                v.youtube_video_id, v.uploaded_at, v.views, v.likes,
+                v.comments, v.avg_view_percentage, v.description,
+                v.tags_json, g.name AS guest_name
+            FROM videos v
+            LEFT JOIN guests g ON g.id = v.guest_id
+            WHERE v.id = ?
+            """,
+            (video_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
 
 def recent_videos(limit: int = 20) -> list[dict[str, Any]]:
     with connect() as conn:
