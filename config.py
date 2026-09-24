@@ -27,6 +27,10 @@ class Settings:
     background_dir: str = os.getenv("BACKGROUND_DIR", "assets/backgrounds")
     bgm_file: str = os.getenv("BGM_FILE", "")
 
+    app_timezone: str = os.getenv("APP_TIMEZONE", "Asia/Tokyo")
+    post_times: str = os.getenv("POST_TIMES", "09:00,15:00,21:00")
+    auto_upload_privacy: str = os.getenv("AUTO_UPLOAD_PRIVACY", "private")
+
     font_path: str = os.getenv("FONT_PATH", r"C:\Windows\Fonts\meiryo.ttc")
 
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
