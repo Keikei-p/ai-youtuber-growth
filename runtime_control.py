@@ -124,3 +124,13 @@ def set_guest_new_every(value: int) -> None:
         "guest_new_every",
         str(max(0, min(500, int(value)))),
     )
+
+
+def guest_image_auto_enabled() -> bool:
+    return _bool_state("guest_image_auto_enabled", settings.guest_image_enabled)
+
+def set_guest_image_auto_enabled(enabled: bool) -> None:
+    set_channel_state(
+        "guest_image_auto_enabled",
+        "true" if enabled else "false",
+    )
