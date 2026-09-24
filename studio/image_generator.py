@@ -59,7 +59,11 @@ def _webui_available(timeout: float = 1.5) -> bool:
 def studio_status() -> dict:
     configured = _configured_backend()
     diffusers_ok = _diffusers_installed()
-    webui_ok = _webui_available()
+    webui_ok = (
+        _webui_available()
+        if configured == "webui" or (configured == "auto" and not diffusers_ok)
+        else False
+    )
     selected = None
     if configured == "diffusers":
         selected = "diffusers" if diffusers_ok else None
