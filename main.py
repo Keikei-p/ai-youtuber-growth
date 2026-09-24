@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 
 from config import settings
+from guest_manager import select_guest_for_next_video
+from metadata import build_metadata
 from media_cleanup import cleanup_all_uploaded_media, cleanup_uploaded_media
 from paths import AUDIO_DIR, CHARACTER_FILE, PLAN_DIR, VIDEO_DIR, ensure_runtime_dirs
 from planner import plan_ideas
@@ -43,6 +45,7 @@ def render_results(results: list[dict], character: dict) -> None:
                 audio_path=audio_path,
                 output_path=video_path,
                 character_name=character["name"],
+                guest_name=(item.get("guest") or {}).get("name"),
             )
             item["output_path"] = str(video_path)
             item["status"] = "rendered"
@@ -76,7 +79,11 @@ def upload_results(
                 video_path=Path(item["output_path"]),
                 title=item["title"],
                 description=item.get("description", ""),
+                tags=item.get("tags", []),
                 privacy_status=effective_privacy,
+                category_id=settings.youtube_category_id,
+                default_language=settings.youtube_default_language,
+                contains_synthetic_media=settings.youtube_contains_synthetic_media,
             )
             item["youtube_video_id"] = youtube_id
             item["status"] = "uploaded"
@@ -167,24 +174,41 @@ def run_generation(
             if len(results) >= target:
                 break
 
+            idea = dict(idea)
+            guest = select_guest_for_next_video()
+            if guest:
+                idea["guest"] = guest
+
             written = _make_valid_script(character, idea, recent)
             if not written:
                 continue
 
+            metadata = build_metadata(
+                written=written,
+                idea=idea,
+                script=written["script"],
+                guest=guest,
+            )
+
             video_id = save_video(
                 idea=idea["idea"],
                 angle=idea.get("angle", ""),
-                title=written["title"],
+                title=metadata["title"],
                 script=written["script"],
+                description=metadata["description"],
+                tags=metadata["tags"],
+                guest_id=(int(guest["id"]) if guest else None),
                 status="planned",
             )
 
             result = {
                 "id": video_id,
                 "idea": idea,
-                "title": written["title"],
+                "title": metadata["title"],
                 "script": written["script"],
-                "description": written.get("description", ""),
+                "description": metadata["description"],
+                "tags": metadata["tags"],
+                "guest": guest,
                 "status": "planned",
             }
             results.append(result)
