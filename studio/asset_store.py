@@ -11,7 +11,7 @@ INDEX_FILE = PROJECT_ROOT / "assets" / "studio_index.json"
 
 
 def ensure_dirs() -> None:
-    for name in ("mirai", "guests", "backgrounds", "thumbnails"):
+    for name in ("mirai", "guests", "backgrounds", "thumbnails", "videos"):
         (GENERATED_ROOT / name).mkdir(parents=True, exist_ok=True)
     INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
     if not INDEX_FILE.exists():
