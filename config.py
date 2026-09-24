@@ -54,6 +54,10 @@ class Settings:
         os.getenv("STUDIO_CPU_FALLBACK", "true").lower() == "true"
     )
 
+    studio_scene_images_per_video: int = int(
+        os.getenv("STUDIO_SCENE_IMAGES_PER_VIDEO", "2")
+    )
+
     youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
     youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
     youtube_contains_synthetic_media: bool = (
