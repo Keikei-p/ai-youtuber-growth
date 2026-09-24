@@ -423,6 +423,24 @@ def retire_guest(guest_id: int) -> None:
     with connect() as conn:
         conn.execute("UPDATE guests SET active = 0 WHERE id = ?", (guest_id,))
 
+def guest_performance() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                g.id, g.name, g.appearances, g.last_used_at,
+                COALESCE(AVG(s.score), 0) AS avg_score,
+                COUNT(s.id) AS snapshot_count
+            FROM guests g
+            LEFT JOIN videos v ON v.guest_id = g.id
+            LEFT JOIN analytics_snapshots s ON s.video_id = v.id
+            WHERE g.active = 1
+            GROUP BY g.id
+            ORDER BY avg_score DESC, g.appearances DESC, g.id DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
 def queue_video(video_id: int, scheduled_for: str) -> None:
     with connect() as conn:
         conn.execute(
