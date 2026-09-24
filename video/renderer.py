@@ -309,6 +309,73 @@ def _audio_duration(audio_path: Path) -> float:
     ]
     return float(subprocess.check_output(cmd, text=True).strip())
 
+def _render_motion_segment(
+    frame_path: Path,
+    output_path: Path,
+    duration: float,
+    index: int,
+) -> Path:
+    """
+    1枚の完成フレームに緩やかなカメラ移動を付ける。
+    AI動画より圧倒的に軽く、Shortsの静止画感を減らす。
+    """
+    duration = max(float(duration), 0.35)
+    frames = max(1, int(duration * 30))
+
+    # シーンごとに少しだけ動きを変える。
+    if index % 3 == 0:
+        zoom = "min(zoom+0.00055,1.045)"
+        x = "iw/2-(iw/zoom/2)"
+        y = "ih/2-(ih/zoom/2)"
+    elif index % 3 == 1:
+        zoom = "min(zoom+0.00040,1.035)"
+        x = "min(iw-iw/zoom,max(0,(iw-iw/zoom)*on/{frames}))".format(
+            frames=max(frames - 1, 1)
+        )
+        y = "ih/2-(ih/zoom/2)"
+    else:
+        zoom = "min(zoom+0.00045,1.04)"
+        x = "max(0,(iw-iw/zoom)*(1-on/{frames}))".format(
+            frames=max(frames - 1, 1)
+        )
+        y = "ih/2-(ih/zoom/2)"
+
+    vf = (
+        f"zoompan=z='{zoom}':x='{x}':y='{y}':"
+        f"d={frames}:s={WIDTH}x{HEIGHT}:fps=30,"
+        "format=yuv420p"
+    )
+
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loop",
+            "1",
+            "-i",
+            str(frame_path),
+            "-vf",
+            vf,
+            "-t",
+            f"{duration:.4f}",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return output_path
+
+
 def render_short(
     title: str,
     script: str,
@@ -348,13 +415,26 @@ def render_short(
         )
         frames.append(frame)
 
+    # 静止画をそのまま並べず、各シーンに軽いカメラモーションを付ける。
+    segments: list[Path] = []
+    for i, frame in enumerate(frames):
+        segment = work / f"segment_{i:03d}.mp4"
+        _render_motion_segment(
+            frame_path=frame,
+            output_path=segment,
+            duration=per,
+            index=i,
+        )
+        segments.append(segment)
+
     concat = work / "concat.txt"
-    lines: list[str] = []
-    for frame in frames:
-        lines.append(f"file '{frame.resolve().as_posix()}'")
-        lines.append(f"duration {per:.4f}")
-    lines.append(f"file '{frames[-1].resolve().as_posix()}'")
-    concat.write_text("\n".join(lines), encoding="utf-8")
+    concat.write_text(
+        "\n".join(
+            f"file '{segment.resolve().as_posix()}'"
+            for segment in segments
+        ),
+        encoding="utf-8",
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -378,12 +458,22 @@ def render_short(
         cmd += ["-stream_loop", "-1", "-i", str(bgm_path)]
         cmd += [
             "-filter_complex",
-            "[1:a]volume=1.0[voice];[2:a]volume=0.09[bgm];"
-            "[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "[1:a]highpass=f=60,lowpass=f=15000,"
+            "loudnorm=I=-14:TP=-1.5:LRA=7[voice];"
+            "[2:a]volume=0.055[bgm];"
+            "[voice][bgm]amix=inputs=2:duration=first:"
+            "dropout_transition=2[aout]",
             "-map",
             "0:v:0",
             "-map",
             "[aout]",
+        ]
+
+    if not use_bgm:
+        cmd += [
+            "-filter:a",
+            "highpass=f=60,lowpass=f=15000,"
+            "loudnorm=I=-14:TP=-1.5:LRA=7",
         ]
 
     cmd += [
@@ -391,8 +481,16 @@ def render_short(
         "libx264",
         "-preset",
         "medium",
+        "-crf",
+        "18",
+        "-profile:v",
+        "high",
+        "-level",
+        "4.1",
         "-r",
         "30",
+        "-movflags",
+        "+faststart",
         "-pix_fmt",
         "yuv420p",
         "-c:a",
