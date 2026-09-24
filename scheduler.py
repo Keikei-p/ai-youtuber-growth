@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from config import settings
 from main import run_generation
+from media_cleanup import cleanup_uploaded_media
 from storage import (
     due_queue,
     init_db,
@@ -214,6 +215,16 @@ def run_due() -> None:
                 f"[AUTO-UPLOAD] #{row['video_id']} -> {youtube_id} "
                 f"[{settings.auto_upload_privacy}]"
             )
+            try:
+                cleanup_uploaded_media(
+                    row["video_id"],
+                    output_path,
+                )
+            except Exception as cleanup_exc:
+                print(
+                    "[CLEANUP] 投稿は成功済みですが削除処理でエラー: "
+                    f"{cleanup_exc}"
+                )
         except Exception as exc:
             mark_queue_error(row["queue_id"], str(exc))
             print(
