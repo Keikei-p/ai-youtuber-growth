@@ -31,5 +31,3 @@ End If
 
 command = Chr(34) & pythonw & Chr(34) & " " & Chr(34) & launcher & Chr(34)
 shell.Run command, 0, False
-WScript.Sleep 1800
-shell.Run "http://127.0.0.1:8765", 1, False
