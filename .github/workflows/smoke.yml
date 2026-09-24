@@ -15,6 +15,12 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
       - run: python -m py_compile main.py scheduler.py growth_engine.py learner.py planner.py writer.py storage.py metadata.py guest_manager.py guest_visual.py video/renderer.py youtube/uploader.py youtube/analytics.py
+      - name: PowerShell syntax check
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw automation/windows_cycle.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
       - run: python main.py --show
         env:
           POSTS_PER_DAY: "3"
