@@ -93,6 +93,25 @@ def init_db() -> None:
                 "ALTER TABLE posting_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
             )
 
+        conn.execute(
+            """
+            UPDATE videos
+            SET uploaded_at = COALESCE(
+                (
+                    SELECT q.uploaded_at
+                    FROM posting_queue q
+                    WHERE q.video_id = videos.id
+                      AND q.uploaded_at IS NOT NULL
+                    ORDER BY q.id DESC
+                    LIMIT 1
+                ),
+                created_at
+            )
+            WHERE youtube_video_id IS NOT NULL
+              AND uploaded_at IS NULL
+            """
+        )
+
 def recent_videos(limit: int = 20) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
