@@ -7,6 +7,7 @@ from pathlib import Path
 from config import settings
 from guest_manager import select_guest_for_next_video
 from gpu_manager import unload_ollama_model, release_torch_cuda_cache
+from production_pipeline import produce_media
 from metadata import build_metadata
 from runtime_control import posts_per_day
 from media_cleanup import cleanup_all_uploaded_media, cleanup_uploaded_media
@@ -17,7 +18,6 @@ from storage import (
     export_json,
     init_db,
     mark_uploaded,
-    mark_guest_used,
     recent_videos,
     save_video,
     update_video_output,
@@ -28,43 +28,12 @@ def load_character() -> dict:
     return json.loads(CHARACTER_FILE.read_text(encoding="utf-8"))
 
 def render_results(results: list[dict], character: dict) -> None:
-    from voice.voicevox import VoicevoxClient
-    from video.renderer import render_short
-
-    # 文章生成でOllamaが使ったVRAMを、音声・動画フェーズへ明け渡す。
-    unload_ollama_model()
-    release_torch_cuda_cache()
-
-    voice = VoicevoxClient()
-    if not voice.available():
-        print("[MEDIA] VOICEVOXが起動していないため動画生成をスキップしました。")
-        return
-
-    stamp = datetime.now().strftime("%Y%m%d")
-    for item in results:
-        audio_path = AUDIO_DIR / f"{stamp}_{item['id']}.wav"
-        video_path = VIDEO_DIR / f"{stamp}_{item['id']}.mp4"
-        try:
-            voice.synthesize(item["script"], audio_path)
-            render_short(
-                title=item["title"],
-                script=item["script"],
-                audio_path=audio_path,
-                output_path=video_path,
-                character_name=character["name"],
-                guest_name=(item.get("guest") or {}).get("name"),
-                guest_image_path=(item.get("guest") or {}).get("image_path"),
-            )
-            item["output_path"] = str(video_path)
-            item["status"] = "rendered"
-            update_video_output(item["id"], str(video_path))
-            guest = item.get("guest") or {}
-            if guest.get("id"):
-                mark_guest_used(int(guest["id"]))
-            print(f"[MEDIA] #{item['id']} -> {video_path}")
-        except Exception as exc:
-            item["media_error"] = str(exc)
-            print(f"[MEDIA] #{item['id']} 失敗: {exc}")
+    """
+    互換用ラッパー。
+    実処理は production_pipeline で
+    画像 → 音声 → 字幕付き編集の順に直列実行する。
+    """
+    produce_media(results, character)
 
 def upload_results(
     results: list[dict],
@@ -158,6 +127,17 @@ def run_generation(
     upload: bool = False,
     target_override: int | None = None,
 ) -> list[dict]:
+    """
+    低負荷の段階式パイプライン。
+
+    STEP 1: Ollama中心の文章工程を1本ずつ完了
+    STEP 2: 画像を1枚ずつ生成
+    STEP 3: VOICEVOX音声を1本ずつ生成
+    STEP 4: FFmpegで画像+音声+字幕を1本ずつ編集
+    STEP 5: 必要な場合のみYouTube投稿
+
+    GPU負荷の異なる工程を同時実行しない。
+    """
     ensure_runtime_dirs()
     init_db()
     character = load_character()
@@ -165,76 +145,100 @@ def run_generation(
     target = target_override or posts_per_day()
     results: list[dict] = []
 
-    for generation_round in range(1, settings.max_generation_rounds + 1):
-        remaining = target - len(results)
-        if remaining <= 0:
-            break
+    print(f"[PIPELINE] STEP 1/4 文章工程開始 / 目標 {target}本")
 
-        print(f"[PLAN] 第{generation_round}ラウンド: 残り{remaining}本を生成")
+    failed_rounds = 0
+    max_attempts = max(
+        target * settings.max_generation_rounds,
+        settings.max_generation_rounds,
+    )
+
+    while len(results) < target and failed_rounds < max_attempts:
+        sequence = len(results) + 1
+        print(
+            f"[PIPELINE][TEXT] {sequence}/{target} "
+            "企画→台本→品質確認→メタデータ"
+        )
+
         try:
-            ideas = plan_ideas(character, recent, remaining)
+            ideas = plan_ideas(character, recent, 1)
         except Exception as exc:
             print(f"[PLAN] 企画生成失敗: {exc}")
             ideas = []
 
         if not ideas:
-            print("[PLAN] 企画が生成されなかったため次ラウンドへ")
+            failed_rounds += 1
             continue
 
-        for idea in ideas:
-            if len(results) >= target:
-                break
+        idea = dict(ideas[0])
 
-            idea = dict(idea)
-            guest = select_guest_for_next_video()
-            if guest:
-                idea["guest"] = guest
+        # ゲストはプロフィールだけ決める。
+        # 画像はSTEP 2まで生成しない。
+        guest = select_guest_for_next_video(
+            prepare_image=False,
+        )
+        if guest:
+            idea["guest"] = guest
 
-            written = _make_valid_script(character, idea, recent)
-            if not written:
-                continue
+        written = _make_valid_script(character, idea, recent)
+        if not written:
+            failed_rounds += 1
+            continue
 
-            metadata = build_metadata(
-                written=written,
-                idea=idea,
-                script=written["script"],
-                guest=guest,
-            )
+        metadata = build_metadata(
+            written=written,
+            idea=idea,
+            script=written["script"],
+            guest=guest,
+        )
 
-            video_id = save_video(
-                idea=idea["idea"],
-                angle=idea.get("angle", ""),
-                title=metadata["title"],
-                script=written["script"],
-                description=metadata["description"],
-                tags=metadata["tags"],
-                guest_id=(int(guest["id"]) if guest else None),
-                status="planned",
-            )
+        video_id = save_video(
+            idea=idea["idea"],
+            angle=idea.get("angle", ""),
+            title=metadata["title"],
+            script=written["script"],
+            description=metadata["description"],
+            tags=metadata["tags"],
+            guest_id=(int(guest["id"]) if guest else None),
+            status="planned",
+        )
 
-            result = {
-                "id": video_id,
-                "idea": idea,
-                "title": metadata["title"],
-                "script": written["script"],
-                "description": metadata["description"],
-                "tags": metadata["tags"],
-                "guest": guest,
-                "status": "planned",
-            }
-            results.append(result)
-            recent.insert(0, result)
+        result = {
+            "id": video_id,
+            "idea": idea,
+            "title": metadata["title"],
+            "script": written["script"],
+            "description": metadata["description"],
+            "tags": metadata["tags"],
+            "guest": guest,
+            "status": "planned",
+        }
+        results.append(result)
+        recent.insert(0, result)
+        failed_rounds = 0
+
+    print(
+        f"[PIPELINE] STEP 1/4 文章工程完了: "
+        f"{len(results)}/{target}本"
+    )
+
+    # 文章工程終了後にOllamaのVRAMを明示解放。
+    unload_ollama_model()
+    release_torch_cuda_cache()
 
     if len(results) < target:
         print(
             f"[WARN] 予定{target}本に対して{len(results)}本。"
-            "最大生成ラウンドに達したため、この実行ではここまでにします。"
+            "文章工程の再試行上限に達したため、この実行ではここまでにします。"
         )
 
     if render or upload:
         render_results(results, character)
+
     if upload:
+        print("[PIPELINE] STEP 5/5 YouTube投稿工程開始")
         upload_results(results)
+        print("[PIPELINE] STEP 5/5 YouTube投稿工程完了")
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     export_json(PLAN_DIR / f"{stamp}.json", results)
