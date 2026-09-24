@@ -134,7 +134,7 @@ def _retire_if_needed() -> None:
         retire_guest(int(row["id"]))
         print(f"[GUEST] {row['name']} を通常ローテーションから外しました。")
 
-def create_guest_now() -> dict:
+def create_guest_now(generate_image: bool = True) -> dict:
     guests = active_guests(100)
     profile = _generate_guest(len(guests))
     guest_id = create_guest(
@@ -145,14 +145,15 @@ def create_guest_now() -> dict:
     )
 
     image_path = None
-    try:
-        from guest_visual import generate_guest_image
-        image_path = generate_guest_image(
-            guest_id,
-            profile.get("visual_prompt", ""),
-        )
-    except Exception as exc:
-        print(f"[GUEST-IMAGE] 初期化スキップ: {exc}")
+    if generate_image:
+        try:
+            from guest_visual import generate_guest_image
+            image_path = generate_guest_image(
+                guest_id,
+                profile.get("visual_prompt", ""),
+            )
+        except Exception as exc:
+            print(f"[GUEST-IMAGE] 初期化スキップ: {exc}")
 
     _retire_if_needed()
     print(f"[GUEST] 新ゲスト生成: {profile['name']} (ID {guest_id})")
@@ -163,7 +164,7 @@ def create_guest_now() -> dict:
     }
 
 
-def maybe_create_guest() -> dict | None:
+def maybe_create_guest(generate_image: bool = True) -> dict | None:
     count = video_count()
     guests = active_guests(100)
     should_create = (
@@ -176,10 +177,13 @@ def maybe_create_guest() -> dict | None:
     )
     if not should_create:
         return None
-    return create_guest_now()
+    return create_guest_now(generate_image=generate_image)
 
-def select_guest_for_next_video(offset: int = 0) -> dict | None:
-    maybe_create_guest()
+def select_guest_for_next_video(
+    offset: int = 0,
+    prepare_image: bool = True,
+) -> dict | None:
+    maybe_create_guest(generate_image=prepare_image)
 
     appearance_every = guest_appearance_every()
     if appearance_every <= 0:
@@ -191,7 +195,7 @@ def select_guest_for_next_video(offset: int = 0) -> dict | None:
 
     guests = active_guests(settings.guest_max_active)
     if not guests:
-        created = maybe_create_guest()
+        created = maybe_create_guest(generate_image=prepare_image)
         if not created:
             return None
         return created
@@ -212,7 +216,11 @@ def select_guest_for_next_video(offset: int = 0) -> dict | None:
     selected = max(guests, key=rank)
     profile = json.loads(selected["profile_json"])
     image_path = selected.get("image_path")
-    if not image_path and guest_image_auto_enabled():
+    if (
+        prepare_image
+        and not image_path
+        and guest_image_auto_enabled()
+    ):
         try:
             from guest_visual import generate_guest_image
             image_path = generate_guest_image(
