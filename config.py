@@ -38,6 +38,8 @@ class Settings:
     guest_appearance_every: int = int(os.getenv("GUEST_APPEARANCE_EVERY", "7"))
     guest_new_every: int = int(os.getenv("GUEST_NEW_EVERY", "18"))
     guest_max_active: int = int(os.getenv("GUEST_MAX_ACTIVE", "6"))
+    guest_image_enabled: bool = os.getenv("GUEST_IMAGE_ENABLED", "false").lower() == "true"
+    sd_webui_url: str = os.getenv("SD_WEBUI_URL", "http://127.0.0.1:7860")
 
     youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
     youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
