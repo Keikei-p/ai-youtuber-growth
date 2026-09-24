@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: python -m py_compile main.py scheduler.py growth_engine.py learner.py planner.py writer.py storage.py metadata.py gpu_manager.py production_pipeline.py guest_manager.py guest_visual.py runtime_control.py webapp.py studio/__init__.py studio/models.py studio/prompts.py studio/asset_store.py studio/image_generator.py web_launcher.pyw restart_helper.pyw video/renderer.py youtube/uploader.py youtube/analytics.py
+      - run: python -m py_compile main.py scheduler.py growth_engine.py learner.py planner.py writer.py storage.py metadata.py gpu_manager.py self_improvement.py production_pipeline.py guest_manager.py guest_visual.py runtime_control.py webapp.py studio/__init__.py studio/models.py studio/prompts.py studio/asset_store.py studio/image_generator.py studio/video_generator.py web_launcher.pyw restart_helper.pyw video/renderer.py youtube/uploader.py youtube/analytics.py
       - name: PowerShell syntax check
         shell: pwsh
         run: |
