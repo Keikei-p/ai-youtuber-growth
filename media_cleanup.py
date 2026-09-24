@@ -3,7 +3,7 @@ from pathlib import Path
 
 from config import settings
 from paths import AUDIO_DIR
-from storage import clear_video_output
+from storage import clear_video_output, uploaded_videos
 
 def cleanup_uploaded_media(video_id: int, output_path: str | None) -> list[Path]:
     """
@@ -39,3 +39,26 @@ def cleanup_uploaded_media(video_id: int, output_path: str | None) -> list[Path]
         )
 
     return removed
+
+def cleanup_all_uploaded_media(limit: int = 500) -> tuple[int, int]:
+    """
+    すでにYouTubeへ投稿済みで、ローカルに残っている素材を一括削除する。
+    戻り値は (対象動画数, 削除ファイル数)。
+    """
+    rows = uploaded_videos(limit)
+    target_count = 0
+    removed_count = 0
+
+    for row in rows:
+        output_path = row.get("output_path")
+        if not output_path:
+            continue
+        target_count += 1
+        removed_count += len(
+            cleanup_uploaded_media(
+                video_id=int(row["id"]),
+                output_path=str(output_path),
+            )
+        )
+
+    return target_count, removed_count
