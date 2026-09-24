@@ -78,7 +78,7 @@ def _ensure_mirai_visual(item: dict) -> str | None:
         return None
 
 
-def _background_theme(item: dict) -> str:
+def _background_theme(item: dict, scene_index: int, total_scenes: int) -> str:
     idea = item.get("idea") or {}
     if isinstance(idea, dict):
         topic = str(idea.get("idea") or item.get("title") or "AI experiment")
@@ -86,26 +86,48 @@ def _background_theme(item: dict) -> str:
     else:
         topic = str(idea or item.get("title") or "AI experiment")
         angle = ""
+    phase = (
+        "opening hook scene"
+        if scene_index == 0
+        else "explanation and conclusion scene"
+    )
     return (
         "futuristic clean anime environment for an AI YouTuber short video, "
-        f"topic: {topic}, angle: {angle}, visually clear, cinematic lighting, "
-        "vertical composition, no letters, no logo"
+        f"topic: {topic}, angle: {angle}, phase: {phase}, "
+        f"scene {scene_index + 1} of {total_scenes}, "
+        "visually clear, cinematic lighting, vertical composition, "
+        "no letters, no logo"
     )
 
 
-def _generate_background(item: dict) -> str | None:
-    try:
-        print(f"[PIPELINE][IMAGE] #{item['id']} 専用背景を生成")
-        path = generate_background_image(_background_theme(item))
-        item["background_image_path"] = path
-        return path
-    except Exception as exc:
-        item["visual_warning"] = (
-            str(item.get("visual_warning") or "")
-            + f" 背景生成失敗: {exc}"
-        ).strip()
-        print(f"[PIPELINE][IMAGE] 背景は既存/グラデーションへ: {exc}")
-        return None
+def _generate_backgrounds(item: dict) -> list[str]:
+    paths: list[str] = []
+    total = max(
+        1,
+        min(int(settings.studio_scene_images_per_video), 4),
+    )
+    for scene_index in range(total):
+        try:
+            print(
+                f"[PIPELINE][IMAGE] #{item['id']} "
+                f"シーン背景 {scene_index + 1}/{total} を生成"
+            )
+            path = generate_background_image(
+                _background_theme(item, scene_index, total)
+            )
+            paths.append(path)
+        except Exception as exc:
+            item["visual_warning"] = (
+                str(item.get("visual_warning") or "")
+                + f" 背景{scene_index + 1}生成失敗: {exc}"
+            ).strip()
+            print(
+                "[PIPELINE][IMAGE] 背景は既存/グラデーションへ: "
+                f"{exc}"
+            )
+    item["background_image_paths"] = paths
+    item["background_image_path"] = paths[0] if paths else None
+    return paths
 
 
 def _ensure_guest_visual(item: dict) -> str | None:
@@ -163,7 +185,7 @@ def prepare_visuals(results: list[dict]) -> None:
         print(f"[PIPELINE][IMAGE] {index}/{len(results)} #{item['id']}")
         _ensure_mirai_visual(item)
         _ensure_guest_visual(item)
-        _generate_background(item)
+        _generate_backgrounds(item)
 
     release_torch_cuda_cache()
     print("[PIPELINE] STEP 2/4 画像工程完了")
@@ -231,6 +253,7 @@ def render_videos(results: list[dict], character: dict) -> None:
                 guest_image_path=(item.get("guest") or {}).get("image_path"),
                 character_image_path=item.get("character_image_path"),
                 background_image_path=item.get("background_image_path"),
+                background_image_paths=item.get("background_image_paths"),
             )
             item["output_path"] = str(video_path)
             item["status"] = "rendered"
