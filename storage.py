@@ -407,6 +407,13 @@ def create_guest(
         )
         return int(cur.lastrowid)
 
+def set_guest_image(guest_id: int, image_path: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE guests SET image_path = ? WHERE id = ?",
+            (image_path, guest_id),
+        )
+
 def mark_guest_used(guest_id: int) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with connect() as conn:
