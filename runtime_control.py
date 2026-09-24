@@ -134,3 +134,13 @@ def set_guest_image_auto_enabled(enabled: bool) -> None:
         "guest_image_auto_enabled",
         "true" if enabled else "false",
     )
+
+
+def ai_video_enabled() -> bool:
+    return _bool_state("ai_video_enabled", settings.ai_video_enabled)
+
+def set_ai_video_enabled(enabled: bool) -> None:
+    set_channel_state(
+        "ai_video_enabled",
+        "true" if enabled else "false",
+    )
