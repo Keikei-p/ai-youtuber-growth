@@ -76,6 +76,11 @@ def _ensure_mirai_visual(item: dict) -> str | None:
             str(item.get("visual_warning") or "")
             + f" ミライ画像生成失敗: {exc}"
         ).strip()
+        record_failure(
+            "image.mirai",
+            exc,
+            {"video_id": item.get("id"), "expression": expression},
+        )
         print(f"[PIPELINE][IMAGE] ミライ画像は既存/代替表示へ: {exc}")
         return None
 
@@ -120,6 +125,14 @@ def _generate_backgrounds(item: dict) -> list[str]:
                 str(item.get("visual_warning") or "")
                 + f" 背景{scene_index + 1}生成失敗: {exc}"
             ).strip()
+            record_failure(
+                "image.background",
+                exc,
+                {
+                    "video_id": item.get("id"),
+                    "scene_index": scene_index,
+                },
+            )
             print(
                 "[PIPELINE][IMAGE] 背景は既存/グラデーションへ: "
                 f"{exc}"
@@ -201,6 +214,14 @@ def _ensure_guest_visual(item: dict) -> str | None:
             str(item.get("visual_warning") or "")
             + f" ゲスト画像生成失敗: {exc}"
         ).strip()
+        record_failure(
+            "image.guest",
+            exc,
+            {
+                "video_id": item.get("id"),
+                "guest_id": guest.get("id"),
+            },
+        )
         print(f"[PIPELINE][IMAGE] ゲスト画像なしで継続: {exc}")
         return None
 
@@ -253,6 +274,11 @@ def synthesize_audio(results: list[dict]) -> None:
             item["audio_path"] = str(audio_path)
         except Exception as exc:
             item["media_error"] = f"音声生成失敗: {exc}"
+            record_failure(
+                "voice.synthesis",
+                exc,
+                {"video_id": item.get("id")},
+            )
             print(f"[PIPELINE][VOICE] #{item['id']} 失敗: {exc}")
 
     print("[PIPELINE] STEP 3/4 音声工程完了")
@@ -303,6 +329,11 @@ def render_videos(results: list[dict], character: dict) -> None:
             print(f"[PIPELINE][EDIT] #{item['id']} 完成: {video_path}")
         except Exception as exc:
             item["media_error"] = f"動画編集失敗: {exc}"
+            record_failure(
+                "video.render",
+                exc,
+                {"video_id": item.get("id")},
+            )
             print(f"[PIPELINE][EDIT] #{item['id']} 失敗: {exc}")
 
     print("[PIPELINE] STEP 4/4 編集工程完了")
