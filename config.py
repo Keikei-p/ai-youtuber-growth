@@ -23,6 +23,10 @@ class Settings:
     youtube_client_secret_file: str = os.getenv("YOUTUBE_CLIENT_SECRET_FILE", "client_secret.json")
     youtube_token_file: str = os.getenv("YOUTUBE_TOKEN_FILE", "token.json")
 
+    character_image: str = os.getenv("CHARACTER_IMAGE", "assets/character/default.png")
+    background_dir: str = os.getenv("BACKGROUND_DIR", "assets/backgrounds")
+    bgm_file: str = os.getenv("BGM_FILE", "")
+
     font_path: str = os.getenv("FONT_PATH", r"C:\Windows\Fonts\meiryo.ttc")
 
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
