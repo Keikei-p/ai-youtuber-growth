@@ -5,6 +5,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from config import settings
+from growth_engine import run_growth_cycle
 from main import run_generation
 from media_cleanup import cleanup_uploaded_media
 from storage import (
@@ -253,6 +254,8 @@ def show_queue() -> None:
         )
 
 def tick() -> None:
+    # 先に過去動画を学習し、その最新戦略で次の動画を作る。
+    run_growth_cycle()
     prepare_upcoming()
     run_due()
 
