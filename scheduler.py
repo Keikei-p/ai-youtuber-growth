@@ -10,6 +10,7 @@ from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
 from main import run_generation
+from runtime_control import auto_upload_enabled, upload_privacy
 from media_cleanup import cleanup_uploaded_media
 from storage import (
     due_queue,
@@ -209,10 +210,10 @@ def run_due() -> None:
         print("[SCHEDULE] 現在、投稿時刻を迎えた動画はありません。")
         return
 
-    if not settings.auto_upload_enabled:
+    if not auto_upload_enabled():
         print(
             f"[SCHEDULE] {len(rows)}本が投稿時刻を迎えていますが、"
-            "AUTO_UPLOAD_ENABLED=false のため投稿しません。"
+            "Web/設定上の自動投稿がOFFのため投稿しません。"
         )
         return
 
@@ -230,7 +231,7 @@ def run_due() -> None:
                     "成長するチャンネルです。"
                 ),
                 tags=json.loads(row.get("tags_json") or "[]"),
-                privacy_status=settings.auto_upload_privacy,
+                privacy_status=upload_privacy(),
                 category_id=settings.youtube_category_id,
                 default_language=settings.youtube_default_language,
                 contains_synthetic_media=settings.youtube_contains_synthetic_media,
@@ -242,7 +243,7 @@ def run_due() -> None:
             )
             print(
                 f"[AUTO-UPLOAD] #{row['video_id']} -> {youtube_id} "
-                f"[{settings.auto_upload_privacy}]"
+                f"[{upload_privacy()}]"
             )
             try:
                 cleanup_uploaded_media(
