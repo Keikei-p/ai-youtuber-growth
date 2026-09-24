@@ -7,6 +7,7 @@
 - 1回の実行で3本の企画を生成
 - Ollamaが使える場合はローカルLLMで企画・脚本生成
 - Ollamaがない場合もフォールバック企画で動作確認可能
+- 品質チェックNG時は自動修正し、不足本数も追加生成
 - SQLiteに過去動画と学習メモを保存
 - 過去動画の完全重複を品質チェック
 - VOICEVOXで音声生成
@@ -15,6 +16,7 @@
 - YouTube Analytics APIから視聴データを取得
 - 視聴維持率・高評価率・コメント率から次回用の学習メモを作成
 - GitHub Actionsで基本動作を自動チェック
+- Docker構成あり。PCからサーバーへ移す際はAPI URLや保存先を環境変数で切替可能
 
 ## 安全設定
 
@@ -31,6 +33,14 @@
 6. `.env.example` を `.env` にコピー
 7. Ollamaを使う場合はOllamaを起動し、設定したモデルを用意
 8. 動画生成する場合はVOICEVOXとFFmpegをインストールして起動
+
+## 環境診断
+
+PCでも将来のサーバーでも同じ診断コマンドを使えます。
+
+```bash
+python doctor.py
+```
 
 ## 実行
 
@@ -63,11 +73,35 @@ python main.py --learn
 Google Cloudで YouTube Data API v3 と YouTube Analytics API を有効化し、デスクトップアプリ用OAuthクライアントを作成します。
 取得したJSONをリポジトリ直下へ `client_secret.json` として配置します。
 
-初回の投稿・分析時だけブラウザ認証が開きます。認証後は `token.json` が保存され、その後は自動実行できます。
+その後:
+
+```bash
+python youtube_connect.py
+```
+
+初回だけブラウザ認証が開きます。
+成功すると接続したYouTubeチャンネル名とIDが表示され、`token.json` が保存されます。
+
 `client_secret.json` と `token.json` は `.gitignore` 済みです。
+将来サーバーへ移すときは、この認証情報をGitHubへ置かず、秘密ファイルとしてサーバーへ移行します。
+
+## PC → サーバー移行方針
+
+本体コードは共通です。主に以下の設定だけ切り替える構成です。
+
+- `OLLAMA_URL`
+- `VOICEVOX_URL`
+- `DATA_DIR`
+- `OUTPUT_DIR`
+- `CHARACTER_FILE`
+- `YOUTUBE_CLIENT_SECRET_FILE`
+- `YOUTUBE_TOKEN_FILE`
+
+サーバー用の `Dockerfile` と `docker-compose.server.yml` も用意済みです。
 
 ## 次の段階
 
+- YouTube非公開自動投稿テスト
 - 投稿時間の自動分散
 - 24時間/72時間/7日後の自動分析
 - 過去動画平均との差による企画選択
