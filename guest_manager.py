@@ -151,9 +151,24 @@ def maybe_create_guest() -> dict | None:
         visual_prompt=profile.get("visual_prompt", ""),
         image_path=None,
     )
+
+    image_path = None
+    try:
+        from guest_visual import generate_guest_image
+        image_path = generate_guest_image(
+            guest_id,
+            profile.get("visual_prompt", ""),
+        )
+    except Exception as exc:
+        print(f"[GUEST-IMAGE] 初期化スキップ: {exc}")
+
     _retire_if_needed()
     print(f"[GUEST] 新ゲスト生成: {profile['name']} (ID {guest_id})")
-    return {"id": guest_id, **profile}
+    return {
+        "id": guest_id,
+        **profile,
+        "image_path": image_path,
+    }
 
 def select_guest_for_next_video(offset: int = 0) -> dict | None:
     maybe_create_guest()
@@ -190,10 +205,21 @@ def select_guest_for_next_video(offset: int = 0) -> dict | None:
 
     selected = max(guests, key=rank)
     profile = json.loads(selected["profile_json"])
+    image_path = selected.get("image_path")
+    if not image_path and settings.guest_image_enabled:
+        try:
+            from guest_visual import generate_guest_image
+            image_path = generate_guest_image(
+                int(selected["id"]),
+                selected.get("visual_prompt") or profile.get("visual_prompt", ""),
+            )
+        except Exception as exc:
+            print(f"[GUEST-IMAGE] 再生成スキップ: {exc}")
+
     result = {
         "id": int(selected["id"]),
         **profile,
-        "image_path": selected.get("image_path"),
+        "image_path": image_path,
     }
     mark_guest_used(int(selected["id"]))
     print(f"[GUEST] 今回のゲスト: {selected['name']}")
