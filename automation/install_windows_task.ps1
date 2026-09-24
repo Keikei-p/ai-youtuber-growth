@@ -26,6 +26,15 @@ $Task = New-ScheduledTask -Action $Action -Trigger $Trigger -Settings $Settings 
 
 Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
 
+# AC電源時のWake Timerを有効化。権限等で失敗してもタスク登録自体は維持。
+try {
+    & powercfg.exe /SETACVALUEINDEX SCHEME_CURRENT SUB_SLEEP RTCWAKE 1 | Out-Null
+    & powercfg.exe /SETACTIVE SCHEME_CURRENT | Out-Null
+}
+catch {
+    Write-Warning "Wake timer power setting could not be changed automatically."
+}
+
 Write-Host ""
 Write-Host "[OK] Windows省負荷自動運転タスクを登録しました。"
 Write-Host "Task: $TaskName"
