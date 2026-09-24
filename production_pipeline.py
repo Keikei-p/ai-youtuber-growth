@@ -5,14 +5,16 @@ from pathlib import Path
 
 from config import settings
 from gpu_manager import release_torch_cuda_cache, unload_ollama_model
-from runtime_control import guest_image_auto_enabled
+from runtime_control import ai_video_enabled, guest_image_auto_enabled
 from storage import active_guests, mark_guest_used, update_video_output
+from self_improvement import effective_scene_image_count, record_failure
 from studio.asset_store import GENERATED_ROOT
 from studio.image_generator import (
     generate_background_image,
     generate_guest_image,
     generate_mirai_image,
 )
+from studio.video_generator import generate_animatediff_clip
 from voice.voicevox import VoicevoxClient
 from video.renderer import render_short
 from paths import AUDIO_DIR, VIDEO_DIR
@@ -102,10 +104,7 @@ def _background_theme(item: dict, scene_index: int, total_scenes: int) -> str:
 
 def _generate_backgrounds(item: dict) -> list[str]:
     paths: list[str] = []
-    total = max(
-        1,
-        min(int(settings.studio_scene_images_per_video), 4),
-    )
+    total = effective_scene_image_count()
     for scene_index in range(total):
         try:
             print(
@@ -128,6 +127,43 @@ def _generate_backgrounds(item: dict) -> list[str]:
     item["background_image_paths"] = paths
     item["background_image_path"] = paths[0] if paths else None
     return paths
+
+
+def _ai_video_prompt(item: dict) -> str:
+    idea = item.get("idea") or {}
+    if isinstance(idea, dict):
+        topic = str(idea.get("idea") or item.get("title") or "AI experiment")
+        angle = str(idea.get("angle") or "")
+    else:
+        topic = str(idea or item.get("title") or "AI experiment")
+        angle = ""
+    return (
+        "short vertical anime cinematic B-roll for an AI YouTuber, "
+        f"topic: {topic}, angle: {angle}, futuristic clean visual, "
+        "smooth subtle motion, no text, no logo, safe for work"
+    )
+
+
+def _generate_ai_video_asset(item: dict) -> str | None:
+    if not ai_video_enabled():
+        return None
+    try:
+        print(f"[PIPELINE][AI-VIDEO] #{item['id']} 短いAI動画素材を生成")
+        path = generate_animatediff_clip(_ai_video_prompt(item))
+        item["ai_video_path"] = path
+        return path
+    except Exception as exc:
+        item["visual_warning"] = (
+            str(item.get("visual_warning") or "")
+            + f" AI動画生成失敗: {exc}"
+        ).strip()
+        record_failure(
+            "pipeline.ai_video",
+            exc,
+            {"video_id": item.get("id"), "title": item.get("title")},
+        )
+        print(f"[PIPELINE][AI-VIDEO] 失敗しても本編は継続: {exc}")
+        return None
 
 
 def _ensure_guest_visual(item: dict) -> str | None:
@@ -186,6 +222,7 @@ def prepare_visuals(results: list[dict]) -> None:
         _ensure_mirai_visual(item)
         _ensure_guest_visual(item)
         _generate_backgrounds(item)
+        _generate_ai_video_asset(item)
 
     release_torch_cuda_cache()
     print("[PIPELINE] STEP 2/4 画像工程完了")
