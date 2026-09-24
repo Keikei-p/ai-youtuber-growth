@@ -10,6 +10,7 @@ from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
 from main import run_generation
+from resource_governor import background_production_decision
 from self_improvement import (
     maybe_run_improvement_review,
     record_failure,
@@ -30,6 +31,7 @@ from storage import (
     occupied_schedule_times,
     queue_video,
     queued_items,
+    set_channel_state,
     update_queue_schedule,
 )
 from voice.voicevox import VoicevoxClient
@@ -176,11 +178,51 @@ def prepare_upcoming() -> None:
         f"{min(missing, len(free_slots))}本を生成します。"
     )
 
-    results = run_generation(
-        render=True,
-        upload=False,
-        target_override=min(missing, len(free_slots)),
+    minutes_to_next = (
+        free_slots[0] - now
+    ).total_seconds() / 60 if free_slots else 9999
+    urgent = minutes_to_next <= max(
+        5,
+        int(settings.resource_urgent_minutes),
     )
+    decision = background_production_decision(
+        urgent=urgent,
+    )
+    set_channel_state(
+        "runtime_resource_snapshot",
+        json.dumps(
+            decision.snapshot,
+            ensure_ascii=False,
+        ),
+    )
+
+    if not decision.allowed:
+        print(
+            "[RESOURCE] 自動制作を今回は延期: "
+            + decision.reason
+        )
+        return
+
+    set_channel_state(
+        "runtime_resource_mode",
+        decision.mode,
+    )
+    print(
+        f"[RESOURCE] 制作開始 mode={decision.mode}: "
+        f"{decision.reason}"
+    )
+
+    try:
+        results = run_generation(
+            render=True,
+            upload=False,
+            target_override=min(missing, len(free_slots)),
+        )
+    finally:
+        set_channel_state(
+            "runtime_resource_mode",
+            "",
+        )
 
     queued_count = 0
     for item, slot in zip(results, free_slots):
