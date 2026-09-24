@@ -111,11 +111,34 @@ def _paste_character(canvas: Image.Image) -> None:
     y = 500
     canvas.alpha_composite(char, (x, y))
 
+def _paste_guest(canvas: Image.Image, guest_image_path: str | None) -> None:
+    if not guest_image_path:
+        return
+
+    path = Path(guest_image_path)
+    if not path.exists():
+        return
+
+    with Image.open(path) as raw:
+        guest = raw.convert("RGBA")
+
+    max_w, max_h = 520, 900
+    ratio = min(max_w / guest.width, max_h / guest.height, 1.0)
+    guest = guest.resize(
+        (max(1, int(guest.width * ratio)), max(1, int(guest.height * ratio))),
+        Image.Resampling.LANCZOS,
+    )
+
+    x = 20
+    y = 560
+    canvas.alpha_composite(guest, (x, y))
+
 def _make_frame(
     title: str,
     text: str,
     character_name: str,
     guest_name: str | None,
+    guest_image_path: str | None,
     path: Path,
     index: int,
     total: int,
@@ -129,6 +152,7 @@ def _make_frame(
     base = Image.alpha_composite(base, overlay)
 
     _paste_character(base)
+    _paste_guest(base, guest_image_path)
 
     draw = ImageDraw.Draw(base)
     title_font = _font(50)
@@ -221,6 +245,7 @@ def render_short(
     output_path: Path,
     character_name: str,
     guest_name: str | None = None,
+    guest_image_path: str | None = None,
 ) -> Path:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg が見つかりません。FFmpegをインストールしてください。")
@@ -239,6 +264,7 @@ def render_short(
             chunk,
             character_name,
             guest_name,
+            guest_image_path,
             frame,
             i,
             len(chunks),
