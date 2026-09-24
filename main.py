@@ -6,6 +6,7 @@ from pathlib import Path
 
 from config import settings
 from learner import build_learning_note
+from paths import AUDIO_DIR, CHARACTER_FILE, PLAN_DIR, VIDEO_DIR, ensure_runtime_dirs
 from planner import plan_ideas
 from reviewer import review_script
 from storage import (
@@ -22,7 +23,7 @@ from storage import (
 from writer import fallback_script, rewrite_script, write_script
 
 def load_character() -> dict:
-    return json.loads(Path("character/character.json").read_text(encoding="utf-8"))
+    return json.loads(CHARACTER_FILE.read_text(encoding="utf-8"))
 
 def render_results(results: list[dict], character: dict) -> None:
     from voice.voicevox import VoicevoxClient
@@ -35,8 +36,8 @@ def render_results(results: list[dict], character: dict) -> None:
 
     stamp = datetime.now().strftime("%Y%m%d")
     for item in results:
-        audio_path = Path(f"output/audio/{stamp}_{item['id']}.wav")
-        video_path = Path(f"output/videos/{stamp}_{item['id']}.mp4")
+        audio_path = AUDIO_DIR / f"{stamp}_{item['id']}.wav"
+        video_path = VIDEO_DIR / f"{stamp}_{item['id']}.mp4"
         try:
             voice.synthesize(item["script"], audio_path)
             render_short(
@@ -111,7 +112,6 @@ def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict 
             print(f"[REPAIR] AI修正失敗: {exc}")
             written = fallback_script(character, idea)
 
-    # 最後の安全弁。AIが何度失敗しても固定テンプレートで予定本数を欠けにくくする。
     fallback = fallback_script(character, idea)
     ok, issues = review_script(fallback["title"], fallback["script"], recent)
     if ok:
@@ -122,6 +122,7 @@ def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict 
     return None
 
 def run_generation(render: bool = False, upload: bool = False) -> list[dict]:
+    ensure_runtime_dirs()
     init_db()
     character = load_character()
     recent = recent_videos(30)
@@ -183,10 +184,11 @@ def run_generation(render: bool = False, upload: bool = False) -> list[dict]:
         upload_results(results)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    export_json(Path(f"output/plans/{stamp}.json"), results)
+    export_json(PLAN_DIR / f"{stamp}.json", results)
     return results
 
 def run_learning() -> None:
+    ensure_runtime_dirs()
     init_db()
     videos = uploaded_videos(20)
     if not videos:
