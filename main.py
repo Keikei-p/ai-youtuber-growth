@@ -16,6 +16,7 @@ from storage import (
     export_json,
     init_db,
     mark_uploaded,
+    mark_guest_used,
     recent_videos,
     save_video,
     update_video_output,
@@ -52,6 +53,9 @@ def render_results(results: list[dict], character: dict) -> None:
             item["output_path"] = str(video_path)
             item["status"] = "rendered"
             update_video_output(item["id"], str(video_path))
+            guest = item.get("guest") or {}
+            if guest.get("id"):
+                mark_guest_used(int(guest["id"]))
             print(f"[MEDIA] #{item['id']} -> {video_path}")
         except Exception as exc:
             item["media_error"] = str(exc)
