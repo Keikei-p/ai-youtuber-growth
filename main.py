@@ -6,6 +6,7 @@ from pathlib import Path
 
 from config import settings
 from learner import build_learning_note
+from media_cleanup import cleanup_all_uploaded_media, cleanup_uploaded_media
 from paths import AUDIO_DIR, CHARACTER_FILE, PLAN_DIR, VIDEO_DIR, ensure_runtime_dirs
 from planner import plan_ideas
 from reviewer import review_script
@@ -88,6 +89,12 @@ def upload_results(
                 f"[UPLOAD] #{item['id']} -> YouTube ID {youtube_id} "
                 f"[{effective_privacy}]"
             )
+            try:
+                cleanup_uploaded_media(item["id"], item.get("output_path"))
+                if settings.cleanup_after_upload:
+                    item["output_path"] = None
+            except Exception as cleanup_exc:
+                print(f"[CLEANUP] 投稿は成功済みですが削除処理でエラー: {cleanup_exc}")
         except Exception as exc:
             item["upload_error"] = str(exc)
             print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
@@ -237,6 +244,14 @@ def run_learning() -> None:
         except Exception as exc:
             print(f"[LEARN] #{video['id']} 失敗: {exc}")
 
+def run_cleanup_uploaded() -> None:
+    init_db()
+    targets, removed = cleanup_all_uploaded_media()
+    print(
+        f"[CLEANUP] 投稿済み{targets}本を確認し、"
+        f"ローカルファイル{removed}個を削除しました。"
+    )
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="成長型AI YouTuber v1")
     parser.add_argument("--show", action="store_true", help="生成結果を詳しく表示")
@@ -248,10 +263,19 @@ def main() -> None:
         help="1本だけ生成してYouTubeへ必ず非公開でテスト投稿",
     )
     parser.add_argument("--learn", action="store_true", help="投稿済み動画を分析して学習メモを保存")
+    parser.add_argument(
+        "--cleanup-uploaded",
+        action="store_true",
+        help="YouTube投稿済みでPCに残っているMP4/WAVを削除",
+    )
     args = parser.parse_args()
 
     if args.learn:
         run_learning()
+        return
+
+    if args.cleanup_uploaded:
+        run_cleanup_uploaded()
         return
 
     if args.test_upload:
