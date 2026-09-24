@@ -21,6 +21,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw automation/windows_cycle.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/windows_task_status.ps1)) | Out-Null
       - run: python main.py --show
         env:
           POSTS_PER_DAY: "3"
