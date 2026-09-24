@@ -421,27 +421,38 @@ def _install_studio_dependencies() -> None:
     if os.name == "nt" and python.name.lower() == "pythonw.exe":
         python = python.with_name("python.exe")
 
-    print("[STUDIO] AIスタジオ依存関係を導入します。")
-    process = subprocess.run(
+    _append_log("[STUDIO-INSTALL] AIスタジオ依存関係の導入を開始")
+    process = subprocess.Popen(
         [
             str(python),
             "-m",
             "pip",
             "install",
+            "--disable-pip-version-check",
             "-r",
             str(requirements),
         ],
         cwd=ROOT,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
-        check=False,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
     )
-    output = (process.stdout or "") + "\n" + (process.stderr or "")
-    print(output[-12000:])
-    if process.returncode != 0:
+
+    if process.stdout is not None:
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                _append_log("[STUDIO-INSTALL] " + line)
+
+    return_code = process.wait()
+    if return_code != 0:
         raise RuntimeError(
             "AIスタジオの導入に失敗しました。ログを確認してください。"
         )
+    _append_log("[STUDIO-INSTALL] 導入完了。画像生成を実行できます。")
     print("[STUDIO] 導入完了。画像生成を実行できます。")
 
 
@@ -657,8 +668,13 @@ async function refresh(){
     guestImageAutoBtn.textContent=state.guest_image_auto_enabled?'ON':'OFF';
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
     const backend=state.studio.selected||'未接続';
-    studioStatus.textContent='画像エンジン: '+backend+' / Diffusers '+(state.studio.diffusers_installed?'導入済み':'未導入')+' / WebUI '+(state.studio.webui_available?'接続中':'未接続')+' / Model: '+state.studio.model;
-    studioInstallBtn.style.display=state.studio.diffusers_installed?'none':'inline-block';
+    const gpu=state.studio.gpu_name||'CPU';
+    const cuda=state.studio.cuda_available?('CUDA '+(state.studio.cuda_version||'')):'CUDA未検出';
+    studioStatus.textContent='画像エンジン: '+backend+' / Diffusers '+(state.studio.diffusers_installed?'導入済み':'未導入')+' / '+gpu+' / '+cuda+' / Model: '+state.studio.model;
+    const installing=state.current_job==='AIスタジオ導入';
+    studioInstallBtn.style.display=state.studio.diffusers_installed&&!installing?'none':'inline-block';
+    studioInstallBtn.disabled=installing;
+    studioInstallBtn.textContent=installing?'AIスタジオ導入中…':'AIスタジオをPCへ導入';
     studioGuestSelect.innerHTML=state.guests.length?state.guests.map(x=>'<option value="'+x.id+'">'+escapeHtml(x.name)+'</option>').join(''):'<option value="">ゲストなし</option>';
     studioAssets.innerHTML=state.studio_assets.length?state.studio_assets.map(x=>{
       const img=x.url?'<img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy">':'';
