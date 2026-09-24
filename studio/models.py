@@ -21,4 +21,4 @@ NEGATIVE_PROMPT = (
 # GTX 1070 8GBでも扱いやすい解像度を初期値にする。
 MIRAI_PRESET = ImagePreset(width=512, height=768, steps=24, guidance_scale=6.5)
 GUEST_PRESET = ImagePreset(width=512, height=768, steps=24, guidance_scale=6.5)
-BACKGROUND_PRESET = ImagePreset(width=768, height=512, steps=22, guidance_scale=6.0)
+BACKGROUND_PRESET = ImagePreset(width=512, height=768, steps=22, guidance_scale=6.0)
