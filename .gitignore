@@ -7,3 +7,5 @@ output/
 client_secret.json
 token.json
 .DS_Store
+logs/
+assets/guests/*.png
