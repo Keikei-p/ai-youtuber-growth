@@ -52,6 +52,7 @@ from storage import (
     get_channel_state,
     init_db,
     queued_items,
+    video_by_id,
 )
 from voice.voicevox import VoicevoxClient
 from studio.asset_store import GENERATED_ROOT, list_assets
@@ -222,22 +223,32 @@ def _queue_status() -> list[dict]:
 
 
 def _video_status() -> list[dict]:
-    rows = dashboard_videos(20)
-    return [
-        {
-            "id": row["id"],
-            "title": row["title"],
-            "status": row["status"],
-            "queue_status": row.get("queue_status"),
-            "scheduled_for": row.get("scheduled_for"),
-            "youtube_video_id": row.get("youtube_video_id"),
-            "guest_name": row.get("guest_name"),
-            "views": row.get("views") or 0,
-            "error": row.get("queue_error"),
-            "has_local_file": bool(row.get("output_path")),
-        }
-        for row in rows
-    ]
+    rows = dashboard_videos(40)
+    items: list[dict] = []
+    for row in rows:
+        raw_path = row.get("output_path")
+        local_path = Path(raw_path).resolve() if raw_path else None
+        file_exists = bool(local_path and local_path.is_file())
+        items.append(
+            {
+                "id": row["id"],
+                "created_at": row.get("created_at"),
+                "title": row["title"],
+                "status": row["status"],
+                "queue_status": row.get("queue_status"),
+                "scheduled_for": row.get("scheduled_for"),
+                "youtube_video_id": row.get("youtube_video_id"),
+                "guest_name": row.get("guest_name"),
+                "views": row.get("views") or 0,
+                "error": row.get("queue_error"),
+                "has_local_file": file_exists,
+                "preview_url": (
+                    f"/media/videos/{int(row['id'])}"
+                    if file_exists else None
+                ),
+            }
+        )
+    return items
 
 def _studio_assets() -> list[dict]:
     assets = []
@@ -499,6 +510,7 @@ button{cursor:pointer;font-weight:700}button.primary{background:#2274db}button.d
 pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;border-radius:12px;max-height:330px;overflow:auto;color:#bcd0e7}
 .toggle{display:flex;align-items:center;gap:8px}.hero{display:flex;gap:12px;align-items:center}.orb{width:52px;height:52px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#c4dcff,#6598ef 45%,#243c7c);box-shadow:0 0 30px #4c82e855}
 .studio-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px}.asset{background:#0b1b30;border-radius:12px;overflow:hidden;border:1px solid #20344e}.asset img{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#06101c}.asset .meta{padding:9px}.studio-status{margin:8px 0 14px;padding:10px;border-radius:12px;background:#0b1b30}
+.library-list{display:grid;gap:12px}.library-item{background:#0b1b30;border:1px solid #20344e;border-radius:14px;padding:14px}.library-head{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}.library-meta{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.library-item details{margin-top:12px}.library-item summary{cursor:pointer;font-weight:700;color:#dcecff}.library-item video{display:block;width:min(100%,360px);max-height:640px;margin-top:10px;border-radius:12px;background:#000}.library-images{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:12px}.library-images img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:10px;background:#06101c}.linkbtn{display:inline-block;text-decoration:none;border:1px solid #355275;background:#102844;color:#fff;border-radius:10px;padding:8px 10px;font-size:12px;font-weight:700}
 @media(max-width:900px){.card,.card.wide{grid-column:span 12}.wrap{padding:12px}h1{font-size:22px}}
 </style>
 </head>
@@ -598,8 +610,12 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
     </section>
 
     <section class="card full">
-      <h2>最近の動画</h2>
-      <div id="videos" class="queue"></div>
+      <h2>生成ライブラリ</h2>
+      <p class="small">完成動画・投稿状況・生成画像をここで確認できます。動画はプレビューを開いた時だけ読み込みます。</p>
+      <h3 style="font-size:14px;margin:16px 0 10px">完成動画</h3>
+      <div id="videos" class="library-list"></div>
+      <h3 style="font-size:14px;margin:20px 0 10px">生成画像</h3>
+      <div id="libraryImages" class="library-images"></div>
     </section>
 
     <section class="card wide">
@@ -686,12 +702,39 @@ async function refresh(){
       return '<div class="asset">'+img+'<div class="meta"><b>'+escapeHtml(x.type||'asset')+name+'</b><div class="small">'+escapeHtml(x.backend||'')+' / '+escapeHtml(x.created_at||'')+'</div></div></div>';
     }).join(''):'<div class="small">まだ生成画像がありません。</div>';
     videos.innerHTML=state.videos.length?state.videos.map(x=>{
-      const yt=x.youtube_video_id?' / YouTube投稿済み':'';
-      const slot=x.scheduled_for?' / '+x.scheduled_for:'';
-      const guest=x.guest_name?' / Guest '+escapeHtml(x.guest_name):'';
-      const err=x.error?'<div class="small" style="color:#ff9aa8">エラー: '+escapeHtml(x.error)+'</div>':'';
-      return '<div class="q"><b>#'+x.id+' '+escapeHtml(x.title)+'</b><div class="small">'+escapeHtml(x.status||'')+slot+yt+guest+' / '+x.views+' views</div>'+err+'</div>';
+      const local=x.has_local_file
+        ? '<span class="badge ok">PC動画あり</span>'
+        : '<span class="badge">PC動画なし</span>';
+      const yt=x.youtube_video_id
+        ? '<span class="badge ok">YouTube投稿済み</span>'
+        : '<span class="badge">未投稿</span>';
+      const queue=x.scheduled_for
+        ? '<span class="badge">予定 '+escapeHtml(x.scheduled_for)+'</span>'
+        : '';
+      const guest=x.guest_name
+        ? '<span class="badge">Guest '+escapeHtml(x.guest_name)+'</span>'
+        : '';
+      const err=x.error
+        ? '<div class="small" style="color:#ff9aa8;margin-top:8px">エラー: '+escapeHtml(x.error)+'</div>'
+        : '';
+      const preview=x.preview_url
+        ? '<details><summary>▶ 動画プレビュー</summary><video controls preload="none" src="'+escapeHtml(x.preview_url)+'"></video></details>'
+        : '<div class="small" style="margin-top:10px">ローカル動画はありません。投稿済み動画は自動掃除された可能性があります。</div>';
+      const youtube=x.youtube_video_id
+        ? '<a class="linkbtn" target="_blank" rel="noopener" href="https://youtu.be/'+encodeURIComponent(x.youtube_video_id)+'">YouTubeで開く</a>'
+        : '';
+      return '<div class="library-item">'
+        +'<div class="library-head"><div><b>#'+x.id+' '+escapeHtml(x.title)+'</b>'
+        +'<div class="small">'+escapeHtml(x.created_at||'')+' / '+escapeHtml(x.status||'')+' / '+Number(x.views||0)+' views</div></div>'
+        +youtube+'</div>'
+        +'<div class="library-meta">'+local+yt+queue+guest+'</div>'
+        +err+preview+'</div>';
     }).join(''):'<div class="small">まだ動画履歴がありません。</div>';
+    libraryImages.innerHTML=state.studio_assets.length?state.studio_assets.slice(0,30).map(x=>{
+      if(!x.url) return '';
+      const label=(x.meta&&x.meta.guest_name)?x.meta.guest_name:(x.meta&&x.meta.expression)?('ミライ '+x.meta.expression):(x.meta&&x.meta.theme)?x.meta.theme:x.type;
+      return '<div><img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy"><div class="small">'+escapeHtml(label||x.type||'画像')+'</div></div>';
+    }).join(''):'<div class="small">まだ生成画像がありません。</div>';
     strategy.textContent=state.growth.strategy;
     analytics.innerHTML=state.growth.recent.map(x=>'<div class="row"><span>#'+x.video_id+' '+escapeHtml(x.title)+'</span><span class="small">'+x.checkpoint_hours+'h / score '+Number(x.score).toFixed(1)+' / '+x.views+' views</span></div>').join('');
     logs.textContent=state.log_tail;
@@ -795,6 +838,92 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/status":
             self._json(_status_payload())
+            return
+
+        if path.startswith("/media/videos/"):
+            raw_id = path[len("/media/videos/"):].strip("/")
+            try:
+                video_id = int(raw_id)
+            except ValueError:
+                self._json({"message": "invalid video id"}, 400)
+                return
+
+            row = video_by_id(video_id)
+            raw_path = (row or {}).get("output_path")
+            if not raw_path:
+                self._json({"message": "video file not found"}, 404)
+                return
+
+            candidate = Path(raw_path).resolve()
+            if not candidate.is_file():
+                self._json({"message": "video file not found"}, 404)
+                return
+
+            file_size = candidate.stat().st_size
+            range_header = self.headers.get("Range", "")
+            content_type = (
+                mimetypes.guess_type(candidate.name)[0]
+                or "video/mp4"
+            )
+
+            if range_header.startswith("bytes="):
+                raw_range = range_header[6:].split(",", 1)[0]
+                start_raw, end_raw = (
+                    raw_range.split("-", 1)
+                    if "-" in raw_range
+                    else (raw_range, "")
+                )
+                try:
+                    start = int(start_raw) if start_raw else 0
+                    end = (
+                        int(end_raw)
+                        if end_raw else file_size - 1
+                    )
+                except ValueError:
+                    self.send_response(416)
+                    self.end_headers()
+                    return
+                start = max(0, start)
+                end = min(end, file_size - 1)
+                if start > end or start >= file_size:
+                    self.send_response(416)
+                    self.send_header(
+                        "Content-Range",
+                        f"bytes */{file_size}",
+                    )
+                    self.end_headers()
+                    return
+
+                length = end - start + 1
+                self.send_response(206)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header(
+                    "Content-Range",
+                    f"bytes {start}-{end}/{file_size}",
+                )
+                self.send_header("Content-Length", str(length))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with candidate.open("rb") as media:
+                    media.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = media.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+                return
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with candidate.open("rb") as media:
+                shutil.copyfileobj(media, self.wfile)
             return
 
         if path.startswith("/studio-assets/"):
