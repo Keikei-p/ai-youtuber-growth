@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ai_client import OllamaClient
 from config import settings
+from runtime_control import guest_appearance_every, guest_new_every
 from storage import (
     active_guests,
     create_guest,
@@ -136,9 +137,9 @@ def maybe_create_guest() -> dict | None:
     should_create = (
         not guests
         or (
-            settings.guest_new_every > 0
+            guest_new_every() > 0
             and count > 0
-            and count % settings.guest_new_every == 0
+            and count % guest_new_every() == 0
         )
     )
     if not should_create:
@@ -173,7 +174,7 @@ def maybe_create_guest() -> dict | None:
 def select_guest_for_next_video(offset: int = 0) -> dict | None:
     maybe_create_guest()
 
-    appearance_every = settings.guest_appearance_every
+    appearance_every = guest_appearance_every()
     if appearance_every <= 0:
         return None
 
