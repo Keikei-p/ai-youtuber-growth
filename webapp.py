@@ -616,6 +616,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         <button onclick="runStudioBackground()">背景生成</button>
       </div>
       <div class="actions" style="margin-top:10px">
+        <input id="aiVideoPrompt" placeholder="AI動画テスト 例: futuristic blue AI studio" style="min-width:260px;flex:1">
+        <button onclick="runStudioAiVideo()">AI動画を1本テスト</button>
+      </div>
+      <div class="actions" style="margin-top:10px">
         <select id="studioGuestSelect" style="min-width:220px"></select>
         <button onclick="runStudioGuest()">選択ゲスト画像生成</button>
       </div>
@@ -802,6 +806,14 @@ async function runStudioBackground(){
   const data=await api('/api/action',{action:'studio_background',theme});
   alert(data.message);
   setTimeout(refresh,1000);
+}
+async function runStudioAiVideo(){
+  const prompt=aiVideoPrompt.value.trim();
+  if(!prompt){alert('AI動画の内容を入力してください');return;}
+  if(!confirm('短いAI動画を1本だけ生成します。GTX 1070では時間がかかる場合があります。実行しますか？')) return;
+  const data=await api('/api/action',{action:'studio_ai_video',prompt});
+  alert(data.message);
+  setTimeout(refresh,1200);
 }
 async function runStudioGuest(){
   const guestId=Number(studioGuestSelect.value||0);
@@ -1051,6 +1063,13 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     label = "背景画像生成"
                     func = lambda: print(generate_background_image(theme))
+                elif action == "studio_ai_video":
+                    prompt = str(body.get("prompt") or "").strip()
+                    if not prompt:
+                        self._json({"message": "AI動画プロンプトが必要です"}, 400)
+                        return
+                    label = "AI動画テスト生成"
+                    func = lambda: print(generate_animatediff_clip(prompt))
                 elif action == "studio_guest":
                     guest_id = int(body.get("guest_id") or 0)
                     row = next(
