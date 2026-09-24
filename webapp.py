@@ -24,6 +24,7 @@ from growth_engine import show_growth_state
 from gpu_manager import gpu_snapshot
 from guest_manager import create_guest_now
 from main import run_cleanup_uploaded, run_generation, run_private_upload_test
+from paths import VIDEO_DIR
 from runtime_control import (
     auto_upload_enabled,
     automation_enabled,
@@ -855,6 +856,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             candidate = Path(raw_path).resolve()
+            video_root = VIDEO_DIR.resolve()
+            try:
+                candidate.relative_to(video_root)
+            except ValueError:
+                self._json({"message": "invalid video path"}, 400)
+                return
             if not candidate.is_file():
                 self._json({"message": "video file not found"}, 404)
                 return
