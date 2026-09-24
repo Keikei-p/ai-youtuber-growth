@@ -59,6 +59,21 @@ def _webui_available(timeout: float = 1.5) -> bool:
 def studio_status() -> dict:
     configured = _configured_backend()
     diffusers_ok = _diffusers_installed()
+    torch_version = None
+    cuda_available = False
+    cuda_version = None
+    gpu_name = None
+    if diffusers_ok:
+        try:
+            import torch
+            torch_version = getattr(torch, "__version__", None)
+            cuda_available = bool(torch.cuda.is_available())
+            cuda_version = getattr(getattr(torch, "version", None), "cuda", None)
+            if cuda_available:
+                gpu_name = torch.cuda.get_device_name(0)
+        except Exception:
+            pass
+
     webui_ok = (
         _webui_available()
         if configured == "webui" or (configured == "auto" and not diffusers_ok)
@@ -81,6 +96,10 @@ def studio_status() -> dict:
         "available": bool(selected),
         "diffusers_installed": diffusers_ok,
         "webui_available": webui_ok,
+        "torch_version": torch_version,
+        "cuda_available": cuda_available,
+        "cuda_version": cuda_version,
+        "gpu_name": gpu_name,
         "model": getattr(
             settings,
             "studio_diffusers_model",
@@ -125,8 +144,6 @@ def _load_diffusers_pipeline():
         pipe = StableDiffusionPipeline.from_pretrained(
             model_id,
             torch_dtype=dtype,
-            safety_checker=None,
-            requires_safety_checker=False,
         )
         pipe.enable_attention_slicing()
         if hasattr(pipe, "enable_vae_slicing"):
@@ -159,6 +176,9 @@ def _generate_diffusers(prompt: str, preset: ImagePreset) -> Image.Image:
     )
     if not result.images:
         raise RuntimeError("Diffusersから画像が返りませんでした。")
+    flagged = getattr(result, "nsfw_content_detected", None)
+    if flagged and bool(flagged[0]):
+        raise RuntimeError("安全フィルターにより画像生成を中止しました。")
     return result.images[0]
 
 
