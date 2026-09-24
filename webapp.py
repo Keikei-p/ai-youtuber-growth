@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from ai_client import OllamaClient
+from autonomy_policy import autonomy_state, resolve_approval
 from config import settings
 from growth_engine import show_growth_state
 from gpu_manager import gpu_snapshot
@@ -47,6 +48,7 @@ from runtime_control import (
     upload_privacy,
     web_interval_seconds,
 )
+from resource_governor import resource_snapshot
 from scheduler import prepare_upcoming, run_due, tick
 from storage import (
     active_guests,
@@ -347,6 +349,8 @@ def _status_payload() -> dict:
         "ai_video_enabled": ai_video_enabled(),
         "ai_video": ai_video_status(),
         "improvement": improvement_state(),
+        "autonomy": autonomy_state(),
+        "resource": resource_snapshot(),
         "studio": studio_status(),
         "gpu": gpu_snapshot(),
         "studio_assets": _studio_assets(),
@@ -641,8 +645,12 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div class="actions" style="margin-bottom:12px">
         <button class="primary" onclick="runImprovementReview()">失敗と成績をAI分析</button>
       </div>
+      <div id="resourceStatus" class="studio-status small"></div>
       <div id="improvementReport" class="strategy"></div>
-      <div id="failureHistory" style="margin-top:12px"></div>
+      <h3 style="font-size:14px;margin:18px 0 8px">確認が必要な変更だけ</h3>
+      <div id="approvalList"></div>
+      <h3 style="font-size:14px;margin:18px 0 8px">最近の失敗学習</h3>
+      <div id="failureHistory"></div>
     </section>
 
     <section class="card wide">
@@ -769,6 +777,15 @@ async function refresh(){
         : '<img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy">';
       return '<div>'+media+'<div class="small">'+escapeHtml(label||x.type||'素材')+'</div></div>';
     }).join(''):'<div class="small">まだ生成素材がありません。</div>';
+    const rs=state.resource||{};
+    const rmem=(rs.memory||{});
+    const rgpu=(rs.gpu||{});
+    const idle=(rs.user_idle_seconds===null||rs.user_idle_seconds===undefined)?'不明':Math.round(rs.user_idle_seconds)+'秒';
+    resourceStatus.textContent='省負荷モード / PC無操作 '+idle+' / RAM空き '+(rmem.available_mb??'?')+'MB / VRAM空き '+(rgpu.memory_free_mb??'?')+'MB';
+    const pending=(state.autonomy&&state.autonomy.pending)||[];
+    approvalList.innerHTML=pending.length?pending.map(x=>{
+      return '<div class="library-item"><div class="library-head"><div><b>'+escapeHtml(x.title||x.action_type)+'</b><div class="small">'+escapeHtml(x.action_type)+' / '+escapeHtml(x.created_at||'')+'</div></div></div><div class="small" style="margin-top:8px">'+escapeHtml(x.reason||'')+'</div><div class="actions" style="margin-top:10px"><button class="primary" onclick="resolveApproval('+x.id+',true)">承認</button><button onclick="resolveApproval('+x.id+',false)">却下</button></div></div>';
+    }).join(''):'<div class="small">承認待ちはありません。安全な学習・生成・話し方改善は自動で進みます。</div>';
     const report=(state.improvement&&state.improvement.report)||{};
     const recs=(report.recommendations||[]).map(x=>'・['+escapeHtml(x.priority||'')+'] '+escapeHtml(x.action||'')+' — '+escapeHtml(x.reason||'')).join('\n');
     improvementReport.textContent=(report.summary||'まだAI改善分析を実行していません。')+(recs?'\n\n'+recs:'')+(report.requires_code_change?'\n\n※コード変更候補あり。自動適用はせず、承認後に更新します。':'');
@@ -795,6 +812,13 @@ async function runImprovementReview(){
   const data=await api('/api/action',{action:'improvement_review'});
   alert(data.message);
   setTimeout(refresh,1000);
+}
+async function resolveApproval(id,approve){
+  const label=approve?'承認':'却下';
+  if(!confirm(label+'しますか？')) return;
+  const data=await api('/api/action',{action:'resolve_approval',request_id:id,approve});
+  alert(data.message);
+  refresh();
 }
 async function runStudioMirai(){
   const data=await api('/api/action',{action:'studio_mirai',expression:miraiExpression.value});
@@ -1052,6 +1076,13 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/action":
                 action = str(body.get("action") or "")
+
+                if action == "resolve_approval":
+                    request_id = int(body.get("request_id") or 0)
+                    approve = bool(body.get("approve"))
+                    message = resolve_approval(request_id, approve)
+                    self._json({"ok": True, "message": message})
+                    return
 
                 if action == "studio_mirai":
                     expression = str(body.get("expression") or "normal")
