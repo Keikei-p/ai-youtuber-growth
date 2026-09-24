@@ -1,6 +1,8 @@
 -r requirements.txt
-torch>=2.2,<3
-diffusers>=0.35,<1
+# GTX 1070 (Pascal / sm_61) 互換のPyTorch CUDA 12.6ビルドを使用。
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.14.0+cu126
+diffusers>=0.40,<1
 transformers>=4.45,<6
 accelerate>=1.0,<2
 safetensors>=0.4,<1
