@@ -72,11 +72,24 @@ def _cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
     return resized.crop((left, top, left + target_w, top + target_h))
 
 def _backgrounds() -> list[Path]:
-    folder = Path(settings.background_dir)
-    if not folder.exists():
-        return []
+    folders = [
+        Path(settings.background_dir),
+        Path("assets/generated/backgrounds"),
+    ]
     exts = {".png", ".jpg", ".jpeg", ".webp"}
-    return sorted(p for p in folder.iterdir() if p.suffix.lower() in exts)
+    files: list[Path] = []
+    seen: set[str] = set()
+    for folder in folders:
+        if not folder.exists():
+            continue
+        for path in folder.iterdir():
+            if path.suffix.lower() not in exts:
+                continue
+            key = str(path.resolve())
+            if key not in seen:
+                seen.add(key)
+                files.append(path)
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 def _load_background(index: int) -> Image.Image:
     files = _backgrounds()
@@ -92,9 +105,26 @@ def _load_background(index: int) -> Image.Image:
     bg = ImageEnhance.Brightness(bg).enhance(0.58)
     return bg
 
+def _character_image_path() -> Path | None:
+    configured = Path(settings.character_image)
+    if configured.exists():
+        return configured
+
+    generated = Path("assets/generated/mirai")
+    if generated.exists():
+        candidates = [
+            path
+            for path in generated.iterdir()
+            if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        ]
+        if candidates:
+            return max(candidates, key=lambda path: path.stat().st_mtime)
+    return None
+
+
 def _paste_character(canvas: Image.Image) -> None:
-    path = Path(settings.character_image)
-    if not path.exists():
+    path = _character_image_path()
+    if path is None:
         return
 
     with Image.open(path) as raw:
