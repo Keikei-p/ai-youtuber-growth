@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from runtime_control import guest_image_auto_enabled
+from storage import active_guests
 
 
 def generate_guest_image(
@@ -15,12 +16,27 @@ def generate_guest_image(
         return None
 
     try:
-        from studio.image_generator import generate_guest_image_from_prompt
-
-        path = generate_guest_image_from_prompt(
-            guest_id=guest_id,
-            visual_prompt=visual_prompt,
+        from studio.image_generator import (
+            generate_guest_image as studio_generate_guest_image,
+            generate_guest_image_from_prompt,
         )
+
+        row = next(
+            (
+                guest
+                for guest in active_guests(100)
+                if int(guest["id"]) == int(guest_id)
+            ),
+            None,
+        )
+        if row:
+            path = studio_generate_guest_image(row)
+        else:
+            path = generate_guest_image_from_prompt(
+                guest_id=guest_id,
+                visual_prompt=visual_prompt,
+            )
+
         print(f"[GUEST-IMAGE] AI Studioで立ち絵生成: {path}")
         return path
     except Exception as exc:
