@@ -424,12 +424,12 @@ def run_improvement_review() -> dict:
     }}
   ],
   "actions":[
-    {
+    {{
       "action_type":"script_guidance|planner_guidance|reduce_scene_images|disable_ai_video|knowledge_note|prompt_tuning|quality_analysis|retry_tuning|reduce_ai_video_load|minor_code_change|major_code_change|paid_service|purchase|subscription|credential_change|security_change|database_migration|delete_data|public_upload_change|increase_resource_load|large_model_download|external_account_change",
       "title":"...",
       "value":"文字列・数値・またはJSON",
       "reason":"..."
-    }
+    }}
   ],
   "requires_code_change":false
 }}
