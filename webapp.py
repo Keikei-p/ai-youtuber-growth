@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlparse
 from ai_client import OllamaClient
 from config import settings
 from growth_engine import show_growth_state
-from guest_manager import maybe_create_guest
+from guest_manager import create_guest_now
 from main import run_cleanup_uploaded, run_generation, run_private_upload_test
 from runtime_control import (
     auto_upload_enabled,
@@ -551,7 +551,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <h2>ゲストAI</h2>
       <div id="guests"></div>
       <div class="actions" style="margin-top:12px">
-        <button onclick="runAction('guest')">新ゲスト候補を確認/生成</button>
+        <button onclick="runAction('guest')">新ゲストを今すぐ生成</button>
       </div>
     </section>
 
@@ -894,7 +894,7 @@ class Handler(BaseHTTPRequestHandler):
                             target_override=1,
                         ),
                     ),
-                    "guest": ("ゲスト生成確認", maybe_create_guest),
+                    "guest": ("新ゲスト生成", create_guest_now),
                     "cleanup": ("投稿済みファイル掃除", run_cleanup_uploaded),
                     "services": ("AIサービス起動確認", _ensure_local_services),
                     "studio_install": (
