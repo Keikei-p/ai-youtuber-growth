@@ -6,6 +6,7 @@ from pathlib import Path
 
 from config import settings
 from guest_manager import select_guest_for_next_video
+from gpu_manager import unload_ollama_model, release_torch_cuda_cache
 from metadata import build_metadata
 from runtime_control import posts_per_day
 from media_cleanup import cleanup_all_uploaded_media, cleanup_uploaded_media
@@ -29,6 +30,10 @@ def load_character() -> dict:
 def render_results(results: list[dict], character: dict) -> None:
     from voice.voicevox import VoicevoxClient
     from video.renderer import render_short
+
+    # 文章生成でOllamaが使ったVRAMを、音声・動画フェーズへ明け渡す。
+    unload_ollama_model()
+    release_torch_cuda_cache()
 
     voice = VoicevoxClient()
     if not voice.available():
