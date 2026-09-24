@@ -24,6 +24,9 @@ def init_db() -> None:
             angle TEXT,
             title TEXT NOT NULL,
             script TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            guest_id INTEGER,
             status TEXT NOT NULL DEFAULT 'planned',
             output_path TEXT,
             youtube_video_id TEXT,
@@ -33,6 +36,18 @@ def init_db() -> None:
             comments INTEGER,
             avg_view_percentage REAL,
             ctr REAL
+        );
+
+        CREATE TABLE IF NOT EXISTS guests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            name TEXT NOT NULL,
+            profile_json TEXT NOT NULL,
+            visual_prompt TEXT NOT NULL DEFAULT '',
+            image_path TEXT,
+            appearances INTEGER NOT NULL DEFAULT 0,
+            last_used_at TEXT,
+            active INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS learning_notes (
@@ -83,6 +98,12 @@ def init_db() -> None:
         }
         if "uploaded_at" not in video_columns:
             conn.execute("ALTER TABLE videos ADD COLUMN uploaded_at TEXT")
+        if "description" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+        if "tags_json" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'")
+        if "guest_id" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN guest_id INTEGER")
 
         queue_columns = {
             row["name"]
@@ -117,7 +138,8 @@ def recent_videos(limit: int = 20) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT
-                v.id, v.idea, v.angle, v.title, v.script, v.status,
+                v.id, v.idea, v.angle, v.title, v.script, v.description,
+                v.tags_json, v.guest_id, g.name AS guest_name, v.status,
                 v.views, v.likes, v.comments, v.avg_view_percentage, v.ctr,
                 (
                     SELECT ln.note FROM learning_notes ln
@@ -125,6 +147,7 @@ def recent_videos(limit: int = 20) -> list[dict[str, Any]]:
                     ORDER BY ln.id DESC LIMIT 1
                 ) AS learning_note
             FROM videos v
+            LEFT JOIN guests g ON g.id = v.guest_id
             ORDER BY v.id DESC
             LIMIT ?
             """,
@@ -132,11 +155,33 @@ def recent_videos(limit: int = 20) -> list[dict[str, Any]]:
         ).fetchall()
     return [dict(r) for r in rows]
 
-def save_video(idea: str, angle: str, title: str, script: str, status: str = "planned") -> int:
+def save_video(
+    idea: str,
+    angle: str,
+    title: str,
+    script: str,
+    description: str = "",
+    tags: list[str] | None = None,
+    guest_id: int | None = None,
+    status: str = "planned",
+) -> int:
     with connect() as conn:
         cur = conn.execute(
-            "INSERT INTO videos (idea, angle, title, script, status) VALUES (?, ?, ?, ?, ?)",
-            (idea, angle, title, script, status),
+            """
+            INSERT INTO videos (
+                idea, angle, title, script, description, tags_json, guest_id, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                idea,
+                angle,
+                title,
+                script,
+                description,
+                json.dumps(tags or [], ensure_ascii=False),
+                guest_id,
+                status,
+            ),
         )
         return int(cur.lastrowid)
 
@@ -176,8 +221,9 @@ def uploaded_videos(limit: int = 20) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT
-                id, idea, angle, title, script, output_path, youtube_video_id,
-                uploaded_at, views, likes, comments, avg_view_percentage
+                id, idea, angle, title, script, description, tags_json, guest_id,
+                output_path, youtube_video_id, uploaded_at,
+                views, likes, comments, avg_view_percentage
             FROM videos
             WHERE youtube_video_id IS NOT NULL
             ORDER BY id DESC
@@ -320,6 +366,63 @@ def get_channel_state(key: str, default: str = "") -> str:
         ).fetchone()
     return str(row["value"]) if row else default
 
+def video_count() -> int:
+    with connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM videos").fetchone()
+    return int(row["c"] or 0)
+
+def active_guests(limit: int = 20) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, profile_json, visual_prompt, image_path,
+                   appearances, last_used_at, active
+            FROM guests
+            WHERE active = 1
+            ORDER BY appearances DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+def create_guest(
+    name: str,
+    profile: dict,
+    visual_prompt: str,
+    image_path: str | None = None,
+) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO guests (name, profile_json, visual_prompt, image_path)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                name,
+                json.dumps(profile, ensure_ascii=False),
+                visual_prompt,
+                image_path,
+            ),
+        )
+        return int(cur.lastrowid)
+
+def mark_guest_used(guest_id: int) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE guests
+            SET appearances = appearances + 1, last_used_at = ?
+            WHERE id = ?
+            """,
+            (now, guest_id),
+        )
+
+def retire_guest(guest_id: int) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE guests SET active = 0 WHERE id = ?", (guest_id,))
+
 def queue_video(video_id: int, scheduled_for: str) -> None:
     with connect() as conn:
         conn.execute(
@@ -353,7 +456,8 @@ def queued_items() -> list[dict[str, Any]]:
             """
             SELECT
                 q.id AS queue_id, q.video_id, q.scheduled_for, q.status,
-                q.attempts, v.title, v.output_path
+                q.attempts, v.title, v.description, v.tags_json, v.guest_id,
+                v.output_path
             FROM posting_queue q
             JOIN videos v ON v.id = q.video_id
             WHERE q.status = 'queued'
@@ -391,7 +495,8 @@ def due_queue(now_iso: str, oldest_allowed_iso: str | None = None) -> list[dict[
                 """
                 SELECT
                     q.id AS queue_id, q.video_id, q.scheduled_for, q.attempts,
-                    v.title, v.script, v.output_path
+                    v.title, v.description, v.tags_json, v.guest_id,
+                    v.script, v.output_path
                 FROM posting_queue q
                 JOIN videos v ON v.id = q.video_id
                 WHERE q.status = 'queued'
@@ -407,7 +512,8 @@ def due_queue(now_iso: str, oldest_allowed_iso: str | None = None) -> list[dict[
                 """
                 SELECT
                     q.id AS queue_id, q.video_id, q.scheduled_for, q.attempts,
-                    v.title, v.script, v.output_path
+                    v.title, v.description, v.tags_json, v.guest_id,
+                    v.script, v.output_path
                 FROM posting_queue q
                 JOIN videos v ON v.id = q.video_id
                 WHERE q.status = 'queued'
