@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from paths import DATA_DIR
@@ -26,6 +27,7 @@ def init_db() -> None:
             status TEXT NOT NULL DEFAULT 'planned',
             output_path TEXT,
             youtube_video_id TEXT,
+            uploaded_at TEXT,
             views INTEGER,
             likes INTEGER,
             comments INTEGER,
@@ -42,6 +44,27 @@ def init_db() -> None:
             FOREIGN KEY(video_id) REFERENCES videos(id)
         );
 
+        CREATE TABLE IF NOT EXISTS analytics_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL,
+            checkpoint_hours INTEGER NOT NULL,
+            captured_at TEXT NOT NULL,
+            views INTEGER NOT NULL DEFAULT 0,
+            likes INTEGER NOT NULL DEFAULT 0,
+            comments INTEGER NOT NULL DEFAULT 0,
+            avg_view_percentage REAL NOT NULL DEFAULT 0,
+            score REAL NOT NULL DEFAULT 0,
+            note TEXT NOT NULL DEFAULT '',
+            UNIQUE(video_id, checkpoint_hours),
+            FOREIGN KEY(video_id) REFERENCES videos(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS channel_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS posting_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             video_id INTEGER NOT NULL UNIQUE,
@@ -55,11 +78,17 @@ def init_db() -> None:
         );
         """)
 
-        columns = {
+        video_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()
+        }
+        if "uploaded_at" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN uploaded_at TEXT")
+
+        queue_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(posting_queue)").fetchall()
         }
-        if "attempts" not in columns:
+        if "attempts" not in queue_columns:
             conn.execute(
                 "ALTER TABLE posting_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
             )
@@ -106,11 +135,21 @@ def clear_video_output(video_id: int) -> None:
             (video_id,),
         )
 
-def mark_uploaded(video_id: int, youtube_video_id: str) -> None:
+def mark_uploaded(
+    video_id: int,
+    youtube_video_id: str,
+    uploaded_at: str | None = None,
+) -> None:
+    uploaded_at = uploaded_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     with connect() as conn:
         conn.execute(
-            "UPDATE videos SET youtube_video_id = ?, status = 'uploaded' WHERE id = ?",
-            (youtube_video_id, video_id),
+            """
+            UPDATE videos
+            SET youtube_video_id = ?, status = 'uploaded',
+                uploaded_at = COALESCE(uploaded_at, ?)
+            WHERE id = ?
+            """,
+            (youtube_video_id, uploaded_at, video_id),
         )
 
 def uploaded_videos(limit: int = 20) -> list[dict[str, Any]]:
@@ -118,8 +157,8 @@ def uploaded_videos(limit: int = 20) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT
-                id, title, script, output_path, youtube_video_id,
-                views, likes, comments, avg_view_percentage
+                id, idea, angle, title, script, output_path, youtube_video_id,
+                uploaded_at, views, likes, comments, avg_view_percentage
             FROM videos
             WHERE youtube_video_id IS NOT NULL
             ORDER BY id DESC
@@ -152,6 +191,115 @@ def save_learning_note(video_id: int, note: str, score: float) -> None:
             "INSERT INTO learning_notes (video_id, note, score) VALUES (?, ?, ?)",
             (video_id, note, score),
         )
+
+def snapshot_exists(video_id: int, checkpoint_hours: int) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM analytics_snapshots
+            WHERE video_id = ? AND checkpoint_hours = ?
+            LIMIT 1
+            """,
+            (video_id, checkpoint_hours),
+        ).fetchone()
+    return row is not None
+
+def due_snapshot_candidates(
+    checkpoint_hours: int,
+    now_iso: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                v.id, v.idea, v.angle, v.title, v.script,
+                v.youtube_video_id, v.uploaded_at
+            FROM videos v
+            WHERE v.youtube_video_id IS NOT NULL
+              AND v.uploaded_at IS NOT NULL
+              AND ((julianday(?) - julianday(v.uploaded_at)) * 24.0) >= ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM analytics_snapshots s
+                  WHERE s.video_id = v.id
+                    AND s.checkpoint_hours = ?
+              )
+            ORDER BY v.uploaded_at ASC
+            LIMIT ?
+            """,
+            (now_iso, checkpoint_hours, checkpoint_hours, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+def save_analytics_snapshot(
+    video_id: int,
+    checkpoint_hours: int,
+    captured_at: str,
+    metrics: dict,
+    note: str,
+    score: float,
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO analytics_snapshots (
+                video_id, checkpoint_hours, captured_at,
+                views, likes, comments, avg_view_percentage, score, note
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                video_id,
+                checkpoint_hours,
+                captured_at,
+                int(metrics.get("views") or 0),
+                int(metrics.get("likes") or 0),
+                int(metrics.get("comments") or 0),
+                float(metrics.get("averageViewPercentage") or 0),
+                float(score),
+                note,
+            ),
+        )
+
+def analytics_history(limit: int = 60) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                s.video_id, s.checkpoint_hours, s.captured_at,
+                s.views, s.likes, s.comments, s.avg_view_percentage,
+                s.score, s.note,
+                v.idea, v.angle, v.title
+            FROM analytics_snapshots s
+            JOIN videos v ON v.id = s.video_id
+            ORDER BY s.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+def set_channel_state(key: str, value: str) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO channel_state (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, now),
+        )
+
+def get_channel_state(key: str, default: str = "") -> str:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM channel_state WHERE key = ?",
+            (key,),
+        ).fetchone()
+    return str(row["value"]) if row else default
 
 def queue_video(video_id: int, scheduled_for: str) -> None:
     with connect() as conn:
