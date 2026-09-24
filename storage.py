@@ -171,22 +171,76 @@ def queue_for_day(day_prefix: str) -> list[dict[str, Any]]:
         ).fetchall()
     return [dict(r) for r in rows]
 
-def due_queue(now_iso: str) -> list[dict[str, Any]]:
+def queued_items() -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             """
             SELECT
-                q.id AS queue_id, q.video_id, q.scheduled_for, q.attempts,
-                v.title, v.script, v.output_path
+                q.id AS queue_id, q.video_id, q.scheduled_for, q.status,
+                q.attempts, v.title, v.output_path
             FROM posting_queue q
             JOIN videos v ON v.id = q.video_id
             WHERE q.status = 'queued'
-              AND q.scheduled_for <= ?
-              AND q.attempts < 5
             ORDER BY q.scheduled_for ASC
-            """,
-            (now_iso,),
+            """
         ).fetchall()
+    return [dict(r) for r in rows]
+
+def occupied_schedule_times() -> set[str]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT scheduled_for
+            FROM posting_queue
+            WHERE status IN ('queued', 'uploaded')
+            """
+        ).fetchall()
+    return {str(r["scheduled_for"]) for r in rows}
+
+def update_queue_schedule(queue_id: int, scheduled_for: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE posting_queue
+            SET scheduled_for = ?, error = NULL
+            WHERE id = ?
+            """,
+            (scheduled_for, queue_id),
+        )
+
+def due_queue(now_iso: str, oldest_allowed_iso: str | None = None) -> list[dict[str, Any]]:
+    with connect() as conn:
+        if oldest_allowed_iso:
+            rows = conn.execute(
+                """
+                SELECT
+                    q.id AS queue_id, q.video_id, q.scheduled_for, q.attempts,
+                    v.title, v.script, v.output_path
+                FROM posting_queue q
+                JOIN videos v ON v.id = q.video_id
+                WHERE q.status = 'queued'
+                  AND q.scheduled_for <= ?
+                  AND q.scheduled_for >= ?
+                  AND q.attempts < 5
+                ORDER BY q.scheduled_for ASC
+                """,
+                (now_iso, oldest_allowed_iso),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT
+                    q.id AS queue_id, q.video_id, q.scheduled_for, q.attempts,
+                    v.title, v.script, v.output_path
+                FROM posting_queue q
+                JOIN videos v ON v.id = q.video_id
+                WHERE q.status = 'queued'
+                  AND q.scheduled_for <= ?
+                  AND q.attempts < 5
+                ORDER BY q.scheduled_for ASC
+                """,
+                (now_iso,),
+            ).fetchall()
     return [dict(r) for r in rows]
 
 def mark_queue_uploaded(queue_id: int, uploaded_at: str) -> None:
