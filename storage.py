@@ -50,9 +50,19 @@ def init_db() -> None:
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             uploaded_at TEXT,
             error TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(video_id) REFERENCES videos(id)
         );
         """)
+
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(posting_queue)").fetchall()
+        }
+        if "attempts" not in columns:
+            conn.execute(
+                "ALTER TABLE posting_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+            )
 
 def recent_videos(limit: int = 20) -> list[dict[str, Any]]:
     with connect() as conn:
@@ -150,8 +160,8 @@ def queue_for_day(day_prefix: str) -> list[dict[str, Any]]:
             """
             SELECT
                 q.id AS queue_id, q.video_id, q.scheduled_for, q.status,
-                q.uploaded_at, q.error, v.title, v.script, v.output_path,
-                v.youtube_video_id
+                q.uploaded_at, q.error, q.attempts,
+                v.title, v.script, v.output_path, v.youtube_video_id
             FROM posting_queue q
             JOIN videos v ON v.id = q.video_id
             WHERE q.scheduled_for LIKE ?
@@ -166,12 +176,13 @@ def due_queue(now_iso: str) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT
-                q.id AS queue_id, q.video_id, q.scheduled_for,
+                q.id AS queue_id, q.video_id, q.scheduled_for, q.attempts,
                 v.title, v.script, v.output_path
             FROM posting_queue q
             JOIN videos v ON v.id = q.video_id
             WHERE q.status = 'queued'
               AND q.scheduled_for <= ?
+              AND q.attempts < 5
             ORDER BY q.scheduled_for ASC
             """,
             (now_iso,),
@@ -194,7 +205,9 @@ def mark_queue_error(queue_id: int, error: str) -> None:
         conn.execute(
             """
             UPDATE posting_queue
-            SET status = 'error', error = ?
+            SET attempts = attempts + 1,
+                status = CASE WHEN attempts + 1 >= 5 THEN 'failed' ELSE 'queued' END,
+                error = ?
             WHERE id = ?
             """,
             (error[:1000], queue_id),
