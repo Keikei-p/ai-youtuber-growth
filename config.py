@@ -15,6 +15,7 @@ class Settings:
 
     voicevox_url: str = os.getenv("VOICEVOX_URL", "http://127.0.0.1:50021")
     voicevox_speaker: int = int(os.getenv("VOICEVOX_SPEAKER", "3"))
+    voicevox_exe: str = os.getenv("VOICEVOX_EXE", "")
 
     app_root: str = os.getenv("APP_ROOT", ".")
     data_dir: str = os.getenv("DATA_DIR", "data")
