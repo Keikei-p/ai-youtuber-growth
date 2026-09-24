@@ -4,7 +4,11 @@ from pathlib import Path
 
 from ai_client import OllamaClient
 from config import settings
-from runtime_control import guest_appearance_every, guest_new_every
+from runtime_control import (
+    guest_appearance_every,
+    guest_image_auto_enabled,
+    guest_new_every,
+)
 from storage import (
     active_guests,
     create_guest,
@@ -207,7 +211,7 @@ def select_guest_for_next_video(offset: int = 0) -> dict | None:
     selected = max(guests, key=rank)
     profile = json.loads(selected["profile_json"])
     image_path = selected.get("image_path")
-    if not image_path and settings.guest_image_enabled:
+    if not image_path and guest_image_auto_enabled():
         try:
             from guest_visual import generate_guest_image
             image_path = generate_guest_image(
