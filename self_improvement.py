@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ai_client import OllamaClient
+from autonomy_policy import classify_action, request_approval
 from config import settings
 from storage import (
     analytics_history,
@@ -230,6 +231,137 @@ def failure_summary() -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def _process_improvement_actions(data: dict) -> tuple[list[str], list[int], list[dict]]:
+    applied: list[str] = []
+    approvals: list[int] = []
+    queued_tests: list[dict] = []
+
+    actions = data.get("actions") or []
+    if not isinstance(actions, list):
+        return applied, approvals, queued_tests
+
+    for raw in actions[:12]:
+        if not isinstance(raw, dict):
+            continue
+
+        action_type = str(raw.get("action_type") or "").strip()
+        if not action_type:
+            continue
+
+        mode = classify_action(action_type)
+        value = raw.get("value")
+        title = str(
+            raw.get("title")
+            or raw.get("action")
+            or action_type
+        )
+        reason = str(raw.get("reason") or "")
+
+        if mode == "auto":
+            if action_type == "script_guidance":
+                set_channel_state(
+                    "autonomous_script_guidance",
+                    str(value or title)[:2000],
+                )
+                applied.append("話し方・台本改善を自動反映")
+            elif action_type == "planner_guidance":
+                set_channel_state(
+                    "autonomous_planner_guidance",
+                    str(value or title)[:2000],
+                )
+                applied.append("企画改善を自動反映")
+            elif action_type == "reduce_scene_images":
+                try:
+                    count = max(1, min(int(value), 4))
+                except Exception:
+                    count = 1
+                current = effective_scene_image_count()
+                count = min(count, current)
+                set_channel_state(
+                    "learned_scene_images_override",
+                    str(count),
+                )
+                applied.append(
+                    f"省負荷のためシーン画像数を{count}へ自動調整"
+                )
+            elif action_type == "disable_ai_video":
+                set_channel_state("ai_video_enabled", "false")
+                applied.append("AI動画を自動OFFして負荷を軽減")
+            elif action_type in {
+                "knowledge_note",
+                "prompt_tuning",
+                "quality_analysis",
+                "retry_tuning",
+                "reduce_ai_video_load",
+            }:
+                notes_raw = get_channel_state(
+                    "autonomous_learning_notes",
+                    "[]",
+                )
+                try:
+                    notes = json.loads(notes_raw)
+                    if not isinstance(notes, list):
+                        notes = []
+                except Exception:
+                    notes = []
+                notes.append(
+                    {
+                        "created_at": datetime.now(
+                            timezone.utc
+                        ).isoformat(timespec="seconds"),
+                        "type": action_type,
+                        "value": value,
+                        "reason": reason,
+                    }
+                )
+                set_channel_state(
+                    "autonomous_learning_notes",
+                    json.dumps(
+                        notes[-50:],
+                        ensure_ascii=False,
+                    ),
+                )
+                applied.append(f"{action_type}を学習メモへ保存")
+            continue
+
+        if mode == "test_then_auto":
+            queued = {
+                "action_type": action_type,
+                "title": title,
+                "reason": reason,
+                "value": value,
+                "status": "test_required",
+            }
+            queued_tests.append(queued)
+            continue
+
+        request_id = request_approval(
+            action_type=action_type,
+            title=title,
+            reason=reason,
+            payload={
+                "value": value,
+                **(
+                    value
+                    if isinstance(value, dict)
+                    else {}
+                ),
+            },
+        )
+        approvals.append(request_id)
+
+    if queued_tests:
+        set_channel_state(
+            "autonomous_test_queue",
+            json.dumps(
+                queued_tests,
+                ensure_ascii=False,
+            ),
+        )
+
+    return applied, approvals, queued_tests
+
+
 def run_improvement_review() -> dict:
     failures = failure_summary()
     analytics = analytics_history(12)
@@ -241,6 +373,7 @@ def run_improvement_review() -> dict:
             "同じGPU失敗が繰り返された場合は負荷を自動で下げます。"
         ),
         "recommendations": [],
+        "actions": [],
         "requires_code_change": False,
     }
 
@@ -272,6 +405,9 @@ def run_improvement_review() -> dict:
 - コード変更が必要な案はrequires_code_change=trueにする
 - 同じ失敗への再発防止を優先
 - 動画品質、字幕、画像、話し方、テンポの改善も考える
+- 安全な学習/企画/話し方/負荷軽減はactionsに構造化する
+- 負荷増加・大型モデル・課金・外部契約・大幅コード変更・削除・公開範囲変更は必ず承認対象にする
+- 小さい非破壊コード改善はminor_code_changeとして提案できるが、実行前テストが必要
 - JSONだけ返す
 
 {{
@@ -284,6 +420,14 @@ def run_improvement_review() -> dict:
       "reason":"..."
     }}
   ],
+  "actions":[
+    {
+      "action_type":"script_guidance|planner_guidance|reduce_scene_images|disable_ai_video|knowledge_note|prompt_tuning|quality_analysis|retry_tuning|reduce_ai_video_load|minor_code_change|major_code_change|paid_service|purchase|subscription|credential_change|security_change|database_migration|delete_data|public_upload_change|increase_resource_load|large_model_download|external_account_change",
+      "title":"...",
+      "value":"文字列・数値・またはJSON",
+      "reason":"..."
+    }
+  ],
   "requires_code_change":false
 }}
 """
@@ -293,6 +437,11 @@ def run_improvement_review() -> dict:
             raise ValueError("invalid improvement review")
     except Exception:
         data = fallback
+
+    applied, approvals, queued_tests = _process_improvement_actions(data)
+    data["applied_actions"] = applied
+    data["approval_request_ids"] = approvals
+    data["test_then_auto_queue"] = queued_tests
 
     set_channel_state(
         "ai_improvement_report",
@@ -319,6 +468,18 @@ def improvement_state() -> dict:
             "",
         ),
         "scene_images": effective_scene_image_count(),
+        "script_guidance": get_channel_state(
+            "autonomous_script_guidance",
+            "",
+        ),
+        "planner_guidance": get_channel_state(
+            "autonomous_planner_guidance",
+            "",
+        ),
+        "test_queue": get_channel_state(
+            "autonomous_test_queue",
+            "[]",
+        ),
         "recent_failures": recent_failures(8),
     }
 
