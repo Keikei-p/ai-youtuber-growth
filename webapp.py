@@ -770,7 +770,8 @@ async function refresh(){
       return '<div>'+media+'<div class="small">'+escapeHtml(label||x.type||'素材')+'</div></div>';
     }).join(''):'<div class="small">まだ生成素材がありません。</div>';
     const report=(state.improvement&&state.improvement.report)||{};
-    improvementReport.textContent=report.summary||'まだAI改善分析を実行していません。';
+    const recs=(report.recommendations||[]).map(x=>'・['+escapeHtml(x.priority||'')+'] '+escapeHtml(x.action||'')+' — '+escapeHtml(x.reason||'')).join('\n');
+    improvementReport.textContent=(report.summary||'まだAI改善分析を実行していません。')+(recs?'\n\n'+recs:'')+(report.requires_code_change?'\n\n※コード変更候補あり。自動適用はせず、承認後に更新します。':'');
     failureHistory.innerHTML=(state.improvement&&state.improvement.recent_failures||[]).length
       ? state.improvement.recent_failures.map(x=>'<div class="row"><span>'+escapeHtml(x.stage)+'</span><span class="small">'+escapeHtml(x.created_at)+' / '+escapeHtml(String(x.message||'').slice(0,120))+'</span></div>').join('')
       : '<div class="small">記録された失敗はまだありません。</div>';
