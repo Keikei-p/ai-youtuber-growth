@@ -42,6 +42,13 @@ class Settings:
     guest_image_enabled: bool = os.getenv("GUEST_IMAGE_ENABLED", "false").lower() == "true"
     sd_webui_url: str = os.getenv("SD_WEBUI_URL", "http://127.0.0.1:7860")
 
+    # AI Studio. auto は Diffusers を優先し、未導入時はWebUI互換APIへフォールバック。
+    studio_image_backend: str = os.getenv("STUDIO_IMAGE_BACKEND", "auto")
+    studio_diffusers_model: str = os.getenv(
+        "STUDIO_DIFFUSERS_MODEL",
+        "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    )
+
     youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
     youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
     youtube_contains_synthetic_media: bool = (
