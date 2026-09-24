@@ -99,6 +99,13 @@ def update_video_output(video_id: int, output_path: str, status: str = "rendered
             (output_path, status, video_id),
         )
 
+def clear_video_output(video_id: int) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE videos SET output_path = NULL WHERE id = ?",
+            (video_id,),
+        )
+
 def mark_uploaded(video_id: int, youtube_video_id: str) -> None:
     with connect() as conn:
         conn.execute(
@@ -110,7 +117,9 @@ def uploaded_videos(limit: int = 20) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, title, script, youtube_video_id, views, likes, comments, avg_view_percentage
+            SELECT
+                id, title, script, output_path, youtube_video_id,
+                views, likes, comments, avg_view_percentage
             FROM videos
             WHERE youtube_video_id IS NOT NULL
             ORDER BY id DESC
