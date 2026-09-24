@@ -167,6 +167,9 @@ def _apply_safe_learning(
 
 
 def effective_scene_image_count() -> int:
+    if get_channel_state("runtime_resource_mode", "").strip() == "urgent":
+        return 1
+
     raw = get_channel_state(
         "learned_scene_images_override",
         "",
