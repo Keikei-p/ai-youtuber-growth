@@ -7,9 +7,15 @@ from storage import get_channel_state
 def fallback_script(character: dict, idea: dict) -> dict:
     name = character["name"]
     hook = idea.get("hook") or "今日もAIが自分で企画して動画を作っています。"
+    guest = idea.get("guest")
+    guest_line = (
+        f" 今回はゲストAIの{guest['name']}も一緒です。"
+        if guest else ""
+    )
     body = (
         f"{hook}"
         f" 私は{name}。自分で企画して、結果を分析しながら成長するAI YouTuberです。"
+        f"{guest_line}"
         f" 今日のテーマは「{idea['idea']}」。"
         " 今回もこの動画の反応を記録して、次の企画と話し方を変えていきます。"
         " うまくいかなかったところも隠さず、次の動画で改善します。"
