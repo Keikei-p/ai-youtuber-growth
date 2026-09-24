@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from ai_client import OllamaClient
 from config import settings
@@ -26,12 +27,14 @@ from runtime_control import (
     auto_upload_enabled,
     automation_enabled,
     guest_appearance_every,
+    guest_image_auto_enabled,
     guest_new_every,
     post_times,
     posts_per_day,
     set_auto_upload_enabled,
     set_automation_enabled,
     set_guest_appearance_every,
+    set_guest_image_auto_enabled,
     set_guest_new_every,
     set_post_times,
     set_posts_per_day,
@@ -50,6 +53,13 @@ from storage import (
     queued_items,
 )
 from voice.voicevox import VoicevoxClient
+from studio.asset_store import GENERATED_ROOT, list_assets
+from studio.image_generator import (
+    generate_background_image,
+    generate_guest_image,
+    generate_mirai_image,
+    studio_status,
+)
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -228,6 +238,21 @@ def _video_status() -> list[dict]:
         for row in rows
     ]
 
+def _studio_assets() -> list[dict]:
+    assets = []
+    prefix = "assets/generated/"
+    for row in list_assets(limit=24):
+        item = dict(row)
+        relative = str(item.get("path") or "").replace("\\", "/")
+        if relative.startswith(prefix):
+            relative = relative[len(prefix):]
+            item["url"] = "/studio-assets/" + relative
+        else:
+            item["url"] = None
+        assets.append(item)
+    return assets
+
+
 def _guest_status() -> list[dict]:
     rows = active_guests(20)
     return [
@@ -298,6 +323,9 @@ def _status_payload() -> dict:
         "post_times": post_times(),
         "guest_every": guest_appearance_every(),
         "guest_new_every": guest_new_every(),
+        "guest_image_auto_enabled": guest_image_auto_enabled(),
+        "studio": studio_status(),
+        "studio_assets": _studio_assets(),
         "services": services,
         "system_ready": all(services.values()),
         "queue": _queue_status(),
@@ -424,6 +452,7 @@ button{cursor:pointer;font-weight:700}button.primary{background:#2274db}button.d
 .queue{display:grid;gap:9px}.q{padding:11px;border-radius:12px;background:#0b1b30}.small{font-size:12px;color:#9cb0c9}.strategy{line-height:1.7;background:#0b1b30;padding:13px;border-radius:12px}
 pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;border-radius:12px;max-height:330px;overflow:auto;color:#bcd0e7}
 .toggle{display:flex;align-items:center;gap:8px}.hero{display:flex;gap:12px;align-items:center}.orb{width:52px;height:52px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#c4dcff,#6598ef 45%,#243c7c);box-shadow:0 0 30px #4c82e855}
+.studio-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px}.asset{background:#0b1b30;border-radius:12px;overflow:hidden;border:1px solid #20344e}.asset img{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#06101c}.asset .meta{padding:9px}.studio-status{margin:8px 0 14px;padding:10px;border-radius:12px;background:#0b1b30}
 @media(max-width:900px){.card,.card.wide{grid-column:span 12}.wrap{padding:12px}h1{font-size:22px}}
 </style>
 </head>
@@ -491,6 +520,32 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div class="actions" style="margin-top:12px">
         <button onclick="runAction('guest')">新ゲスト候補を確認/生成</button>
       </div>
+    </section>
+
+    <section class="card full">
+      <h2>AIスタジオ</h2>
+      <div id="studioStatus" class="studio-status small"></div>
+      <div class="row"><span>ゲスト画像を自動生成</span><button id="guestImageAutoBtn" onclick="toggleGuestImageAuto()"></button></div>
+      <div class="actions" style="margin-top:12px">
+        <select id="miraiExpression">
+          <option value="normal">ミライ通常</option>
+          <option value="smile">ミライ笑顔</option>
+          <option value="wink">ミライウインク</option>
+          <option value="surprised">ミライ驚き</option>
+          <option value="thinking">ミライ考え中</option>
+          <option value="serious">ミライ真剣</option>
+        </select>
+        <button onclick="runStudioMirai()">ミライ画像生成</button>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        <input id="backgroundTheme" placeholder="背景テーマ 例: 未来の青いスタジオ" style="min-width:260px;flex:1">
+        <button onclick="runStudioBackground()">背景生成</button>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        <select id="studioGuestSelect" style="min-width:220px"></select>
+        <button onclick="runStudioGuest()">選択ゲスト画像生成</button>
+      </div>
+      <div id="studioAssets" class="studio-grid"></div>
     </section>
 
     <section class="card full">
@@ -563,6 +618,16 @@ async function refresh(){
     }
     queue.innerHTML=state.queue.length?state.queue.map(x=>'<div class="q"><b>'+escapeHtml(x.title)+'</b><div class="small">'+x.scheduled_for+' / #'+x.video_id+' / retry '+x.attempts+'</div></div>').join(''):'<div class="small">キューなし</div>';
     guests.innerHTML=state.guests.length?state.guests.map(x=>'<div class="row"><span>'+escapeHtml(x.name)+'</span><span class="small">'+x.appearances+'回 '+(x.has_image?'画像あり':'画像未生成')+'</span></div>').join(''):'<div class="small">まだゲストなし</div>';
+    guestImageAutoBtn.textContent=state.guest_image_auto_enabled?'ON':'OFF';
+    guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
+    const backend=state.studio.selected||'未接続';
+    studioStatus.textContent='画像エンジン: '+backend+' / Diffusers '+(state.studio.diffusers_installed?'導入済み':'未導入')+' / WebUI '+(state.studio.webui_available?'接続中':'未接続')+' / Model: '+state.studio.model;
+    studioGuestSelect.innerHTML=state.guests.length?state.guests.map(x=>'<option value="'+x.id+'">'+escapeHtml(x.name)+'</option>').join(''):'<option value="">ゲストなし</option>';
+    studioAssets.innerHTML=state.studio_assets.length?state.studio_assets.map(x=>{
+      const img=x.url?'<img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy">':'';
+      const name=(x.meta&&x.meta.guest_name)?' / '+escapeHtml(x.meta.guest_name):'';
+      return '<div class="asset">'+img+'<div class="meta"><b>'+escapeHtml(x.type||'asset')+name+'</b><div class="small">'+escapeHtml(x.backend||'')+' / '+escapeHtml(x.created_at||'')+'</div></div></div>';
+    }).join(''):'<div class="small">まだ生成画像がありません。</div>';
     videos.innerHTML=state.videos.length?state.videos.map(x=>{
       const yt=x.youtube_video_id?' / YouTube投稿済み':'';
       const slot=x.scheduled_for?' / '+x.scheduled_for:'';
@@ -577,6 +642,29 @@ async function refresh(){
 }
 function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function toggleAutomation(){await api('/api/settings',{automation_enabled:!state.automation_enabled});refresh()}
+async function toggleGuestImageAuto(){
+  await api('/api/settings',{guest_image_auto_enabled:!state.guest_image_auto_enabled});
+  refresh();
+}
+async function runStudioMirai(){
+  const data=await api('/api/action',{action:'studio_mirai',expression:miraiExpression.value});
+  alert(data.message);
+  setTimeout(refresh,1000);
+}
+async function runStudioBackground(){
+  const theme=backgroundTheme.value.trim();
+  if(!theme){alert('背景テーマを入力してください');return;}
+  const data=await api('/api/action',{action:'studio_background',theme});
+  alert(data.message);
+  setTimeout(refresh,1000);
+}
+async function runStudioGuest(){
+  const guestId=Number(studioGuestSelect.value||0);
+  if(!guestId){alert('ゲストを選択してください');return;}
+  const data=await api('/api/action',{action:'studio_guest',guest_id:guestId});
+  alert(data.message);
+  setTimeout(refresh,1000);
+}
 async function toggleUpload(){
   if(!state.auto_upload_enabled && state.privacy==='public' && !confirm('公開設定で自動投稿をONにします。よろしいですか？')) return;
   await api('/api/settings',{auto_upload_enabled:!state.auto_upload_enabled});refresh()
@@ -652,6 +740,28 @@ class Handler(BaseHTTPRequestHandler):
             self._json(_status_payload())
             return
 
+        if path.startswith("/studio-assets/"):
+            relative = unquote(path[len("/studio-assets/"):])
+            root = GENERATED_ROOT.resolve()
+            candidate = (root / relative).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                self._json({"message": "invalid asset path"}, 400)
+                return
+            if not candidate.is_file():
+                self._json({"message": "asset not found"}, 404)
+                return
+            raw = candidate.read_bytes()
+            content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "private, max-age=300")
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+
         self._json({"message": "not found"}, 404)
 
     def do_POST(self) -> None:
@@ -679,6 +789,10 @@ class Handler(BaseHTTPRequestHandler):
                     set_guest_appearance_every(int(body["guest_every"]))
                 if "guest_new_every" in body:
                     set_guest_new_every(int(body["guest_new_every"]))
+                if "guest_image_auto_enabled" in body:
+                    set_guest_image_auto_enabled(
+                        bool(body["guest_image_auto_enabled"])
+                    )
 
                 _wake_event.set()
                 self._json({"ok": True, "message": "設定を保存しました。自動運転へ反映します。"})
@@ -686,6 +800,49 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/action":
                 action = str(body.get("action") or "")
+
+                if action == "studio_mirai":
+                    expression = str(body.get("expression") or "normal")
+                    label = f"ミライ画像生成({expression})"
+                    func = lambda: print(generate_mirai_image(expression))
+                elif action == "studio_background":
+                    theme = str(body.get("theme") or "").strip()
+                    if not theme:
+                        self._json({"message": "背景テーマが必要です"}, 400)
+                        return
+                    label = "背景画像生成"
+                    func = lambda: print(generate_background_image(theme))
+                elif action == "studio_guest":
+                    guest_id = int(body.get("guest_id") or 0)
+                    row = next(
+                        (
+                            guest for guest in active_guests(100)
+                            if int(guest["id"]) == guest_id
+                        ),
+                        None,
+                    )
+                    if not row:
+                        self._json({"message": "ゲストが見つかりません"}, 404)
+                        return
+                    label = f"ゲスト画像生成({row['name']})"
+                    func = lambda: print(generate_guest_image(row))
+                else:
+                    label = ""
+                    func = None
+
+                if func is not None:
+                    def studio_runner():
+                        result = _run_captured(label, func)
+                        _append_log(result.get("message", ""))
+
+                    threading.Thread(
+                        target=studio_runner,
+                        daemon=True,
+                    ).start()
+                    self._json(
+                        {"ok": True, "message": f"{label}を開始しました。"}
+                    )
+                    return
 
                 actions = {
                     "cycle": ("1サイクル", tick),
