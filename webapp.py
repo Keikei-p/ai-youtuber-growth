@@ -21,6 +21,7 @@ from urllib.parse import unquote, urlparse
 from ai_client import OllamaClient
 from config import settings
 from growth_engine import show_growth_state
+from gpu_manager import gpu_snapshot
 from guest_manager import create_guest_now
 from main import run_cleanup_uploaded, run_generation, run_private_upload_test
 from runtime_control import (
@@ -325,6 +326,7 @@ def _status_payload() -> dict:
         "guest_new_every": guest_new_every(),
         "guest_image_auto_enabled": guest_image_auto_enabled(),
         "studio": studio_status(),
+        "gpu": gpu_snapshot(),
         "studio_assets": _studio_assets(),
         "services": services,
         "system_ready": all(services.values()),
@@ -668,9 +670,11 @@ async function refresh(){
     guestImageAutoBtn.textContent=state.guest_image_auto_enabled?'ON':'OFF';
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
     const backend=state.studio.selected||'未接続';
-    const gpu=state.studio.gpu_name||'CPU';
+    const gpu=state.studio.gpu_name||state.gpu.name||'CPU';
     const cuda=state.studio.cuda_available?('CUDA '+(state.studio.cuda_version||'')):'CUDA未検出';
-    studioStatus.textContent='画像エンジン: '+backend+' / Diffusers '+(state.studio.diffusers_installed?'導入済み':'未導入')+' / '+gpu+' / '+cuda+' / Model: '+state.studio.model;
+    const vram=state.gpu.memory_total_mb?(' / VRAM空き '+state.gpu.memory_free_mb+'MB / '+state.gpu.memory_total_mb+'MB'):'';
+    const ollamaLoaded=(state.gpu.loaded_ollama_models||[]).length?(' / Ollama: '+state.gpu.loaded_ollama_models.join(', ')):' / Ollama VRAM解放済み';
+    studioStatus.textContent='画像エンジン: '+backend+' / Diffusers '+(state.studio.diffusers_installed?'導入済み':'未導入')+' / '+gpu+' / '+cuda+vram+ollamaLoaded+' / Model: '+state.studio.model;
     const installing=state.current_job==='AIスタジオ導入';
     studioInstallBtn.style.display=state.studio.diffusers_installed&&!installing?'none':'inline-block';
     studioInstallBtn.disabled=installing;
