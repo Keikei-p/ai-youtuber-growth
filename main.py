@@ -46,6 +46,7 @@ def render_results(results: list[dict], character: dict) -> None:
                 output_path=video_path,
                 character_name=character["name"],
                 guest_name=(item.get("guest") or {}).get("name"),
+                guest_image_path=(item.get("guest") or {}).get("image_path"),
             )
             item["output_path"] = str(video_path)
             item["status"] = "rendered"
