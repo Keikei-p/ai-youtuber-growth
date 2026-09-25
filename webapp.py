@@ -68,7 +68,7 @@ from storage import (
     set_channel_state,
     video_by_id,
 )
-from voice.provider import build_voice_provider, voice_provider_status
+from voice.provider import voice_provider_status
 from studio.asset_store import GENERATED_ROOT, list_assets
 from studio.image_generator import (
     generate_background_image,
@@ -81,6 +81,8 @@ from studio.video_generator import (
     generate_animatediff_clip,
 )
 from self_improvement import improvement_state, run_improvement_review
+from mirai_engines.quality_engine import MiraiQualityEngine
+from mirai_engines.debug_engine import MiraiDebugEngine
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -233,6 +235,49 @@ def _service_status() -> dict:
     }
 
 
+def _engine_status() -> dict:
+    voice = voice_provider_status()
+    quality_rows = MiraiQualityEngine().recent(1)
+    debug_rows = MiraiDebugEngine().recent(1)
+    return {
+        "voice": {
+            "name": "Mirai Voice Engine",
+            "available": bool(voice["available"]),
+            "detail": f"provider={voice['name']}",
+        },
+        "composer": {
+            "name": "Mirai Composer",
+            "available": True,
+            "detail": "自作構成・字幕・モーション計画",
+        },
+        "quality": {
+            "name": "Mirai Quality Engine",
+            "available": bool(shutil.which("ffprobe")),
+            "detail": (
+                f"直近 {quality_rows[0].get('score')}点"
+                if quality_rows else "品質履歴なし"
+            ),
+        },
+        "debug": {
+            "name": "Mirai Debug Engine",
+            "available": True,
+            "detail": (
+                str(debug_rows[0].get("category") or "診断履歴あり")
+                if debug_rows else "診断履歴なし"
+            ),
+        },
+        "improvement": {
+            "name": "Mirai Improvement Engine",
+            "available": True,
+            "detail": (
+                "自作ロジック + Ollama補助"
+                if OllamaClient().available()
+                else "自作ロジックのみ"
+            ),
+        },
+    }
+
+
 def _queue_status() -> list[dict]:
     rows = queued_items()
     return [
@@ -248,6 +293,15 @@ def _queue_status() -> list[dict]:
 
 def _video_status() -> list[dict]:
     rows = dashboard_videos(40)
+    quality_map: dict[int, dict] = {}
+    for report in MiraiQualityEngine().recent(100):
+        raw_id = report.get("video_id")
+        if raw_id is None:
+            continue
+        video_id = int(raw_id)
+        if video_id not in quality_map:
+            quality_map[video_id] = report
+
     items: list[dict] = []
     for row in rows:
         raw_path = row.get("output_path")
@@ -265,6 +319,12 @@ def _video_status() -> list[dict]:
                 "guest_name": row.get("guest_name"),
                 "views": row.get("views") or 0,
                 "error": row.get("queue_error"),
+                "quality_score": (
+                    quality_map.get(int(row["id"]), {}).get("score")
+                ),
+                "quality_passed": (
+                    quality_map.get(int(row["id"]), {}).get("passed")
+                ),
                 "has_local_file": file_exists,
                 "preview_url": (
                     f"/media/videos/{int(row['id'])}"
@@ -370,6 +430,7 @@ def _status_payload() -> dict:
         "studio_assets": _studio_assets(),
         "services": services,
         "voice_provider": voice_provider_status(),
+        "engines": _engine_status(),
         "system_ready": all(services.values()),
         "queue": _queue_status(),
         "videos": _video_status(),
@@ -827,6 +888,12 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       </div>
     </section>
 
+    <section class="card wide">
+      <h2>Mirai 自作エンジン</h2>
+      <p class="small">判断・構成・品質・原因究明・改善はミライ側。外部ツールはprovider/実行器として使用します。</p>
+      <div id="engineStatus"></div>
+    </section>
+
     <section class="card">
       <h2>運用設定</h2>
       <div class="row"><span>1日投稿数</span><input id="postsPerDay" type="number" min="1" max="10" style="width:92px"></div>
@@ -997,9 +1064,15 @@ async function refresh(){
     lastCycle.textContent='最終サイクル: '+(state.last_cycle_at||'未実行')+' / '+state.last_cycle_result;
     document.title=(state.system_ready?'✓ ':'⚠ ')+'ミライ AI YouTuber 管理';
     services.innerHTML=[
-      ['Ollama',state.services.ollama],['VOICEVOX',state.services.voicevox],
-      ['FFmpeg',state.services.ffmpeg],['YouTube認証',state.services.youtube_token]
+      ['Ollama',state.services.ollama],
+      ['Voice '+escapeHtml((state.voice_provider||{}).name||''),state.services.voicevox],
+      ['FFmpeg',state.services.ffmpeg],
+      ['YouTube認証',state.services.youtube_token]
     ].map(x=>'<div class="row"><span>'+x[0]+'</span>'+badge(x[1])+'</div>').join('');
+    const engines=state.engines||{};
+    engineStatus.innerHTML=Object.values(engines).map(x=>
+      '<div class="row"><span><b>'+escapeHtml(x.name)+'</b><div class="small">'+escapeHtml(x.detail||'')+'</div></span>'+badge(Boolean(x.available))+'</div>'
+    ).join('');
     if(document.activeElement!==postsPerDay) postsPerDay.value=state.posts_per_day;
     if(document.activeElement!==postTimes) postTimes.value=state.post_times;
     if(document.activeElement!==guestEvery) guestEvery.value=state.guest_every;
@@ -1054,6 +1127,9 @@ async function refresh(){
       const guest=x.guest_name
         ? '<span class="badge">Guest '+escapeHtml(x.guest_name)+'</span>'
         : '';
+      const quality=x.quality_score===null||x.quality_score===undefined
+        ? '<span class="badge">Quality未検査</span>'
+        : '<span class="badge '+(x.quality_passed?'ok':'ng')+'">Quality '+Number(x.quality_score)+'/100 '+(x.quality_passed?'PASS':'FAIL')+'</span>';
       const err=x.error
         ? '<div class="small" style="color:#ff9aa8;margin-top:8px">エラー: '+escapeHtml(x.error)+'</div>'
         : '';
@@ -1067,7 +1143,7 @@ async function refresh(){
         +'<div class="library-head"><div><b>#'+x.id+' '+escapeHtml(x.title)+'</b>'
         +'<div class="small">'+escapeHtml(x.created_at||'')+' / '+escapeHtml(x.status||'')+' / '+Number(x.views||0)+' views</div></div>'
         +youtube+'</div>'
-        +'<div class="library-meta">'+local+yt+queue+guest+'</div>'
+        +'<div class="library-meta">'+local+yt+queue+guest+quality+'</div>'
         +err+preview+'</div>';
     }).join(''):'<div class="small">まだ動画履歴がありません。</div>';
     libraryImages.innerHTML=state.studio_assets.length?state.studio_assets.slice(0,40).map(x=>{
