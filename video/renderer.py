@@ -579,7 +579,7 @@ def render_short(
         cmd += [
             "-filter_complex",
             "[1:a]highpass=f=60,lowpass=f=15000,"
-            "loudnorm=I=-14:TP=-1.5:LRA=7[voice];"
+            "loudnorm=I=-14:TP=-1.5:LRA=7,aresample=48000[voice];"
             "[2:a]volume=0.055[bgm];"
             "[voice][bgm]amix=inputs=2:duration=first:"
             "dropout_transition=2[aout]",
@@ -592,8 +592,8 @@ def render_short(
     if not use_bgm:
         cmd += [
             "-filter:a",
-            "highpass=f=60,lowpass=f=15000,"
-            "loudnorm=I=-14:TP=-1.5:LRA=7",
+            "highpass=f=60,lowpass=f=10000,"
+            "loudnorm=I=-14:TP=-1.5:LRA=7,aresample=48000",
         ]
 
     cmd += [
