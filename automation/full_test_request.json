@@ -1,8 +1,8 @@
 {
-  "request_id": "2026-09-25-full-test-3-until-18-v1",
+  "request_id": "2026-09-25-full-test-3-until-18-v2",
   "date": "2026-09-25",
   "target": 3,
   "end_hour": 18,
   "privacy": "private",
-  "note": "User-authorized full automatic test through 18:00 JST."
+  "note": "Re-armed after sequential-generation fix; user-authorized full automatic test through 18:00 JST."
 }
