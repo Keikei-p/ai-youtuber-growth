@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import metadata
 import storage
 from autonomy_policy import resolve_approval
 from legal_guard import assess_publish_risk, publish_gate
@@ -144,6 +145,19 @@ class LegalGuardTests(unittest.TestCase):
         )
         self.assertTrue(second["allowed"])
         self.assertTrue(second.get("approved_override"))
+
+
+    def test_metadata_always_adds_ai_notice_and_voice_credit(self) -> None:
+        with patch(
+            "metadata.voice_attribution",
+            return_value="VOICEVOX:ずんだもん",
+        ):
+            description = metadata._append_disclosures("動画概要")
+        self.assertIn(
+            "この動画はAIを使って企画・音声・画像/映像を制作しています。",
+            description,
+        )
+        self.assertIn("VOICEVOX:ずんだもん", description)
 
 
 if __name__ == "__main__":
