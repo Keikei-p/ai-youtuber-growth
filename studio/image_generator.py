@@ -17,8 +17,10 @@ from config import settings
 from runtime_control import (
     visual_background_candidates,
     visual_candidate_count,
+    visual_highres_enabled,
     visual_min_score,
     visual_retry_rounds,
+    visual_runtime_settings,
 )
 from mirai_engines.visual_learning import VisualLearningMemory
 from mirai_engines.visual_quality_engine import MiraiVisualQualityEngine
@@ -429,6 +431,177 @@ def _generate(
     return _generate_webui(prompt, preset, seed=seed), backend
 
 
+def _rounded_size(image: Image.Image, scale: float) -> tuple[int, int]:
+    # Stable Diffusion系で扱いやすいよう8の倍数へ丸める。
+    width = max(64, int(round(image.width * scale / 8.0)) * 8)
+    height = max(64, int(round(image.height * scale / 8.0)) * 8)
+    return width, height
+
+
+def _refine_diffusers(
+    image: Image.Image,
+    prompt: str,
+    *,
+    seed: int | None = None,
+) -> Image.Image:
+    import torch
+    from diffusers import StableDiffusionImg2ImgPipeline
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("High-Res RefineはCUDA利用時のみ実行します。")
+
+    settings_now = visual_runtime_settings()
+    width, height = _rounded_size(
+        image,
+        float(settings_now["highres_scale"]),
+    )
+    source = image.convert("RGB").resize(
+        (width, height),
+        Image.Resampling.LANCZOS,
+    )
+
+    with exclusive_gpu_task("AI Studio High-Res Refine"):
+        unload_ollama_model(wait_seconds=2)
+        pipe = _load_diffusers_pipeline("cuda")
+        img2img = StableDiffusionImg2ImgPipeline(**pipe.components)
+        img2img.enable_attention_slicing()
+        if hasattr(img2img, "enable_vae_slicing"):
+            img2img.enable_vae_slicing()
+        generator = None
+        if seed is not None:
+            generator = torch.Generator(device="cuda").manual_seed(
+                int(seed)
+            )
+        try:
+            result = img2img(
+                prompt=prompt,
+                negative_prompt=NEGATIVE_PROMPT,
+                image=source,
+                strength=float(settings_now["highres_strength"]),
+                num_inference_steps=int(settings_now["highres_steps"]),
+                guidance_scale=6.0,
+                generator=generator,
+            )
+            if not result.images:
+                raise RuntimeError(
+                    "High-Res Refineから画像が返りませんでした。"
+                )
+            return result.images[0].convert("RGB")
+        finally:
+            del img2img
+            _park_pipeline()
+            release_torch_cuda_cache()
+
+
+def _refine_webui(
+    image: Image.Image,
+    prompt: str,
+    *,
+    seed: int | None = None,
+) -> Image.Image:
+    settings_now = visual_runtime_settings()
+    width, height = _rounded_size(
+        image,
+        float(settings_now["highres_scale"]),
+    )
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    response = requests.post(
+        settings.sd_webui_url.rstrip("/") + "/sdapi/v1/img2img",
+        json={
+            "init_images": [encoded],
+            "prompt": prompt,
+            "negative_prompt": NEGATIVE_PROMPT,
+            "steps": int(settings_now["highres_steps"]),
+            "width": width,
+            "height": height,
+            "denoising_strength": float(
+                settings_now["highres_strength"]
+            ),
+            "cfg_scale": 6.0,
+            "batch_size": 1,
+            "seed": int(seed) if seed is not None else -1,
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    images = response.json().get("images") or []
+    if not images:
+        raise RuntimeError(
+            "High-Res WebUI Refineから画像が返りませんでした。"
+        )
+    raw = images[0].split(",", 1)[-1]
+    return Image.open(
+        io.BytesIO(base64.b64decode(raw))
+    ).convert("RGB")
+
+
+def _highres_refine_selection(
+    selection: dict,
+    *,
+    asset_type: str,
+    seed: int | None = None,
+) -> dict:
+    if not visual_highres_enabled():
+        return selection
+    # 背景は本数が多く負荷増が大きいため、v2初期は人物系に集中。
+    if asset_type not in {"mirai", "guest"}:
+        return selection
+
+    quality_engine = MiraiVisualQualityEngine()
+    original = selection["image"]
+    original_score = int(
+        selection["quality"].get("score") or 0
+    )
+    try:
+        backend = str(selection.get("backend") or "")
+        if backend.startswith("diffusers"):
+            refined = _refine_diffusers(
+                original,
+                selection["prompt"],
+                seed=seed,
+            )
+            refined_backend = backend + "-highres"
+        else:
+            refined = _refine_webui(
+                original,
+                selection["prompt"],
+                seed=seed,
+            )
+            refined_backend = backend + "-highres"
+
+        report = quality_engine.inspect_image(
+            refined,
+            asset_type=asset_type,
+        )
+        refined_score = int(report.get("score") or 0)
+        if refined_score < original_score:
+            print(
+                "[VISUAL] High-Res Refineは品質点が下がったため"
+                f"元画像を採用: {original_score}>{refined_score}"
+            )
+            return selection
+
+        upgraded = dict(selection)
+        upgraded["image"] = refined
+        upgraded["backend"] = refined_backend
+        upgraded["quality"] = report
+        upgraded["highres_refined"] = True
+        upgraded["base_quality_score"] = original_score
+        return upgraded
+    except Exception as exc:
+        # 高画質化の失敗で本番生成全体を止めない。
+        print(
+            "[VISUAL] High-Res Refineを安全スキップ: "
+            f"{exc}"
+        )
+        fallback = dict(selection)
+        fallback["highres_refined"] = False
+        fallback["highres_error"] = str(exc)[:300]
+        return fallback
+
+
 def _save_image(
     image: Image.Image,
     folder: str,
@@ -554,6 +727,12 @@ def _generate_best_image(
         raise RuntimeError(
             f"Visual Quality {best_score}/100で基準{threshold}点未満のため採用しません。"
         )
+
+    best = _highres_refine_selection(
+        best,
+        asset_type=asset_type,
+        seed=seed_base + 500_003,
+    )
     return best
 
 
@@ -590,6 +769,14 @@ def _asset_visual_meta(selection: dict, meta: dict | None = None) -> dict:
         "visual_profile": selection["profile"],
         "visual_metrics": quality.get("metrics") or {},
         "visual_issues": quality.get("issues") or [],
+        "highres_refined": bool(
+            selection.get("highres_refined")
+        ),
+        "base_quality_score": selection.get(
+            "base_quality_score"
+        ),
+        "final_width": int(selection["image"].width),
+        "final_height": int(selection["image"].height),
     }
 
 

@@ -90,6 +90,20 @@ class Settings:
     visual_min_score: int = int(os.getenv("VISUAL_MIN_SCORE", "60"))
     visual_video_min_score: int = int(os.getenv("VISUAL_VIDEO_MIN_SCORE", "60"))
 
+    # Visual Evolution v2: 候補選抜後の1枚だけ高解像度リファイン。
+    visual_highres_enabled: bool = (
+        os.getenv("VISUAL_HIGHRES_ENABLED", "true").lower() == "true"
+    )
+    visual_highres_scale: float = float(
+        os.getenv("VISUAL_HIGHRES_SCALE", "1.5")
+    )
+    visual_highres_strength: float = float(
+        os.getenv("VISUAL_HIGHRES_STRENGTH", "0.28")
+    )
+    visual_highres_steps: int = int(
+        os.getenv("VISUAL_HIGHRES_STEPS", "10")
+    )
+
     # AI動画は1070では重いため初期OFF。ON時も1本ずつ直列生成。
     ai_video_enabled: bool = (
         os.getenv("AI_VIDEO_ENABLED", "false").lower() == "true"

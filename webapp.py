@@ -48,6 +48,7 @@ from runtime_control import (
     set_visual_min_score,
     set_visual_retry_rounds,
     set_visual_video_min_score,
+    set_visual_highres_enabled,
     set_guest_appearance_every,
     set_guest_image_auto_enabled,
     set_guest_new_every,
@@ -1166,6 +1167,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div class="row"><span>低品質時の再生成</span><input id="visualRetries" type="number" min="0" max="2" style="width:92px"></div>
       <div class="row"><span>画像の最低品質点</span><input id="visualMinScore" type="number" min="40" max="95" style="width:92px"></div>
       <div class="row"><span>AI動画の最低品質点</span><input id="visualVideoMinScore" type="number" min="40" max="95" style="width:92px"></div>
+      <div class="row"><span>High-Res Refine</span><input id="visualHighres" type="checkbox"></div>
+      <div class="small">人物系の採用1枚だけを1.5倍へ再描画。失敗時は自動で元画像へ戻ります。</div>
       <div class="actions" style="margin-top:12px">
         <button class="primary" onclick="saveVisualSettings()">画質設定を即時反映</button>
         <button onclick="runAction('quick_test')">軽量クイックテスト</button>
@@ -1394,6 +1397,7 @@ async function refresh(){
     if(document.activeElement!==visualRetries) visualRetries.value=vr.retry_rounds??1;
     if(document.activeElement!==visualMinScore) visualMinScore.value=vr.min_score??60;
     if(document.activeElement!==visualVideoMinScore) visualVideoMinScore.value=vr.video_min_score??60;
+    if(document.activeElement!==visualHighres) visualHighres.checked=Boolean(vr.highres_enabled);
     const storage=state.storage||{};
     let quickText='容量: '+Number(storage.total_mb||0).toFixed(2)+'MB';
     if(state.quick_diagnostics_last){
@@ -1514,7 +1518,8 @@ async function saveVisualSettings(){
       visual_background_candidates:Number(visualBackgroundCandidates.value),
       visual_retry_rounds:Number(visualRetries.value),
       visual_min_score:Number(visualMinScore.value),
-      visual_video_min_score:Number(visualVideoMinScore.value)
+      visual_video_min_score:Number(visualVideoMinScore.value),
+      visual_highres_enabled:Boolean(visualHighres.checked)
     });
     await refresh();
     alert('画質設定を再起動なしで反映しました。');
@@ -1800,6 +1805,10 @@ class Handler(BaseHTTPRequestHandler):
                 if "visual_video_min_score" in body:
                     set_visual_video_min_score(
                         int(body["visual_video_min_score"])
+                    )
+                if "visual_highres_enabled" in body:
+                    set_visual_highres_enabled(
+                        bool(body["visual_highres_enabled"])
                     )
 
                 _wake_event.set()

@@ -89,6 +89,107 @@ class VisualEvolutionTests(unittest.TestCase):
         self.assertGreaterEqual(selected["quality"]["score"], 60)
         self.assertIs(selected["image"], good)
 
+    def test_highres_refine_keeps_original_when_score_drops(self) -> None:
+        original = Image.effect_noise((512, 768), 70).convert("RGB")
+        worse = Image.new("RGB", (768, 1152), (5, 5, 5))
+        base_report = MiraiVisualQualityEngine().inspect_image(
+            original,
+            asset_type="mirai",
+        )
+        selection = {
+            "image": original,
+            "backend": "fake",
+            "quality": base_report,
+            "prompt": "test",
+            "profile": "detail",
+        }
+        with (
+            patch.object(
+                image_generator,
+                "visual_highres_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                image_generator,
+                "_refine_webui",
+                return_value=worse,
+            ),
+        ):
+            result = image_generator._highres_refine_selection(
+                selection,
+                asset_type="mirai",
+                seed=1,
+            )
+        self.assertIs(result["image"], original)
+
+    def test_highres_refine_adopts_equal_or_better_image(self) -> None:
+        original = Image.effect_noise((512, 768), 45).convert("RGB")
+        refined = Image.effect_noise((768, 1152), 75).convert("RGB")
+        base_report = MiraiVisualQualityEngine().inspect_image(
+            original,
+            asset_type="mirai",
+        )
+        selection = {
+            "image": original,
+            "backend": "fake",
+            "quality": base_report,
+            "prompt": "test",
+            "profile": "detail",
+        }
+        with (
+            patch.object(
+                image_generator,
+                "visual_highres_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                image_generator,
+                "_refine_webui",
+                return_value=refined,
+            ),
+        ):
+            result = image_generator._highres_refine_selection(
+                selection,
+                asset_type="mirai",
+                seed=1,
+            )
+        self.assertTrue(result.get("highres_refined"))
+        self.assertEqual(result["image"].size, (768, 1152))
+
+    def test_highres_refine_failure_safely_falls_back(self) -> None:
+        original = Image.effect_noise((512, 768), 70).convert("RGB")
+        base_report = MiraiVisualQualityEngine().inspect_image(
+            original,
+            asset_type="mirai",
+        )
+        selection = {
+            "image": original,
+            "backend": "fake",
+            "quality": base_report,
+            "prompt": "test",
+            "profile": "detail",
+        }
+        with (
+            patch.object(
+                image_generator,
+                "visual_highres_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                image_generator,
+                "_refine_webui",
+                side_effect=RuntimeError("GPU busy"),
+            ),
+        ):
+            result = image_generator._highres_refine_selection(
+                selection,
+                asset_type="mirai",
+                seed=1,
+            )
+        self.assertIs(result["image"], original)
+        self.assertFalse(result.get("highres_refined"))
+        self.assertIn("GPU busy", result.get("highres_error", ""))
+
     def test_visual_engine_can_inspect_saved_image(self) -> None:
         path = Path(self.tmp.name) / "image.png"
         Image.effect_noise((512, 768), 70).convert("RGB").save(path)

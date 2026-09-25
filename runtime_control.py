@@ -289,6 +289,20 @@ def set_visual_video_min_score(value: int) -> None:
     )
 
 
+def visual_highres_enabled() -> bool:
+    return _bool_state(
+        "visual_highres_enabled",
+        settings.visual_highres_enabled,
+    )
+
+
+def set_visual_highres_enabled(enabled: bool) -> None:
+    set_channel_state(
+        "visual_highres_enabled",
+        "true" if enabled else "false",
+    )
+
+
 def visual_runtime_settings() -> dict:
     return {
         "candidate_count": visual_candidate_count(),
@@ -296,6 +310,19 @@ def visual_runtime_settings() -> dict:
         "retry_rounds": visual_retry_rounds(),
         "min_score": visual_min_score(),
         "video_min_score": visual_video_min_score(),
+        "highres_enabled": visual_highres_enabled(),
+        "highres_scale": max(
+            1.0,
+            min(float(settings.visual_highres_scale), 2.0),
+        ),
+        "highres_strength": max(
+            0.1,
+            min(float(settings.visual_highres_strength), 0.5),
+        ),
+        "highres_steps": max(
+            4,
+            min(int(settings.visual_highres_steps), 20),
+        ),
     }
 
 
