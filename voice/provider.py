@@ -28,3 +28,14 @@ def voice_provider_status() -> dict:
             "available": False,
             "error": str(exc),
         }
+
+
+def voice_attribution() -> str:
+    try:
+        provider = build_voice_provider()
+        method = getattr(provider, "attribution", None)
+        if callable(method):
+            return str(method() or "").strip()
+    except Exception:
+        pass
+    return ""
