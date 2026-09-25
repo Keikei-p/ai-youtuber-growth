@@ -42,7 +42,7 @@ from storage import (
     update_queue_schedule,
     video_by_id,
 )
-from voice.provider import voice_attribution, voice_provider_status
+from voice.provider import voice_attribution_status, voice_provider_status
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -715,7 +715,11 @@ def run_due() -> None:
 
             gate = publish_gate(
                 row,
-                required_credit=voice_attribution(),
+                required_credit=(
+                    voice_attribution_status()["credit"]
+                    if voice_attribution_status()["resolved"]
+                    else "__UNRESOLVED_REQUIRED_VOICE_CREDIT__"
+                ),
             )
             if not gate["allowed"]:
                 print(
