@@ -6,6 +6,8 @@ from pathlib import Path
 
 from config import settings
 from guest_manager import select_guest_for_next_video
+from legal_guard import publish_gate
+from voice.provider import voice_attribution
 from gpu_manager import unload_ollama_model, release_torch_cuda_cache
 from production_pipeline import produce_media
 from metadata import build_metadata
@@ -65,6 +67,21 @@ def upload_results(
 
     for item in candidates:
         try:
+            gate = publish_gate(
+                item,
+                required_credit=voice_attribution(),
+            )
+            if not gate["allowed"]:
+                item["upload_error"] = (
+                    "公開前確認が必要です。"
+                    f" approval_id={gate.get('approval_id')}"
+                )
+                print(
+                    f"[LEGAL] #{item['id']} は公開前確認が必要なため"
+                    f"YouTube投稿を停止: {gate.get('risks')}"
+                )
+                continue
+
             youtube_id = upload_video(
                 video_path=Path(item["output_path"]),
                 title=item["title"],
@@ -73,7 +90,8 @@ def upload_results(
                 privacy_status=effective_privacy,
                 category_id=settings.youtube_category_id,
                 default_language=settings.youtube_default_language,
-                contains_synthetic_media=settings.youtube_contains_synthetic_media,
+                # ミライはAI音声・AI画像/映像を用いるため安全側で常時開示。
+                contains_synthetic_media=True,
             )
             item["youtube_video_id"] = youtube_id
             item["status"] = "uploaded"
