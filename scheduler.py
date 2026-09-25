@@ -289,9 +289,9 @@ def start_today_full_test(
     end_hour: int = 18,
 ) -> dict:
     """
-    今日だけの実運転テスト。
-    3本を通常制作フローで生成し、YouTubeへprivateで自動投稿する。
-    テスト終了後は元の自動運転/投稿設定へ戻す。
+    今日だけの実運転テストを開始する。
+    実際の制作はtickごとに1本ずつ完結させ、
+    完成した動画から即キューへ入れる。
     """
     init_db()
     existing = _full_test_state()
@@ -324,7 +324,7 @@ def start_today_full_test(
     }
     state = {
         "active": True,
-        "status": "3本生成中",
+        "status": "1本ずつ生成待ち",
         "target": target,
         "started_at": now.isoformat(timespec="seconds"),
         "end_at": end_at.isoformat(timespec="minutes"),
@@ -337,69 +337,103 @@ def start_today_full_test(
     }
     _save_full_test_state(state)
 
-    # 実アップロードは行うが、テスト中は必ずprivate。
+    # 実アップロード経路を試すが、テスト中は必ずprivate。
     set_automation_enabled(True)
     set_auto_upload_enabled(True)
     set_upload_privacy("private")
 
     print(
-        "[FULL-TEST] 今日18時までの3本完全テスト開始: "
-        + ", ".join(slot.strftime("%H:%M") for slot in slots)
+        "[FULL-TEST] 今日18時までの3本完全テストを開始。"
     )
     print(
-        "[FULL-TEST] YouTube投稿は3本ともprivate。"
-        "制作・キュー・自動投稿経路は通常運転と同じです。"
+        "[FULL-TEST] 1本完成→キュー→投稿判定→次の1本、"
+        "の順で低負荷に進めます。"
     )
+    print(
+        "[FULL-TEST] 投稿予定: "
+        + ", ".join(slot.strftime("%H:%M") for slot in slots)
+    )
+    return full_test_status()
+
+
+def _advance_full_test_generation() -> None:
+    state = _full_test_state()
+    if not state.get("active"):
+        return
+
+    target = int(state.get("target") or 0)
+    video_ids = [
+        int(value)
+        for value in state.get("video_ids") or []
+        if str(value).isdigit()
+    ]
+    if len(video_ids) >= target:
+        state["status"] = "投稿待ち"
+        _save_full_test_state(state)
+        return
+
+    slots_raw = list(state.get("slots") or [])
+    index = len(video_ids)
+    if index >= len(slots_raw):
+        _restore_after_full_test(
+            state,
+            f"投稿枠不足 {len(video_ids)}/{target}",
+        )
+        return
 
     try:
-        results = run_generation(
-            render=True,
-            upload=False,
-            target_override=target,
+        end_at = datetime.fromisoformat(
+            str(state.get("end_at"))
         )
     except Exception:
-        state["status"] = "生成失敗"
+        end_at = _now().replace(hour=18, minute=0, second=0, microsecond=0)
+
+    if _now() >= end_at:
+        _maybe_finish_full_test()
+        return
+
+    state["status"] = f"{index + 1}/{target}本目を生成中"
+    _save_full_test_state(state)
+    print(
+        f"[FULL-TEST] {index + 1}/{target}本目を"
+        "通常制作フローで生成します。"
+    )
+
+    results = run_generation(
+        render=True,
+        upload=False,
+        target_override=1,
+    )
+    if not results or not results[0].get("output_path"):
+        state["status"] = f"生成失敗 {index}/{target}"
         _save_full_test_state(state)
-        _restore_after_full_test(state, "生成失敗")
-        raise
-
-    queued_count = 0
-    video_ids: list[int] = []
-    for item, slot in zip(results, slots):
-        if not item.get("output_path"):
-            continue
-        video_id = int(item["id"])
-        queue_video(
-            video_id,
-            slot.isoformat(timespec="minutes"),
+        record_failure(
+            "full_test.generate",
+            "1本の完成動画を生成できませんでした",
+            {"index": index + 1, "target": target},
         )
-        video_ids.append(video_id)
-        queued_count += 1
-        print(
-            f"[FULL-TEST] #{video_id} -> "
-            f"{slot.strftime('%H:%M')} private投稿予定"
-        )
+        return
 
+    item = results[0]
+    video_id = int(item["id"])
+    slot = datetime.fromisoformat(str(slots_raw[index]))
+    queue_video(
+        video_id,
+        slot.isoformat(timespec="minutes"),
+    )
+    video_ids.append(video_id)
     state["video_ids"] = video_ids
     state["status"] = (
         "投稿待ち"
-        if queued_count == target
-        else f"生成不足 {queued_count}/{target}"
+        if len(video_ids) >= target
+        else f"{len(video_ids)}/{target}本完成"
     )
     _save_full_test_state(state)
 
-    if queued_count != target:
-        cancelled = cancel_queued_videos(video_ids)
-        print(
-            f"[FULL-TEST] 生成不足のため"
-            f"{cancelled}件のテストキューをキャンセルしました。"
-        )
-        _restore_after_full_test(
-            state,
-            f"生成不足 {queued_count}/{target}",
-        )
-
-    return full_test_status()
+    print(
+        f"[FULL-TEST] #{video_id} 完成 → "
+        f"{slot.strftime('%H:%M')} private投稿キュー"
+    )
 
 
 def reschedule_missed() -> int:
@@ -708,9 +742,11 @@ def show_queue() -> None:
 def tick() -> None:
     full_test = _full_test_state()
     if full_test.get("active"):
-        # 完全テスト中は通常の「次の3本補充」を止め、
-        # 指定した3本だけを投稿する。
-        print("[FULL-TEST] テストセッション中: 指定3本のみ運転")
+        # 完全テスト中は通常の補充を止める。
+        # 1本を最後まで完成させてキューへ入れ、
+        # その直後に投稿時刻判定をする。
+        print("[FULL-TEST] テストセッション中: 1本ずつ直列運転")
+        _advance_full_test_generation()
         run_due()
         _maybe_finish_full_test()
         return
