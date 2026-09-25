@@ -8,6 +8,7 @@ from config import settings
 from gpu_manager import release_torch_cuda_cache, unload_ollama_model
 from runtime_control import (
     ai_video_enabled,
+    ai_video_license_confirmed,
     guest_image_auto_enabled,
     mirai_identity_video_enabled,
     runtime_cancel_requested,
@@ -265,7 +266,7 @@ def _generate_ai_video_asset(item: dict) -> str | None:
 
     if not ai_video_enabled():
         return None
-    if not settings.ai_video_license_confirmed:
+    if not ai_video_license_confirmed():
         print(
             "[LEGAL][AI-VIDEO] AI動画モデルの利用条件が未確認のため"
             "生成をスキップします。画像+軽量モーションで継続します。"

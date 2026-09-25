@@ -202,11 +202,28 @@ def set_voice_provider_name(value: str) -> None:
 def ai_video_enabled() -> bool:
     return _bool_state("ai_video_enabled", settings.ai_video_enabled)
 
+
 def set_ai_video_enabled(enabled: bool) -> None:
     set_channel_state(
         "ai_video_enabled",
         "true" if enabled else "false",
     )
+
+
+def ai_video_license_confirmed() -> bool:
+    return _bool_state(
+        "ai_video_license_confirmed",
+        settings.ai_video_license_confirmed,
+    )
+
+
+def set_ai_video_license_confirmed(confirmed: bool) -> None:
+    set_channel_state(
+        "ai_video_license_confirmed",
+        "true" if confirmed else "false",
+    )
+    if not confirmed:
+        set_ai_video_enabled(False)
 
 
 def mirai_identity_lock_enabled() -> bool:

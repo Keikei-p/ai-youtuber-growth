@@ -30,6 +30,7 @@ from quick_test import run_quick_diagnostics
 from paths import VIDEO_DIR
 from runtime_control import (
     ai_video_enabled,
+    ai_video_license_confirmed,
     apply_daily_auto_preset,
     auto_upload_enabled,
     automation_enabled,
@@ -41,6 +42,7 @@ from runtime_control import (
     post_times,
     posts_per_day,
     set_ai_video_enabled,
+    set_ai_video_license_confirmed,
     set_auto_upload_enabled,
     set_automation_enabled,
     set_visual_background_candidates,
@@ -367,7 +369,7 @@ def _rights_status() -> dict:
         "ai_video_enabled": bool(ai_video_enabled()),
         "ai_video_license_ok": (
             (not ai_video_enabled())
-            or bool(settings.ai_video_license_confirmed)
+            or ai_video_license_confirmed()
         ),
     }
 
@@ -516,6 +518,7 @@ def _status_payload() -> dict:
         "guest_new_every": guest_new_every(),
         "guest_image_auto_enabled": guest_image_auto_enabled(),
         "ai_video_enabled": ai_video_enabled(),
+        "ai_video_license_confirmed": ai_video_license_confirmed(),
         "ai_video": ai_video_status(),
         "improvement": improvement_state(),
         "autonomy": autonomy_state(),
@@ -1123,6 +1126,19 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       </div>
       <div class="row"><span>ゲスト画像を自動生成</span><button id="guestImageAutoBtn" onclick="toggleGuestImageAuto()"></button></div>
       <div class="row"><span>AI動画素材を自動生成</span><button id="aiVideoBtn" onclick="toggleAiVideo()"></button></div>
+      <div class="row">
+        <span>AI動画モデルの利用条件</span>
+        <label class="small">
+          <input id="aiVideoLicenseConfirmed" type="checkbox" onchange="toggleAiVideoLicense()">
+          確認済み
+        </label>
+      </div>
+      <div class="small" style="margin:6px 0">
+        使用モデル:
+        <a href="https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2" target="_blank" rel="noopener">AnimateDiff Motion Adapter</a>
+        /
+        <a href="https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5" target="_blank" rel="noopener">Stable Diffusion v1.5</a>
+      </div>
       <div id="aiVideoStatus" class="small" style="margin:8px 0 12px"></div>
       <div class="actions" style="margin-top:12px">
         <select id="miraiExpression">
@@ -1328,7 +1344,10 @@ async function refresh(){
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
     aiVideoBtn.textContent=state.ai_video_enabled?'ON':'OFF';
     aiVideoBtn.className=state.ai_video_enabled?'danger':'';
-    aiVideoStatus.textContent='AI動画: '+(state.ai_video.available?'利用可能':'未準備')+' / '+escapeHtml(state.ai_video.backend||'')+' / '+state.ai_video.frames+' frames / '+state.ai_video.steps+' steps / '+state.ai_video.size.join('x')+(state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF');
+    if(document.activeElement!==aiVideoLicenseConfirmed){
+      aiVideoLicenseConfirmed.checked=Boolean(state.ai_video_license_confirmed);
+    }
+    aiVideoStatus.textContent='AI動画: '+(state.ai_video.available?'利用可能':'未準備')+' / '+escapeHtml(state.ai_video.backend||'')+' / '+state.ai_video.frames+' frames / '+state.ai_video.steps+' steps / '+state.ai_video.size.join('x')+(state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF')+(state.ai_video_license_confirmed?' / 利用条件確認済み':' / 利用条件未確認');
     const backend=state.studio.selected||'未接続';
     const gpu=state.studio.gpu_name||state.gpu.name||'CPU';
     const cuda=state.studio.cuda_available?('CUDA '+(state.studio.cuda_version||'')):'CUDA未検出';
@@ -1434,10 +1453,39 @@ async function toggleGuestImageAuto(){
   await api('/api/settings',{guest_image_auto_enabled:!state.guest_image_auto_enabled});
   refresh();
 }
+async function toggleAiVideoLicense(){
+  const next=Boolean(aiVideoLicenseConfirmed.checked);
+  if(next){
+    const ok=confirm(
+      'AI動画で使用するモデルの利用条件を確認し、用途に問題ないことを確認済みですか？\n\n'+
+      '確認済みの場合だけOKを押してください。'
+    );
+    if(!ok){
+      aiVideoLicenseConfirmed.checked=false;
+      return;
+    }
+  }
+  try{
+    await api('/api/settings',{ai_video_license_confirmed:next});
+    await refresh();
+  }catch(e){
+    aiVideoLicenseConfirmed.checked=Boolean(state.ai_video_license_confirmed);
+    alert(e.message);
+  }
+}
 async function toggleAiVideo(){
+  if(!state.ai_video_enabled && !state.ai_video_license_confirmed){
+    alert('先に「AI動画モデルの利用条件 → 確認済み」をチェックしてください。');
+    return;
+  }
   if(!state.ai_video_enabled && !confirm('AI動画はGTX 1070では重い処理です。1本ずつ直列生成でONにしますか？')) return;
-  await api('/api/settings',{ai_video_enabled:!state.ai_video_enabled});
-  refresh();
+  try{
+    await api('/api/settings',{ai_video_enabled:!state.ai_video_enabled});
+    await refresh();
+  }catch(e){
+    alert(e.message);
+    await refresh();
+  }
 }
 async function runImprovementReview(){
   const data=await api('/api/action',{action:'improvement_review'});
@@ -1784,12 +1832,16 @@ class Handler(BaseHTTPRequestHandler):
                     set_guest_image_auto_enabled(
                         bool(body["guest_image_auto_enabled"])
                     )
+                if "ai_video_license_confirmed" in body:
+                    set_ai_video_license_confirmed(
+                        bool(body["ai_video_license_confirmed"])
+                    )
                 if "ai_video_enabled" in body:
                     enabled = bool(body["ai_video_enabled"])
-                    if enabled and not settings.ai_video_license_confirmed:
+                    if enabled and not ai_video_license_confirmed():
                         raise ValueError(
-                            "AI動画モデルの公開/商用利用条件が未確認です。"
-                            " AI_VIDEO_LICENSE_CONFIRMED=true は確認後だけ設定してください。"
+                            "AI動画モデルの利用条件が未確認です。"
+                            " 管理画面で利用条件を確認後、「確認済み」をチェックしてください。"
                         )
                     set_ai_video_enabled(enabled)
                 if "visual_candidate_count" in body:

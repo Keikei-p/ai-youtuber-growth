@@ -25,6 +25,20 @@ class LightweightOpsTests(unittest.TestCase):
         storage.DB_PATH = self.old_db
         self.tmp.cleanup()
 
+    def test_ai_video_license_confirmation_controls_runtime_toggle(self) -> None:
+        runtime_control.set_ai_video_license_confirmed(False)
+        self.assertFalse(runtime_control.ai_video_license_confirmed())
+        self.assertFalse(runtime_control.ai_video_enabled())
+
+        runtime_control.set_ai_video_license_confirmed(True)
+        self.assertTrue(runtime_control.ai_video_license_confirmed())
+        runtime_control.set_ai_video_enabled(True)
+        self.assertTrue(runtime_control.ai_video_enabled())
+
+        runtime_control.set_ai_video_license_confirmed(False)
+        self.assertFalse(runtime_control.ai_video_license_confirmed())
+        self.assertFalse(runtime_control.ai_video_enabled())
+
     def test_visual_settings_change_without_process_restart(self) -> None:
         runtime_control.set_visual_candidate_count(3)
         runtime_control.set_visual_background_candidates(2)
