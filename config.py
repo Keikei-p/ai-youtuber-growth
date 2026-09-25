@@ -28,6 +28,9 @@ class Settings:
     character_image: str = os.getenv("CHARACTER_IMAGE", "assets/character/default.png")
     background_dir: str = os.getenv("BACKGROUND_DIR", "assets/backgrounds")
     bgm_file: str = os.getenv("BGM_FILE", "")
+    bgm_license_confirmed: bool = (
+        os.getenv("BGM_LICENSE_CONFIRMED", "false").lower() == "true"
+    )
 
     app_timezone: str = os.getenv("APP_TIMEZONE", "Asia/Tokyo")
     post_times: str = os.getenv("POST_TIMES", "09:00,15:00,21:00")
@@ -86,7 +89,7 @@ class Settings:
     youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
     youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
     youtube_contains_synthetic_media: bool = (
-        os.getenv("YOUTUBE_CONTAINS_SYNTHETIC_MEDIA", "false").lower() == "true"
+        os.getenv("YOUTUBE_CONTAINS_SYNTHETIC_MEDIA", "true").lower() == "true"
     )
 
     font_path: str = os.getenv("FONT_PATH", r"C:\Windows\Fonts\meiryo.ttc")
