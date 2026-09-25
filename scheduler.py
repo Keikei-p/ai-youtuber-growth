@@ -16,13 +16,18 @@ from self_improvement import (
     record_failure,
 )
 from runtime_control import (
+    automation_enabled,
     auto_upload_enabled,
     post_times,
     posts_per_day,
+    set_auto_upload_enabled,
+    set_automation_enabled,
+    set_upload_privacy,
     upload_privacy,
 )
 from media_cleanup import cleanup_uploaded_media
 from storage import (
+    cancel_queued_videos,
     due_queue,
     init_db,
     mark_queue_error,
@@ -32,7 +37,6 @@ from storage import (
     queue_video,
     queued_items,
     get_channel_state,
-    queue_for_day,
     set_channel_state,
     update_queue_schedule,
     video_by_id,
@@ -257,6 +261,18 @@ def _maybe_finish_full_test() -> None:
             f"[FULL-TEST] 18時の終了時刻に到達。"
             f"{status['uploaded']}/{target}本完了。"
         )
+        if status["uploaded"] < target:
+            cancelled = cancel_queued_videos(
+                [
+                    int(value)
+                    for value in state.get("video_ids") or []
+                    if str(value).isdigit()
+                ]
+            )
+            print(
+                f"[FULL-TEST] 時間切れの未投稿キューを"
+                f"{cancelled}件キャンセルしました。"
+            )
         _restore_after_full_test(
             state,
             (
@@ -613,16 +629,28 @@ def run_due() -> None:
                 f"[AUTO-UPLOAD] #{row['video_id']} -> {youtube_id} "
                 f"[{upload_privacy()}]"
             )
-            try:
-                cleanup_uploaded_media(
-                    row["video_id"],
-                    output_path,
-                )
-            except Exception as cleanup_exc:
+            active_test = _full_test_state()
+            test_ids = {
+                int(value)
+                for value in active_test.get("video_ids") or []
+                if str(value).isdigit()
+            } if active_test.get("active") else set()
+
+            if int(row["video_id"]) in test_ids:
                 print(
-                    "[CLEANUP] 投稿は成功済みですが削除処理でエラー: "
-                    f"{cleanup_exc}"
+                    "[FULL-TEST] 確認用にローカル動画を残します。"
                 )
+            else:
+                try:
+                    cleanup_uploaded_media(
+                        row["video_id"],
+                        output_path,
+                    )
+                except Exception as cleanup_exc:
+                    print(
+                        "[CLEANUP] 投稿は成功済みですが削除処理でエラー: "
+                        f"{cleanup_exc}"
+                    )
         except Exception as exc:
             mark_queue_error(row["queue_id"], str(exc))
             record_failure(
