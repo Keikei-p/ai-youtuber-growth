@@ -67,6 +67,9 @@ class Settings:
         os.getenv("AI_VIDEO_ENABLED", "false").lower() == "true"
     )
     ai_video_backend: str = os.getenv("AI_VIDEO_BACKEND", "animatediff")
+    ai_video_license_confirmed: bool = (
+        os.getenv("AI_VIDEO_LICENSE_CONFIRMED", "false").lower() == "true"
+    )
     ai_video_frames: int = int(os.getenv("AI_VIDEO_FRAMES", "8"))
     ai_video_steps: int = int(os.getenv("AI_VIDEO_STEPS", "12"))
     ai_video_width: int = int(os.getenv("AI_VIDEO_WIDTH", "384"))
