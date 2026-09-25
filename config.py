@@ -1,7 +1,21 @@
 from dataclasses import dataclass
 import os
+import sys
 from dotenv import load_dotenv
 
+def _configure_console_encoding() -> None:
+    # Windows/GitHub runner等で日本語ログがcp1252等により落ちるのを防ぐ。
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+_configure_console_encoding()
 load_dotenv()
 
 @dataclass(frozen=True)
