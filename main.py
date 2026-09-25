@@ -7,7 +7,7 @@ from pathlib import Path
 from config import settings
 from guest_manager import select_guest_for_next_video
 from legal_guard import publish_gate
-from voice.provider import voice_attribution
+from voice.provider import voice_attribution_status
 from gpu_manager import unload_ollama_model, release_torch_cuda_cache
 from production_pipeline import produce_media
 from metadata import build_metadata
@@ -69,7 +69,11 @@ def upload_results(
         try:
             gate = publish_gate(
                 item,
-                required_credit=voice_attribution(),
+                required_credit=(
+                    voice_attribution_status()["credit"]
+                    if voice_attribution_status()["resolved"]
+                    else "__UNRESOLVED_REQUIRED_VOICE_CREDIT__"
+                ),
             )
             if not gate["allowed"]:
                 item["upload_error"] = (
