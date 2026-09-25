@@ -335,6 +335,16 @@ def _save_video_visual_profile(item: dict) -> None:
             "avg_visual_score": round(sum(scores) / len(scores), 2) if scores else None,
             "ai_video_used": bool(item.get("ai_video_path")),
             "ai_video_score": ai_quality.get("score"),
+            "asset_paths": {
+                "mirai": item.get("character_image_path"),
+                "guest": (
+                    (item.get("guest") or {}).get("image_path")
+                    if isinstance(item.get("guest"), dict)
+                    else None
+                ),
+                "backgrounds": list(item.get("background_image_paths") or []),
+                "ai_video": item.get("ai_video_path"),
+            },
         },
     )
 

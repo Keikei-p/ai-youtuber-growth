@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 
 from learner import build_channel_strategy, build_learning_note
+from learning_cleanup import cleanup_after_final_learning
 from mirai_engines.visual_learning import VisualLearningMemory
 from storage import (
     analytics_history,
@@ -27,6 +28,7 @@ def run_growth_cycle() -> int:
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat(timespec="seconds")
     captured = 0
+    finalized_video_ids: list[int] = []
 
     for checkpoint_hours in CHECKPOINTS:
         candidates = due_snapshot_candidates(
@@ -66,6 +68,8 @@ def run_growth_cycle() -> int:
                 )
 
                 captured += 1
+                if checkpoint_hours == 168:
+                    finalized_video_ids.append(int(video["id"]))
                 print(
                     f"[GROWTH] #{video['id']} {checkpoint_hours}h "
                     f"views={metrics.get('views', 0)} "
@@ -89,6 +93,19 @@ def run_growth_cycle() -> int:
             "[GROWTH] Visual Strategy更新: "
             f"{json.dumps(visual_strategy, ensure_ascii=False)}"
         )
+        for video_id in finalized_video_ids:
+            try:
+                cleanup = cleanup_after_final_learning(video_id)
+                print(
+                    f"[GROWTH][CLEANUP] #{video_id} "
+                    f"removed={cleanup.get('removed_files', 0)} "
+                    f"freed={cleanup.get('freed_mb', 0)}MB "
+                    f"status={cleanup.get('status')}"
+                )
+            except Exception as exc:
+                print(
+                    f"[GROWTH][CLEANUP] #{video_id} 自動削除失敗: {exc}"
+                )
     else:
         print("[GROWTH] 新しく分析するチェックポイントはありません。")
 

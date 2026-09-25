@@ -63,8 +63,46 @@ def record_asset(
     return row
 
 
+def prune_missing_assets() -> int:
+    rows = _load()
+    kept: list[dict] = []
+    removed = 0
+    for row in rows:
+        raw = str(row.get("path") or "").strip()
+        if not raw:
+            removed += 1
+            continue
+        path = Path(raw)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        if path.is_file():
+            kept.append(row)
+        else:
+            removed += 1
+    if removed:
+        _save(kept[-250:])
+    return removed
+
+
 def list_assets(asset_type: str | None = None, limit: int = 40) -> list[dict]:
-    rows = list(reversed(_load()))
+    rows = _load()
+    filtered: list[dict] = []
+    dirty = False
+    for row in rows:
+        raw = str(row.get("path") or "").strip()
+        if not raw:
+            dirty = True
+            continue
+        path = Path(raw)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        if not path.is_file():
+            dirty = True
+            continue
+        filtered.append(row)
+    if dirty:
+        _save(filtered[-250:])
+    rows = list(reversed(filtered))
     if asset_type:
         rows = [row for row in rows if row.get("type") == asset_type]
     return rows[: max(1, min(int(limit), 200))]

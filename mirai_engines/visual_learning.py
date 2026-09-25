@@ -174,6 +174,27 @@ class VisualLearningMemory:
                     profile_json = excluded.profile_json
             """, (int(video_id), now, json.dumps(profile, ensure_ascii=False)))
 
+    def video_profile(self, video_id: int) -> dict:
+        self._ensure_tables()
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT profile_json FROM video_visual_profiles WHERE video_id = ?",
+                (int(video_id),),
+            ).fetchone()
+        if not row:
+            return {}
+        try:
+            data = json.loads(row["profile_json"] or "{}")
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def update_video_profile(self, video_id: int, updates: dict) -> dict:
+        current = self.video_profile(video_id)
+        current.update(updates or {})
+        self.save_video_profile(video_id, current)
+        return current
+
     def record_performance(self, *, video_id: int, checkpoint_hours: int,
                            avg_view_percentage: float, views: int,
                            analytics_score: float) -> None:
