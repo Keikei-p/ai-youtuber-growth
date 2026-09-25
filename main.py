@@ -41,6 +41,7 @@ def upload_results(
     privacy_status: str | None = None,
     force: bool = False,
     max_items: int | None = None,
+    cleanup_local: bool = True,
 ) -> None:
     if settings.dry_run and not force:
         print("[UPLOAD] DRY_RUN=true のためYouTube投稿は実行しません。")
@@ -72,12 +73,15 @@ def upload_results(
                 f"[UPLOAD] #{item['id']} -> YouTube ID {youtube_id} "
                 f"[{effective_privacy}]"
             )
-            try:
-                cleanup_uploaded_media(item["id"], item.get("output_path"))
-                if settings.cleanup_after_upload:
-                    item["output_path"] = None
-            except Exception as cleanup_exc:
-                print(f"[CLEANUP] 投稿は成功済みですが削除処理でエラー: {cleanup_exc}")
+            if cleanup_local:
+                try:
+                    cleanup_uploaded_media(item["id"], item.get("output_path"))
+                    if settings.cleanup_after_upload:
+                        item["output_path"] = None
+                except Exception as cleanup_exc:
+                    print(f"[CLEANUP] 投稿は成功済みですが削除処理でエラー: {cleanup_exc}")
+            else:
+                print("[TEST-UPLOAD] 確認用にローカル動画を残します。")
         except Exception as exc:
             item["upload_error"] = str(exc)
             print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
@@ -252,6 +256,7 @@ def run_private_upload_test() -> list[dict]:
         privacy_status="private",
         force=True,
         max_items=1,
+        cleanup_local=False,
     )
     return results
 
