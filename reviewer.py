@@ -1,6 +1,8 @@
 from __future__ import annotations
 import re
 
+from legal_guard import assess_publish_risk
+
 BANNED_PHRASES = [
     "絶対に稼げる",
     "100%儲かる",
@@ -27,5 +29,11 @@ def review_script(title: str, script: str, recent: list[dict]) -> tuple[bool, li
         if old_script and normalized == old_script:
             issues.append("exact_duplicate_script")
             break
+
+    for risk in assess_publish_risk(
+        title=title,
+        script=script,
+    ):
+        issues.append(f"legal_risk:{risk.code}")
 
     return (len(issues) == 0, issues)
