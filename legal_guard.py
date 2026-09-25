@@ -99,6 +99,96 @@ def assess_publish_risk(
     return list(unique.values())
 
 
+_ZUNKO_VOICE_CREDITS = (
+    "VOICEVOX:ずんだもん",
+    "VOICEVOX:東北ずん子",
+    "VOICEVOX:東北きりたん",
+    "VOICEVOX:東北イタコ",
+    "VOICEVOX:四国めたん",
+    "VOICEVOX:九州そら",
+    "VOICEVOX:中国うさぎ",
+    "VOICEVOX:中部つるぎ",
+    "VOICEVOX:あんこもん",
+)
+
+
+def assess_voice_license_risk(
+    *,
+    text: str,
+    required_credit: str,
+) -> list[PublishRisk]:
+    """
+    現在使っている音声ライブラリ固有の禁止用途。
+    法律一般ではなく、音源ライセンス遵守のためのハード停止。
+    """
+    credit = str(required_credit or "").strip()
+    if not credit or not credit.startswith(_ZUNKO_VOICE_CREDITS):
+        return []
+
+    risks: list[PublishRisk] = []
+
+    if re.search(
+        r"(政治|政党|選挙|候補者|国会|内閣|首相|大統領|政府|"
+        r"政治家|政治団体|宗教|宗派|教団|宗教家|信仰|布教)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        risks.append(
+            PublishRisk(
+                "voice_license_politics_religion",
+                "block",
+                "現在のVOICEVOX音源規約では政治・宗教に関する利用を避ける必要があります。",
+            )
+        )
+
+    if re.search(
+        r"(情報商材|高額情報教材|高額塾|稼ぐ教材|副業教材を販売|"
+        r"副業ノウハウを販売|情報教材を販売)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        risks.append(
+            PublishRisk(
+                "voice_license_information_product",
+                "block",
+                "現在のVOICEVOX音源規約では情報商材での利用・宣伝が禁止されています。",
+            )
+        )
+
+    if re.search(
+        r"(虚偽情報を流す|嘘の情報を流す|フェイクニュースを作る|"
+        r"誤解させるために|デマを拡散)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        risks.append(
+            PublishRisk(
+                "voice_license_fake_content",
+                "block",
+                "現在のVOICEVOX音源規約では意図的な虚偽・誤解を招く内容の作成や拡散が禁止されています。",
+            )
+        )
+
+    if re.search(
+        r"(性風俗|風俗店|アダルトサービス|成人向けサービス|"
+        r"接待飲食店の宣伝)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        risks.append(
+            PublishRisk(
+                "voice_license_adult_business",
+                "block",
+                "現在のVOICEVOX音源規約で禁止される業態に関する利用の可能性があります。",
+            )
+        )
+
+    unique: dict[str, PublishRisk] = {}
+    for risk in risks:
+        unique.setdefault(risk.code, risk)
+    return list(unique.values())
+
+
 def _approval_key(video_id: int) -> str:
     return f"legal_publish_approved_{int(video_id)}"
 
@@ -128,17 +218,44 @@ def publish_gate(
         description=description,
     )
 
-    if required_credit and required_credit not in description:
-        risks.append(
+    full_text = " ".join((title, script, description))
+    hard_risks = assess_voice_license_risk(
+        text=full_text,
+        required_credit=required_credit,
+    )
+
+    if required_credit == "__UNRESOLVED_REQUIRED_VOICE_CREDIT__":
+        hard_risks.append(
+            PublishRisk(
+                "unresolved_voice_credit",
+                "block",
+                "必須の音声クレジットを解決できないため公開できません。",
+            )
+        )
+    elif required_credit and required_credit not in description:
+        hard_risks.append(
             PublishRisk(
                 "missing_voice_credit",
-                "high",
+                "block",
                 f"必要な音声クレジット「{required_credit}」が概要欄にありません。",
             )
         )
 
+    if hard_risks:
+        return {
+            "allowed": False,
+            "hard_blocked": True,
+            "risks": [asdict(risk) for risk in hard_risks],
+            "approval_id": None,
+        }
+
     if not risks:
-        return {"allowed": True, "risks": [], "approval_id": None}
+        return {
+            "allowed": True,
+            "hard_blocked": False,
+            "risks": [],
+            "approval_id": None,
+        }
 
     if video_id > 0 and is_publish_approved(video_id):
         return {
