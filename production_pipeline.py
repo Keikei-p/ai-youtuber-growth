@@ -60,11 +60,6 @@ def _ensure_mirai_visual(item: dict) -> str | None:
     )
     item["mirai_expression"] = expression
 
-    configured = Path(settings.character_image)
-    if configured.exists():
-        item["character_image_path"] = str(configured)
-        return str(configured)
-
     folder = GENERATED_ROOT / "mirai"
     existing = _latest_matching(folder, f"mirai_{expression}_")
     if existing:
@@ -86,7 +81,15 @@ def _ensure_mirai_visual(item: dict) -> str | None:
             exc,
             {"video_id": item.get("id"), "expression": expression},
         )
-        print(f"[PIPELINE][IMAGE] ミライ画像は既存/代替表示へ: {exc}")
+        configured = Path(settings.character_image)
+        if configured.exists():
+            item["character_image_path"] = str(configured)
+            print(
+                "[PIPELINE][IMAGE] ミライ画像生成失敗のため"
+                "既定キャラ画像へフォールバック"
+            )
+            return str(configured)
+        print(f"[PIPELINE][IMAGE] ミライ画像は代替表示へ: {exc}")
         return None
 
 
