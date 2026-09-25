@@ -378,6 +378,63 @@ def _render_motion_segment(
     return output_path
 
 
+def _render_ai_background_segment(
+    ai_video_path: Path,
+    frame_path: Path,
+    output_path: Path,
+    duration: float,
+) -> Path:
+    """
+    AI動画を動く背景として使い、既存の完成フレームを半透明で重ねる。
+    字幕・キャラ・タイトルを残しつつ、AI動画の動きを見せる。
+    """
+    duration = max(float(duration), 0.35)
+    filter_complex = (
+        f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={WIDTH}:{HEIGHT},fps=30,format=yuv420p[bg];"
+        f"[1:v]scale={WIDTH}:{HEIGHT},format=rgba,"
+        "colorchannelmixer=aa=0.64[fg];"
+        "[bg][fg]overlay=0:0:shortest=1,format=yuv420p[outv]"
+    )
+
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(ai_video_path),
+            "-loop",
+            "1",
+            "-framerate",
+            "30",
+            "-i",
+            str(frame_path),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[outv]",
+            "-t",
+            f"{duration:.4f}",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return output_path
+
+
 def render_short(
     title: str,
     script: str,
@@ -389,6 +446,7 @@ def render_short(
     character_image_path: str | None = None,
     background_image_path: str | None = None,
     background_image_paths: list[str] | None = None,
+    ai_video_path: str | None = None,
 ) -> Path:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg が見つかりません。FFmpegをインストールしてください。")
@@ -418,15 +476,41 @@ def render_short(
         frames.append(frame)
 
     # 静止画をそのまま並べず、各シーンに軽いカメラモーションを付ける。
+    # AI動画素材がある場合は1シーン目だけ動く背景として実際に使用する。
+    ai_path = (
+        Path(ai_video_path)
+        if ai_video_path and Path(ai_video_path).is_file()
+        else None
+    )
     segments: list[Path] = []
     for i, frame in enumerate(frames):
         segment = work / f"segment_{i:03d}.mp4"
-        _render_motion_segment(
-            frame_path=frame,
-            output_path=segment,
-            duration=per,
-            index=i,
-        )
+        if i == 0 and ai_path is not None:
+            try:
+                _render_ai_background_segment(
+                    ai_video_path=ai_path,
+                    frame_path=frame,
+                    output_path=segment,
+                    duration=per,
+                )
+            except Exception as exc:
+                print(
+                    "[VIDEO] AI動画背景の合成に失敗。"
+                    f"軽量モーションへ戻します: {exc}"
+                )
+                _render_motion_segment(
+                    frame_path=frame,
+                    output_path=segment,
+                    duration=per,
+                    index=i,
+                )
+        else:
+            _render_motion_segment(
+                frame_path=frame,
+                output_path=segment,
+                duration=per,
+                index=i,
+            )
         segments.append(segment)
 
     concat = work / "concat.txt"
