@@ -44,12 +44,14 @@ from runtime_control import (
     set_post_times,
     set_posts_per_day,
     set_upload_privacy,
+    request_runtime_cancel,
     set_web_interval_seconds,
     upload_privacy,
     web_interval_seconds,
 )
 from resource_governor import resource_snapshot
 from scheduler import (
+    abort_full_test,
     full_test_status,
     prepare_upcoming,
     run_due,
@@ -931,6 +933,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div class="actions">
         <button class="primary" onclick="runAction('remote_on')">リモート管理を有効化</button>
         <button onclick="runAction('remote_status')">状態を確認</button>
+        <button class="danger" onclick="safeStop()">安全停止</button>
         <button onclick="runAction('remote_off')">解除</button>
       </div>
       <div class="small" style="margin-top:8px">初回だけPCとスマホへTailscaleを導入し、同じtailnetへログインする必要があります。</div>
@@ -1170,6 +1173,12 @@ async function runNightTest(){
   alert(data.message);
   refresh();
 }
+async function safeStop(){
+  if(!confirm('自動生成・自動投稿を停止し、未投稿の完全テストキューも止めます。実行しますか？')) return;
+  const data=await api('/api/action',{action:'safe_stop'});
+  alert(data.message);
+  refresh();
+}
 async function updateRestart(){
   if(!confirm('GitHubの最新版を取り込み、Webアプリを再起動します。よろしいですか？')) return;
   const data=await api('/api/action',{action:'update_restart'});
@@ -1374,6 +1383,23 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/action":
                 action = str(body.get("action") or "")
+
+                if action == "safe_stop":
+                    request_runtime_cancel()
+                    set_automation_enabled(False)
+                    set_auto_upload_enabled(False)
+                    set_ai_video_enabled(False)
+                    cancelled = abort_full_test("安全停止")
+                    _wake_event.set()
+                    self._json({
+                        "ok": True,
+                        "message": (
+                            "安全停止しました。"
+                            f" 未投稿テストキュー {cancelled}件を停止。"
+                            " 現在の小工程は終了後、次工程へ進みません。"
+                        ),
+                    })
+                    return
 
                 if action == "resolve_approval":
                     request_id = int(body.get("request_id") or 0)
