@@ -97,6 +97,48 @@ def _normalize_post_times(value: str) -> str:
 def set_post_times(value: str) -> None:
     set_channel_state("post_times", _normalize_post_times(value))
 
+
+DAILY_AUTO_PRESETS = {
+    1: "12:00",
+    2: "12:00,20:00",
+    3: "09:00,15:00,21:00",
+}
+
+
+def apply_daily_auto_preset(count: int) -> dict:
+    count = int(count)
+    if count not in DAILY_AUTO_PRESETS:
+        raise ValueError("daily auto preset must be 1, 2, or 3")
+    set_posts_per_day(count)
+    set_post_times(DAILY_AUTO_PRESETS[count])
+    set_automation_enabled(True)
+    set_auto_upload_enabled(True)
+    return daily_auto_status()
+
+
+def disable_daily_auto() -> dict:
+    set_auto_upload_enabled(False)
+    set_automation_enabled(False)
+    return daily_auto_status()
+
+
+def daily_auto_status() -> dict:
+    enabled = automation_enabled() and auto_upload_enabled()
+    current_count = posts_per_day()
+    current_times = post_times()
+    preset = None
+    for count, times in DAILY_AUTO_PRESETS.items():
+        if current_count == count and current_times == times:
+            preset = count
+            break
+    return {
+        "enabled": enabled,
+        "posts_per_day": current_count,
+        "post_times": current_times,
+        "preset": preset,
+    }
+
+
 def guest_appearance_every() -> int:
     return _int_state(
         "guest_appearance_every",

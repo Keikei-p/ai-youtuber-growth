@@ -30,8 +30,11 @@ from quick_test import run_quick_diagnostics
 from paths import VIDEO_DIR
 from runtime_control import (
     ai_video_enabled,
+    apply_daily_auto_preset,
     auto_upload_enabled,
     automation_enabled,
+    daily_auto_status,
+    disable_daily_auto,
     guest_appearance_every,
     guest_image_auto_enabled,
     guest_new_every,
@@ -79,6 +82,7 @@ from storage import (
     video_by_id,
 )
 from voice.provider import voice_attribution_status, voice_provider_status
+from voice.model_manager import native_voice_status, prepare_training_manifest
 from studio.asset_store import GENERATED_ROOT, list_assets
 from studio.image_generator import (
     generate_background_image,
@@ -112,6 +116,8 @@ _wake_event = threading.Event()
 _http_server: ThreadingHTTPServer | None = None
 _storage_cache_at = 0.0
 _storage_cache: dict = {}
+_native_voice_cache_at = 0.0
+_native_voice_cache: dict = {}
 
 
 def _cached_storage_snapshot() -> dict:
@@ -121,6 +127,18 @@ def _cached_storage_snapshot() -> dict:
         _storage_cache = storage_snapshot()
         _storage_cache_at = now
     return dict(_storage_cache)
+
+
+def _cached_native_voice_status() -> dict:
+    global _native_voice_cache_at, _native_voice_cache
+    now = time.time()
+    if (
+        not _native_voice_cache
+        or now - _native_voice_cache_at >= 60
+    ):
+        _native_voice_cache = native_voice_status()
+        _native_voice_cache_at = now
+    return dict(_native_voice_cache)
 
 
 def _append_log(text: str) -> None:
@@ -268,11 +286,23 @@ def _engine_status() -> dict:
     voice = voice_provider_status()
     quality_rows = MiraiQualityEngine().recent(1)
     debug_rows = MiraiDebugEngine().recent(1)
+    native_voice = _cached_native_voice_status()
+    native_model = native_voice.get("model") or {}
+    native_dataset = native_voice.get("dataset") or {}
     return {
         "voice": {
             "name": "Mirai Voice Engine",
             "available": bool(voice["available"]),
             "detail": f"provider={voice['name']}",
+        },
+        "native_voice": {
+            "name": "Mirai Native Voice",
+            "available": bool(native_model.get("ready")),
+            "detail": (
+                f"学習素材 {native_dataset.get('valid_count', 0)}件 / "
+                f"{native_dataset.get('total_minutes', 0)}分 / "
+                f"{native_model.get('detail') or '準備中'}"
+            ),
         },
         "composer": {
             "name": "Mirai Composer",
@@ -480,6 +510,7 @@ def _status_payload() -> dict:
         "interval_seconds": web_interval_seconds(),
         "posts_per_day": posts_per_day(),
         "post_times": post_times(),
+        "daily_auto": daily_auto_status(),
         "guest_every": guest_appearance_every(),
         "guest_new_every": guest_new_every(),
         "guest_image_auto_enabled": guest_image_auto_enabled(),
@@ -502,6 +533,7 @@ def _status_payload() -> dict:
             **voice_provider_status(),
             "selected": voice_provider_name(),
         },
+        "native_voice": _cached_native_voice_status(),
         "engines": _engine_status(),
         "rights": _rights_status(),
         "system_ready": all(services.values()),
@@ -997,6 +1029,21 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
     </section>
 
     <section class="card">
+      <h2>毎日自動投稿</h2>
+      <div id="dailyAutoStatus" class="studio-status small"></div>
+      <div class="actions">
+        <button id="dailyAuto1" onclick="setDailyAuto(1)">毎日1本</button>
+        <button id="dailyAuto2" onclick="setDailyAuto(2)">毎日2本</button>
+        <button id="dailyAuto3" onclick="setDailyAuto(3)">毎日3本</button>
+        <button class="danger" onclick="setDailyAuto(0)">停止</button>
+      </div>
+      <div class="small" style="margin-top:8px">
+        1本=12:00 / 2本=12:00・20:00 / 3本=09:00・15:00・21:00。
+        公開/非公開は左の「公開設定」をそのまま使います。
+      </div>
+    </section>
+
+    <section class="card">
       <h2>システム状態</h2>
       <div id="services"></div>
       <div class="actions" style="margin-top:12px">
@@ -1008,6 +1055,10 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <h2>Mirai 自作エンジン</h2>
       <p class="small">判断・構成・品質・原因究明・改善はミライ側。外部ツールはprovider/実行器として使用します。</p>
       <div id="engineStatus"></div>
+      <div id="voiceTrainingStatus" class="studio-status small" style="margin-top:12px"></div>
+      <div class="actions">
+        <button onclick="runAction('voice_training_check')">自作音声の学習素材チェック</button>
+      </div>
     </section>
 
     <section class="card half">
@@ -1232,6 +1283,22 @@ async function refresh(){
     ].map(x=>
       '<div class="row"><span><b>'+escapeHtml(x[0])+'</b><div class="small">'+escapeHtml(x[2])+'</div></span>'+badge(x[1])+'</div>'
     ).join('');
+    const da=state.daily_auto||{};
+    dailyAutoStatus.textContent=da.enabled
+      ? ('ON / 毎日'+da.posts_per_day+'本 / '+escapeHtml(da.post_times||''))
+      : 'OFF';
+    [1,2,3].forEach(n=>{
+      const el=document.getElementById('dailyAuto'+n);
+      if(el) el.className=(da.enabled&&Number(da.preset)===n)?'primary':'';
+    });
+    const nv=state.native_voice||{};
+    const nd=nv.dataset||{};
+    const nm=nv.model||{};
+    voiceTrainingStatus.textContent=
+      '学習素材 '+Number(nd.valid_count||0)+'件 / '+
+      Number(nd.total_minutes||0).toFixed(2)+'分 / '+
+      (nm.ready?'モデル準備OK':(nm.detail||'モデル準備中'));
+
     if(document.activeElement!==postsPerDay) postsPerDay.value=state.posts_per_day;
     if(document.activeElement!==postTimes) postTimes.value=state.post_times;
     if(document.activeElement!==guestEvery) guestEvery.value=state.guest_every;
@@ -1422,11 +1489,22 @@ async function saveOperationSettings(){
     posts_per_day:Number(postsPerDay.value),
     post_times:postTimes.value,
     guest_every:Number(guestEvery.value),
-    guest_new_every:Number(guestNewEvery.value)
+    guest_new_every:Number(guestNewEvery.value),
+    voice_provider:String(voiceProvider.value||'voicevox')
   };
   const data=await api('/api/settings',body);
   alert(data.message);
   refresh();
+}
+
+async function setDailyAuto(count){
+  const label=count===0?'毎日自動投稿を停止':'毎日'+count+'本の自動投稿をON';
+  if(!confirm(label+'にします。公開設定は現在の設定を使います。よろしいですか？')) return;
+  try{
+    const data=await api('/api/daily-auto',{count:Number(count)});
+    alert(data.message);
+    await refresh();
+  }catch(e){alert(e.message)}
 }
 
 async function saveVisualSettings(){
@@ -1640,6 +1718,41 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
 
+            if path == "/api/daily-auto":
+                count = int(body.get("count") or 0)
+                if count == 0:
+                    status = disable_daily_auto()
+                    _wake_event.set()
+                    self._json({
+                        "ok": True,
+                        "message": "毎日自動投稿を停止しました。",
+                        "daily_auto": status,
+                    })
+                    return
+                if count not in {1, 2, 3}:
+                    self._json(
+                        {"message": "1日1〜3本から選んでください。"},
+                        400,
+                    )
+                    return
+                if not Path(settings.youtube_token_file).exists():
+                    self._json(
+                        {"message": "YouTube認証が未完了です。"},
+                        400,
+                    )
+                    return
+                status = apply_daily_auto_preset(count)
+                _wake_event.set()
+                self._json({
+                    "ok": True,
+                    "message": (
+                        f"毎日{count}本の自動投稿をONにしました。"
+                        f" 時刻: {status['post_times']}"
+                    ),
+                    "daily_auto": status,
+                })
+                return
+
             if path == "/api/settings":
                 if "automation_enabled" in body:
                     set_automation_enabled(bool(body["automation_enabled"]))
@@ -1806,6 +1919,14 @@ class Handler(BaseHTTPRequestHandler):
                         )),
                     ),
                     "services": ("AIサービス起動確認", _ensure_local_services),
+                    "voice_training_check": (
+                        "自作音声の学習素材チェック",
+                        lambda: print(json.dumps(
+                            prepare_training_manifest(),
+                            ensure_ascii=False,
+                            indent=2,
+                        )),
+                    ),
                     "improvement_review": (
                         "AI改善分析",
                         lambda: print(json.dumps(
