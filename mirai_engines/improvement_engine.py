@@ -6,6 +6,7 @@ from typing import Any
 from storage import analytics_history, get_channel_state
 from .debug_engine import MiraiDebugEngine
 from .quality_engine import MiraiQualityEngine
+from .visual_learning import VisualLearningMemory
 
 
 class MiraiImprovementEngine:
@@ -18,6 +19,7 @@ class MiraiImprovementEngine:
         quality = MiraiQualityEngine().recent(20)
         debug = MiraiDebugEngine().recent(20)
         analytics = analytics_history(20)
+        visual = VisualLearningMemory().dashboard_state()
 
         recommendations: list[dict[str, str]] = []
         actions: list[dict[str, Any]] = []
@@ -97,6 +99,31 @@ class MiraiImprovementEngine:
                     }
                 )
 
+        visual_avg = visual.get("avg_score")
+        if visual_avg is not None and float(visual_avg) < 72:
+            recommendations.append(
+                {
+                    "area": "image",
+                    "priority": "high",
+                    "action": "Visual Evolutionの候補比較と再生成を継続する",
+                    "reason": (
+                        "最近採用した生成素材の平均品質が"
+                        f"{float(visual_avg):.1f}点です。"
+                    ),
+                }
+            )
+            actions.append(
+                {
+                    "action_type": "prompt_tuning",
+                    "title": "Visual prompt品質補正を継続",
+                    "value": {
+                        "preferred_profile": visual.get("preferred_profile"),
+                        "avg_score": visual_avg,
+                    },
+                    "reason": "Visual Quality平均が目標未満のため。",
+                }
+            )
+
         retention_values = [
             float(row.get("avg_view_percentage") or 0)
             for row in analytics
@@ -135,5 +162,6 @@ class MiraiImprovementEngine:
             "current_guidance": {
                 "script": get_channel_state("autonomous_script_guidance", ""),
                 "planner": get_channel_state("autonomous_planner_guidance", ""),
+                "visual": visual,
             },
         }

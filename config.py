@@ -76,6 +76,13 @@ class Settings:
         os.getenv("STUDIO_SCENE_IMAGES_PER_VIDEO", "2")
     )
 
+    # Visual Evolution v1。GTX 1070で落ちにくい範囲で候補比較する。
+    visual_candidate_count: int = int(os.getenv("VISUAL_CANDIDATE_COUNT", "2"))
+    visual_background_candidates: int = int(os.getenv("VISUAL_BACKGROUND_CANDIDATES", "1"))
+    visual_retry_rounds: int = int(os.getenv("VISUAL_RETRY_ROUNDS", "1"))
+    visual_min_score: int = int(os.getenv("VISUAL_MIN_SCORE", "60"))
+    visual_video_min_score: int = int(os.getenv("VISUAL_VIDEO_MIN_SCORE", "60"))
+
     # AI動画は1070では重いため初期OFF。ON時も1本ずつ直列生成。
     ai_video_enabled: bool = (
         os.getenv("AI_VIDEO_ENABLED", "false").lower() == "true"

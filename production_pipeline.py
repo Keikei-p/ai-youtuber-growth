@@ -20,6 +20,8 @@ from storage import (
 from self_improvement import effective_scene_image_count, record_failure
 from mirai_engines.composer import MiraiComposer
 from mirai_engines.quality_engine import MiraiQualityEngine
+from mirai_engines.visual_learning import VisualLearningMemory
+from mirai_engines.visual_quality_engine import MiraiVisualQualityEngine
 from mirai_engines.voice_engine import MiraiVoiceEngine
 from studio.asset_store import GENERATED_ROOT
 from studio.image_generator import (
@@ -71,13 +73,23 @@ def _ensure_mirai_visual(item: dict) -> str | None:
     folder = GENERATED_ROOT / "mirai"
     existing = _latest_matching(folder, f"mirai_{expression}_")
     if existing:
-        item["character_image_path"] = str(existing)
-        return str(existing)
+        report = MiraiVisualQualityEngine().inspect_image(existing, asset_type="mirai")
+        item["mirai_visual_quality"] = report
+        threshold = max(40, min(int(getattr(settings, "visual_min_score", 60)), 95))
+        if bool(report.get("passed")) and int(report.get("score") or 0) >= threshold:
+            item["character_image_path"] = str(existing)
+            item["mirai_visual"] = VisualLearningMemory().find_by_path(existing) or {
+                "score": int(report.get("score") or 0), "profile": "",
+                "metrics": report.get("metrics") or {},
+            }
+            return str(existing)
+        print("[PIPELINE][IMAGE] 既存ミライ画像が品質基準未満のため再生成します。")
 
     try:
         print(f"[PIPELINE][IMAGE] ミライ表情を生成: {expression}")
         path = generate_mirai_image(expression)
         item["character_image_path"] = path
+        item["mirai_visual"] = VisualLearningMemory().find_by_path(path)
         return path
     except Exception as exc:
         item["visual_warning"] = (
@@ -136,6 +148,9 @@ def _generate_backgrounds(item: dict) -> list[str]:
                 _background_theme(item, scene_index, total)
             )
             paths.append(path)
+            item.setdefault("background_visuals", []).append(
+                VisualLearningMemory().find_by_path(path)
+            )
         except Exception as exc:
             item["visual_warning"] = (
                 str(item.get("visual_warning") or "")
@@ -190,7 +205,32 @@ def _generate_ai_video_asset(item: dict) -> str | None:
         return None
     try:
         print(f"[PIPELINE][AI-VIDEO] #{item['id']} 短いAI動画素材を生成")
-        path = generate_animatediff_clip(_ai_video_prompt(item))
+        prompt = _ai_video_prompt(item)
+        path = generate_animatediff_clip(prompt)
+        report = MiraiVisualQualityEngine().inspect_video_asset(
+            path, asset_type="ai_video"
+        )
+        item["ai_video_visual"] = report
+        threshold = max(
+            40, min(int(getattr(settings, "visual_video_min_score", 60)), 95)
+        )
+        accepted = bool(report.get("passed")) and int(report.get("score") or 0) >= threshold
+        VisualLearningMemory().record_result(
+            asset_type="ai_video", path=path, prompt=prompt,
+            backend=str(settings.ai_video_backend), profile="animatediff",
+            score=int(report.get("score") or 0),
+            passed=bool(report.get("passed")), accepted=accepted,
+            metrics=report.get("metrics") or {},
+            meta={"video_id": item.get("id")},
+        )
+        if not accepted:
+            record_failure(
+                "ai_video.visual_quality",
+                f"AI動画素材のVisual Quality {report.get('score')}/100で不採用",
+                {"video_id": item.get("id"), "quality": report},
+            )
+            print("[PIPELINE][AI-VIDEO] 品質基準未満のため画像ベースへフォールバックします。")
+            return None
         item["ai_video_path"] = path
         return path
     except Exception as exc:
@@ -214,7 +254,18 @@ def _ensure_guest_visual(item: dict) -> str | None:
 
     existing = guest.get("image_path")
     if existing and Path(existing).exists():
-        return str(existing)
+        report = MiraiVisualQualityEngine().inspect_image(existing, asset_type="guest")
+        item["guest_visual_quality"] = report
+        threshold = max(40, min(int(getattr(settings, "visual_min_score", 60)), 95))
+        if bool(report.get("passed")) and int(report.get("score") or 0) >= threshold:
+            item["guest_visual"] = VisualLearningMemory().find_by_path(existing) or {
+                "score": int(report.get("score") or 0), "profile": "",
+                "metrics": report.get("metrics") or {},
+            }
+            return str(existing)
+        if not guest_image_auto_enabled():
+            return str(existing)
+        print("[PIPELINE][IMAGE] 既存ゲスト画像が品質基準未満のため再生成します。")
 
     if not guest_image_auto_enabled():
         return None
@@ -236,6 +287,7 @@ def _ensure_guest_visual(item: dict) -> str | None:
         path = generate_guest_image(row)
         guest["image_path"] = path
         item["guest"] = guest
+        item["guest_visual"] = VisualLearningMemory().find_by_path(path)
         return path
     except Exception as exc:
         item["visual_warning"] = (
@@ -254,10 +306,44 @@ def _ensure_guest_visual(item: dict) -> str | None:
         return None
 
 
+def _save_video_visual_profile(item: dict) -> None:
+    records: list[dict] = []
+    for key in ("mirai_visual", "guest_visual"):
+        value = item.get(key)
+        if isinstance(value, dict):
+            records.append(value)
+    for value in item.get("background_visuals") or []:
+        if isinstance(value, dict):
+            records.append(value)
+    profiles = [
+        str(record.get("profile") or "")
+        for record in records
+        if str(record.get("profile") or "")
+    ]
+    scores = [
+        float(record.get("score") or 0)
+        for record in records
+        if record.get("score") is not None
+    ]
+    ai_quality = item.get("ai_video_visual") or {}
+    VisualLearningMemory().save_video_profile(
+        int(item["id"]),
+        {
+            "expression": item.get("mirai_expression"),
+            "profiles": profiles,
+            "visual_scores": scores,
+            "avg_visual_score": round(sum(scores) / len(scores), 2) if scores else None,
+            "ai_video_used": bool(item.get("ai_video_path")),
+            "ai_video_score": ai_quality.get("score"),
+        },
+    )
+
+
 def prepare_visuals(results: list[dict]) -> None:
     """
     画像工程だけを直列実行する。
     Ollama文章モデルは先にVRAMから降ろし、同時に複数画像を生成しない。
+    Visual Evolutionは候補比較・品質ゲート・学習保存を直列で行う。
     """
     if not results:
         return
@@ -272,6 +358,7 @@ def prepare_visuals(results: list[dict]) -> None:
         _ensure_guest_visual(item)
         _generate_backgrounds(item)
         _generate_ai_video_asset(item)
+        _save_video_visual_profile(item)
 
     release_torch_cuda_cache()
     print("[PIPELINE] STEP 2/4 画像工程完了")

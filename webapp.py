@@ -83,6 +83,7 @@ from studio.video_generator import (
 from self_improvement import improvement_state, run_improvement_review
 from mirai_engines.quality_engine import MiraiQualityEngine
 from mirai_engines.debug_engine import MiraiDebugEngine
+from mirai_engines.visual_learning import VisualLearningMemory
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -274,6 +275,18 @@ def _engine_status() -> dict:
                 if OllamaClient().available()
                 else "自作ロジックのみ"
             ),
+        },
+        "visual": {
+            "name": "Mirai Visual Evolution",
+            "available": True,
+            "detail": (
+                lambda state: (
+                    "候補比較・品質ゲート・視聴学習 / "
+                    f"memory={state.get('memory_count', 0)} / "
+                    f"avg={state.get('avg_score') if state.get('avg_score') is not None else '-'} / "
+                    f"profile={state.get('preferred_profile') or '-'}"
+                )
+            )(VisualLearningMemory().dashboard_state()),
         },
     }
 

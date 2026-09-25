@@ -14,6 +14,8 @@ import requests
 from PIL import Image
 
 from config import settings
+from mirai_engines.visual_learning import VisualLearningMemory
+from mirai_engines.visual_quality_engine import MiraiVisualQualityEngine
 from gpu_manager import (
     exclusive_gpu_task,
     release_torch_cuda_cache,
@@ -236,15 +238,20 @@ def _run_diffusers_once(
     prompt: str,
     preset: ImagePreset,
     device: str,
+    *,
+    seed: int | None = None,
 ) -> Image.Image:
     import torch
 
     pipe = _load_diffusers_pipeline(device)
     generator = None
     seed_raw = os.getenv("STUDIO_SEED", "").strip()
-    if seed_raw:
+    seed_value = seed
+    if seed_value is None and seed_raw:
+        seed_value = int(seed_raw)
+    if seed_value is not None:
         generator = torch.Generator(device=device).manual_seed(
-            int(seed_raw)
+            int(seed_value)
         )
 
     result = pipe(
@@ -296,6 +303,8 @@ def _looks_like_cuda_problem(exc: Exception) -> bool:
 def _generate_diffusers(
     prompt: str,
     preset: ImagePreset,
+    *,
+    seed: int | None = None,
 ) -> tuple[Image.Image, str]:
     import torch
 
@@ -320,6 +329,7 @@ def _generate_diffusers(
                         prompt,
                         preset,
                         "cuda",
+                        seed=seed,
                     )
                     return image, "diffusers-cuda"
                 except Exception as exc:
@@ -351,6 +361,7 @@ def _generate_diffusers(
                 prompt,
                 _cpu_fallback_preset(preset),
                 "cpu",
+                seed=seed,
             )
             return image, "diffusers-cpu"
 
@@ -368,6 +379,8 @@ def _generate_diffusers(
 def _generate_webui(
     prompt: str,
     preset: ImagePreset,
+    *,
+    seed: int | None = None,
 ) -> Image.Image:
     response = requests.post(
         settings.sd_webui_url.rstrip("/") + "/sdapi/v1/txt2img",
@@ -380,6 +393,7 @@ def _generate_webui(
             "cfg_scale": preset.guidance_scale,
             "sampler_name": preset.sampler_name,
             "batch_size": 1,
+            "seed": int(seed) if seed is not None else -1,
         },
         timeout=300,
     )
@@ -396,15 +410,17 @@ def _generate_webui(
 def _generate(
     prompt: str,
     preset: ImagePreset,
+    *,
+    seed: int | None = None,
 ) -> tuple[Image.Image, str]:
     backend = _resolve_backend()
     if backend == "diffusers":
         try:
-            return _generate_diffusers(prompt, preset)
+            return _generate_diffusers(prompt, preset, seed=seed)
         finally:
             # Ollama/VOICEVOXへGPUを返すため、画像生成後は必ず退避。
             _park_pipeline()
-    return _generate_webui(prompt, preset), backend
+    return _generate_webui(prompt, preset, seed=seed), backend
 
 
 def _save_image(
@@ -421,20 +437,168 @@ def _save_image(
     return path
 
 
+def _seed_base() -> int:
+    raw = os.getenv("STUDIO_SEED", "").strip()
+    if raw:
+        return int(raw)
+    return int(time.time_ns() % 2_000_000_000)
+
+
+def _visual_min_score() -> int:
+    return max(40, min(int(getattr(settings, "visual_min_score", 60)), 95))
+
+
+def _generate_best_image(
+    prompt: str,
+    preset: ImagePreset,
+    *,
+    asset_type: str,
+    meta: dict | None = None,
+) -> dict:
+    memory = VisualLearningMemory()
+    quality_engine = MiraiVisualQualityEngine()
+    preferred = memory.recommended_profile(asset_type)
+    candidate_count = (
+        max(1, min(int(getattr(settings, "visual_candidate_count", 2)), 4))
+        if asset_type in {"mirai", "guest"}
+        else max(1, min(int(getattr(settings, "visual_background_candidates", 1)), 3))
+    )
+    retry_rounds = max(0, min(int(getattr(settings, "visual_retry_rounds", 1)), 2))
+    threshold = _visual_min_score()
+    seed_base = _seed_base()
+    candidates: list[dict] = []
+    last_error: Exception | None = None
+
+    def run_candidate(attempt_index: int) -> None:
+        nonlocal last_error
+        profile = memory.profile_for_attempt(preferred, attempt_index)
+        evolved_prompt = memory.evolve_prompt(
+            prompt,
+            asset_type=asset_type,
+            profile=profile,
+        )
+        try:
+            generated, backend = _generate(
+                evolved_prompt,
+                preset,
+                seed=seed_base + attempt_index * 9973,
+            )
+            report = quality_engine.inspect_image(
+                generated,
+                asset_type=asset_type,
+            )
+            candidates.append({
+                "image": generated,
+                "backend": backend,
+                "quality": report,
+                "prompt": evolved_prompt,
+                "profile": profile,
+                "candidate_index": attempt_index,
+            })
+        except Exception as exc:
+            last_error = exc
+
+    for candidate_index in range(candidate_count):
+        run_candidate(candidate_index)
+
+    if not candidates and last_error is not None:
+        raise last_error
+    if not candidates:
+        raise RuntimeError("画像候補を生成できませんでした。")
+
+    best = max(candidates, key=lambda row: int(row["quality"].get("score") or 0))
+    for retry_index in range(retry_rounds):
+        if int(best["quality"].get("score") or 0) >= threshold:
+            break
+        run_candidate(candidate_count + retry_index)
+        best = max(candidates, key=lambda row: int(row["quality"].get("score") or 0))
+
+    for candidate in candidates:
+        if candidate is best:
+            continue
+        report = candidate["quality"]
+        memory.record_result(
+            asset_type=asset_type,
+            path="",
+            prompt=candidate["prompt"],
+            backend=candidate["backend"],
+            profile=candidate["profile"],
+            score=int(report.get("score") or 0),
+            passed=bool(report.get("passed")),
+            accepted=False,
+            metrics=report.get("metrics") or {},
+            meta={**(meta or {}), "candidate_index": candidate["candidate_index"]},
+        )
+
+    best_score = int(best["quality"].get("score") or 0)
+    if best_score < threshold:
+        report = best["quality"]
+        memory.record_result(
+            asset_type=asset_type,
+            path="",
+            prompt=best["prompt"],
+            backend=best["backend"],
+            profile=best["profile"],
+            score=best_score,
+            passed=bool(report.get("passed")),
+            accepted=False,
+            metrics=report.get("metrics") or {},
+            meta={**(meta or {}), "rejected_by_quality_floor": True},
+        )
+        raise RuntimeError(
+            f"Visual Quality {best_score}/100で基準{threshold}点未満のため採用しません。"
+        )
+    return best
+
+
+def _save_selected_visual(
+    selection: dict,
+    *,
+    folder: str,
+    prefix: str,
+    asset_type: str,
+    meta: dict | None = None,
+) -> Path:
+    path = _save_image(selection["image"], folder, prefix)
+    report = selection["quality"]
+    VisualLearningMemory().record_result(
+        asset_type=asset_type,
+        path=path,
+        prompt=selection["prompt"],
+        backend=selection["backend"],
+        profile=selection["profile"],
+        score=int(report.get("score") or 0),
+        passed=bool(report.get("passed")),
+        accepted=True,
+        metrics=report.get("metrics") or {},
+        meta=meta or {},
+    )
+    return path
+
+
+def _asset_visual_meta(selection: dict, meta: dict | None = None) -> dict:
+    quality = selection["quality"]
+    return {
+        **(meta or {}),
+        "visual_score": int(quality.get("score") or 0),
+        "visual_profile": selection["profile"],
+        "visual_metrics": quality.get("metrics") or {},
+        "visual_issues": quality.get("issues") or [],
+    }
+
+
 def generate_mirai_image(expression: str = "normal") -> str:
     prompt = build_mirai_prompt(expression)
-    image, backend = _generate(prompt, MIRAI_PRESET)
-    path = _save_image(
-        image,
-        "mirai",
-        f"mirai_{expression}",
+    selection = _generate_best_image(
+        prompt, MIRAI_PRESET, asset_type="mirai", meta={"expression": expression}
+    )
+    path = _save_selected_visual(
+        selection, folder="mirai", prefix=f"mirai_{expression}",
+        asset_type="mirai", meta={"expression": expression}
     )
     record_asset(
-        "mirai",
-        path,
-        prompt,
-        backend=backend,
-        meta={"expression": expression},
+        "mirai", path, selection["prompt"], backend=selection["backend"],
+        meta=_asset_visual_meta(selection, {"expression": expression}),
     )
     return str(path)
 
@@ -444,44 +608,36 @@ def generate_background_image(theme: str) -> str:
     if not theme:
         raise ValueError("背景テーマを入力してください。")
     prompt = build_background_prompt(theme)
-    image, backend = _generate(prompt, BACKGROUND_PRESET)
-    path = _save_image(
-        image,
-        "backgrounds",
-        "background",
+    selection = _generate_best_image(
+        prompt, BACKGROUND_PRESET, asset_type="background", meta={"theme": theme}
+    )
+    path = _save_selected_visual(
+        selection, folder="backgrounds", prefix="background",
+        asset_type="background", meta={"theme": theme}
     )
     record_asset(
-        "background",
-        path,
-        prompt,
-        backend=backend,
-        meta={"theme": theme},
+        "background", path, selection["prompt"], backend=selection["backend"],
+        meta=_asset_visual_meta(selection, {"theme": theme}),
     )
     return str(path)
 
 
 def generate_guest_image(row: dict) -> str:
     guest_id = int(row["id"])
-    guest_name = str(
-        row.get("name") or f"guest_{guest_id}"
-    )
+    guest_name = str(row.get("name") or f"guest_{guest_id}")
     prompt = build_guest_prompt(row)
-    image, backend = _generate(prompt, GUEST_PRESET)
-    path = _save_image(
-        image,
-        "guests",
-        f"guest_{guest_id}",
+    meta = {"guest_id": guest_id, "guest_name": guest_name}
+    selection = _generate_best_image(
+        prompt, GUEST_PRESET, asset_type="guest", meta=meta
+    )
+    path = _save_selected_visual(
+        selection, folder="guests", prefix=f"guest_{guest_id}",
+        asset_type="guest", meta=meta
     )
     set_guest_image(guest_id, str(path))
     record_asset(
-        "guest",
-        path,
-        prompt,
-        backend=backend,
-        meta={
-            "guest_id": guest_id,
-            "guest_name": guest_name,
-        },
+        "guest", path, selection["prompt"], backend=selection["backend"],
+        meta=_asset_visual_meta(selection, meta),
     )
     return str(path)
 

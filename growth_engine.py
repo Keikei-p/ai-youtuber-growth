@@ -1,7 +1,9 @@
 from __future__ import annotations
+import json
 from datetime import datetime, timezone
 
 from learner import build_channel_strategy, build_learning_note
+from mirai_engines.visual_learning import VisualLearningMemory
 from storage import (
     analytics_history,
     due_snapshot_candidates,
@@ -55,6 +57,13 @@ def run_growth_cycle() -> int:
                     note=note,
                     score=score,
                 )
+                VisualLearningMemory().record_performance(
+                    video_id=int(video["id"]),
+                    checkpoint_hours=checkpoint_hours,
+                    avg_view_percentage=float(metrics.get("averageViewPercentage") or 0),
+                    views=int(metrics.get("views") or 0),
+                    analytics_score=float(score or 0),
+                )
 
                 captured += 1
                 print(
@@ -73,8 +82,13 @@ def run_growth_cycle() -> int:
         history = analytics_history(limit=60)
         strategy = build_channel_strategy(history)
         set_channel_state("growth_strategy", strategy)
+        visual_strategy = VisualLearningMemory().build_strategy()
         print("[GROWTH] チャンネル成長戦略を更新しました。")
         print(f"         {strategy}")
+        print(
+            "[GROWTH] Visual Strategy更新: "
+            f"{json.dumps(visual_strategy, ensure_ascii=False)}"
+        )
     else:
         print("[GROWTH] 新しく分析するチェックポイントはありません。")
 
