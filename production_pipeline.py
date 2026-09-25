@@ -28,7 +28,7 @@ from studio.image_generator import (
     generate_mirai_image,
 )
 from studio.video_generator import generate_animatediff_clip
-from voice.voicevox import VoicevoxClient
+from voice.provider import build_voice_provider
 from video.renderer import render_short
 from paths import AUDIO_DIR, VIDEO_DIR
 
@@ -289,7 +289,7 @@ def synthesize_audio(results: list[dict]) -> None:
 
     print("[PIPELINE] STEP 3/5 Mirai Voice工程開始")
     release_torch_cuda_cache()
-    engine = MiraiVoiceEngine(VoicevoxClient())
+    engine = MiraiVoiceEngine(build_voice_provider())
     if not engine.available():
         for item in results:
             item["media_error"] = "音声providerを利用できません"
