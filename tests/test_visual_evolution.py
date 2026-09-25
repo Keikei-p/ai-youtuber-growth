@@ -10,8 +10,13 @@ from PIL import Image
 
 import storage
 from mirai_engines.visual_learning import VisualLearningMemory
-from mirai_engines.visual_quality_engine import MiraiVisualQualityEngine, analyze_image
+from mirai_engines.visual_quality_engine import (
+    MiraiVisualQualityEngine,
+    analyze_image,
+    analyze_video_probe,
+)
 from studio import image_generator
+import production_pipeline
 from studio.models import ImagePreset
 
 
@@ -90,6 +95,64 @@ class VisualEvolutionTests(unittest.TestCase):
         report = MiraiVisualQualityEngine().inspect_image(path, asset_type="background")
         self.assertTrue(report["passed"])
         self.assertGreaterEqual(report["score"], 60)
+
+    def test_video_probe_rejects_bad_visual_asset(self) -> None:
+        probe = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "width": 160,
+                    "height": 240,
+                    "avg_frame_rate": "2/1",
+                }
+            ],
+            "format": {"duration": "0.1"},
+        }
+        report = analyze_video_probe(probe, file_size=1000)
+        self.assertFalse(report.passed)
+        self.assertLess(report.score, 60)
+
+    def test_pipeline_falls_back_when_ai_video_visual_quality_is_low(self) -> None:
+        fake_video = Path(self.tmp.name) / "ai.mp4"
+        fake_video.write_bytes(b"fake-ai-video")
+        item = {
+            "id": 99,
+            "title": "visual gate",
+            "idea": {"idea": "test", "angle": "test"},
+        }
+        fake_settings = SimpleNamespace(
+            ai_video_license_confirmed=True,
+            ai_video_backend="animatediff",
+            visual_video_min_score=60,
+        )
+        fake_report = {
+            "passed": False,
+            "score": 25,
+            "issues": [{"code": "very_blurry"}],
+            "metrics": {},
+        }
+        with (
+            patch.object(production_pipeline, "settings", fake_settings),
+            patch.object(production_pipeline, "ai_video_enabled", return_value=True),
+            patch.object(production_pipeline, "get_channel_state", return_value=""),
+            patch.object(
+                production_pipeline,
+                "generate_animatediff_clip",
+                return_value=str(fake_video),
+            ),
+            patch.object(
+                production_pipeline.MiraiVisualQualityEngine,
+                "inspect_video_asset",
+                return_value=fake_report,
+            ),
+            patch.object(production_pipeline, "record_failure") as failure,
+        ):
+            result = production_pipeline._generate_ai_video_asset(item)
+
+        self.assertIsNone(result)
+        self.assertNotIn("ai_video_path", item)
+        self.assertEqual(item["ai_video_visual"]["score"], 25)
+        failure.assert_called_once()
 
 
 if __name__ == "__main__":
