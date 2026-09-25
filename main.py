@@ -9,7 +9,7 @@ from guest_manager import select_guest_for_next_video
 from gpu_manager import unload_ollama_model, release_torch_cuda_cache
 from production_pipeline import produce_media
 from metadata import build_metadata
-from runtime_control import posts_per_day
+from runtime_control import posts_per_day, runtime_cancel_requested
 from media_cleanup import cleanup_all_uploaded_media, cleanup_uploaded_media
 from paths import AUDIO_DIR, CHARACTER_FILE, PLAN_DIR, VIDEO_DIR, ensure_runtime_dirs
 from planner import plan_ideas
@@ -158,6 +158,9 @@ def run_generation(
     )
 
     while len(results) < target and failed_rounds < max_attempts:
+        if runtime_cancel_requested():
+            print("[PIPELINE] 安全停止要求のため文章工程を終了します。")
+            break
         sequence = len(results) + 1
         print(
             f"[PIPELINE][TEXT] {sequence}/{target} "
@@ -236,8 +239,10 @@ def run_generation(
             "文章工程の再試行上限に達したため、この実行ではここまでにします。"
         )
 
-    if render or upload:
+    if (render or upload) and not runtime_cancel_requested():
         render_results(results, character)
+    elif render or upload:
+        print("[PIPELINE] 安全停止要求のためメディア工程をスキップします。")
 
     if upload:
         print("[PIPELINE] STEP 5/5 YouTube投稿工程開始")
