@@ -41,7 +41,7 @@ from storage import (
     update_queue_schedule,
     video_by_id,
 )
-from voice.voicevox import VoicevoxClient
+from voice.provider import voice_provider_status
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -537,8 +537,9 @@ def _generation_runtime_ready() -> bool:
     problems: list[str] = []
     if not OllamaClient().available():
         problems.append("Ollama")
-    if not VoicevoxClient().available():
-        problems.append("VOICEVOX")
+    voice_status = voice_provider_status()
+    if not voice_status["available"]:
+        problems.append(f"Voice({voice_status['name']})")
     if not shutil.which("ffmpeg"):
         problems.append("FFmpeg")
 
