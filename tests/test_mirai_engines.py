@@ -6,7 +6,9 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
+import main
 import storage
 from mirai_engines.composer import MiraiComposer
 from mirai_engines.debug_engine import MiraiDebugEngine, diagnose
@@ -169,6 +171,39 @@ class MiraiEngineTests(unittest.TestCase):
             for item in report.get("actions") or []
         }
         self.assertIn("reduce_scene_images", action_types)
+
+
+    def test_direct_upload_skips_quality_failed_video(self) -> None:
+        output = Path(self.tmp.name) / "bad.mp4"
+        output.write_bytes(b"not-a-real-video")
+        results = [
+            {
+                "id": 1,
+                "title": "bad",
+                "description": "",
+                "tags": [],
+                "output_path": str(output),
+                "quality_passed": False,
+            }
+        ]
+        with patch("youtube.uploader.upload_video") as mocked:
+            main.upload_results(
+                results,
+                force=True,
+                cleanup_local=False,
+            )
+        mocked.assert_not_called()
+
+    def test_improvement_review_works_without_ollama(self) -> None:
+        from self_improvement import run_improvement_review
+
+        with patch("self_improvement.OllamaClient.available", return_value=False):
+            report = run_improvement_review()
+        self.assertIn(
+            report.get("source"),
+            {"mirai-deterministic-engine", "mirai-engine+ollama-assist"},
+        )
+        self.assertIn("actions", report)
 
 
 if __name__ == "__main__":
