@@ -1,7 +1,8 @@
 from __future__ import annotations
 import re
 
-from legal_guard import assess_publish_risk
+from legal_guard import assess_publish_risk, assess_voice_license_risk
+from voice.provider import voice_attribution
 
 BANNED_PHRASES = [
     "絶対に稼げる",
@@ -35,5 +36,12 @@ def review_script(title: str, script: str, recent: list[dict]) -> tuple[bool, li
         script=script,
     ):
         issues.append(f"legal_risk:{risk.code}")
+
+    current_credit = voice_attribution()
+    for risk in assess_voice_license_risk(
+        text=f"{title} {script}",
+        required_credit=current_credit,
+    ):
+        issues.append(f"voice_license_risk:{risk.code}")
 
     return (len(issues) == 0, issues)
