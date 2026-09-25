@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import storage
+from autonomy_policy import resolve_approval
+from legal_guard import assess_publish_risk, publish_gate
+from voice.voicevox import VoicevoxClient
+
+
+class LegalGuardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        storage.DB_PATH = Path(self.tmp.name) / "legal.db"
+        storage.init_db()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_default_voicevox_speaker_has_required_credit(self) -> None:
+        with patch("voice.voicevox.settings.voicevox_speaker", 3):
+            self.assertEqual(
+                VoicevoxClient().attribution(),
+                "VOICEVOX:ずんだもん",
+            )
+
+    def test_safe_mirai_story_passes(self) -> None:
+        risks = assess_publish_risk(
+            title="AIが昨日の動画を改善してみた",
+            script="ミライが自分の動画を分析して、字幕と話す速度を変えました。",
+        )
+        self.assertEqual(risks, [])
+
+    def test_high_risk_allegation_is_flagged(self) -> None:
+        risks = assess_publish_risk(
+            title="ある会社について",
+            script="この株式会社の社長は詐欺師です。",
+        )
+        codes = {risk.code for risk in risks}
+        self.assertIn("defamation_or_allegation", codes)
+        self.assertIn("entity_reputation", codes)
+
+    def test_missing_required_credit_blocks_publication(self) -> None:
+        result = publish_gate(
+            {
+                "id": 42,
+                "title": "安全な動画",
+                "script": "ミライの成長記録です。",
+                "description": "概要です。",
+            },
+            required_credit="VOICEVOX:ずんだもん",
+        )
+        self.assertFalse(result["allowed"])
+        self.assertTrue(result["approval_id"])
+        codes = {
+            item["code"]
+            for item in result["risks"]
+        }
+        self.assertIn("missing_voice_credit", codes)
+
+    def test_approved_risky_video_can_pass_gate(self) -> None:
+        item = {
+            "id": 77,
+            "title": "確認が必要",
+            "script": "この株式会社の社長は詐欺師です。",
+            "description": "VOICEVOX:ずんだもん",
+        }
+        first = publish_gate(
+            item,
+            required_credit="VOICEVOX:ずんだもん",
+        )
+        self.assertFalse(first["allowed"])
+        resolve_approval(int(first["approval_id"]), True)
+
+        second = publish_gate(
+            item,
+            required_credit="VOICEVOX:ずんだもん",
+        )
+        self.assertTrue(second["allowed"])
+        self.assertTrue(second.get("approved_override"))
+
+
+if __name__ == "__main__":
+    unittest.main()
