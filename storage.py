@@ -4,6 +4,20 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+class ManagedConnection(sqlite3.Connection):
+    """
+    sqlite3.Connection の context manager は commit/rollback はするが
+    close はしない。WindowsではDB/WALファイルがロックされたままに
+    なりやすいため、with connect() を抜けた時に必ずcloseする。
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
 from paths import DATA_DIR
 
 DB_PATH = DATA_DIR / "memory.db"
@@ -13,6 +27,7 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(
         DB_PATH,
         timeout=15.0,
+        factory=ManagedConnection,
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
