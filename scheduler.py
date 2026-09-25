@@ -433,7 +433,11 @@ def _advance_full_test_generation() -> None:
         upload=False,
         target_override=1,
     )
-    if not results or not results[0].get("output_path"):
+    if (
+        not results
+        or not results[0].get("output_path")
+        or results[0].get("quality_passed") is False
+    ):
         failures = int(state.get("generation_failures") or 0) + 1
         state["generation_failures"] = failures
         state["status"] = f"生成失敗 {index}/{target} / 再試行 {failures}/3"
@@ -633,9 +637,12 @@ def prepare_upcoming() -> None:
 
     queued_count = 0
     for item, slot in zip(results, free_slots):
-        if not item.get("output_path"):
+        if (
+            not item.get("output_path")
+            or item.get("quality_passed") is False
+        ):
             print(
-                f"[SCHEDULE] #{item['id']} は動画未生成のため"
+                f"[SCHEDULE] #{item['id']} は未生成または品質不合格のため"
                 "キューへ入れません。"
             )
             continue
