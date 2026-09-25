@@ -4,10 +4,13 @@ import json
 
 
 MIRAI_BASE_PROMPT = (
-    "original anime VTuber girl, silver light-blue long hair, blue-violet eyes, "
-    "futuristic blue triangular hair accessory, white black and blue near-future "
-    "casual outfit, friendly clean futuristic mood, consistent character design, "
-    "high quality anime illustration, safe for work"
+    "same original Mirai AI girl as the reference image, "
+    "white-silver layered long hair, vivid cyan blue eyes, "
+    "distinct futuristic cat-ear triangular headset with cyan glowing rings, "
+    "white black and electric-blue futuristic outfit, "
+    "soft friendly anime face, luminous blue accents, "
+    "preserve the same identity, face, hairstyle, headset and color palette, "
+    "polished high quality anime illustration, safe for work"
 )
 
 EXPRESSION_PROMPTS = {

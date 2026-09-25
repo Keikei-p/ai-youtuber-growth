@@ -9,6 +9,7 @@ from gpu_manager import release_torch_cuda_cache, unload_ollama_model
 from runtime_control import (
     ai_video_enabled,
     guest_image_auto_enabled,
+    mirai_identity_video_enabled,
     runtime_cancel_requested,
     visual_min_score,
     visual_video_min_score,
@@ -31,7 +32,10 @@ from studio.image_generator import (
     generate_guest_image,
     generate_mirai_image,
 )
-from studio.video_generator import generate_animatediff_clip
+from studio.video_generator import (
+    generate_animatediff_clip,
+    generate_motion_clip,
+)
 from voice.provider import build_voice_provider
 from video.renderer import render_short
 from paths import AUDIO_DIR, VIDEO_DIR
@@ -191,6 +195,74 @@ def _ai_video_prompt(item: dict) -> str:
 
 
 def _generate_ai_video_asset(item: dict) -> str | None:
+    identity_source = str(
+        item.get("character_image_path") or ""
+    ).strip()
+    if (
+        mirai_identity_video_enabled()
+        and identity_source
+        and Path(identity_source).is_file()
+    ):
+        try:
+            print(
+                f"[PIPELINE][AI-VIDEO] #{item['id']} "
+                "固定ミライ画像から軽量モーションを生成"
+            )
+            path = generate_motion_clip(
+                identity_source,
+                duration=2.8,
+                label="mirai-identity-motion",
+            )
+            report = MiraiVisualQualityEngine().inspect_video_asset(
+                path,
+                asset_type="ai_video",
+            )
+            item["ai_video_visual"] = report
+            threshold = visual_video_min_score()
+            accepted = (
+                bool(report.get("passed"))
+                and int(report.get("score") or 0) >= threshold
+            )
+            VisualLearningMemory().record_result(
+                asset_type="ai_video",
+                path=path,
+                prompt="mirai identity-safe motion",
+                backend="ffmpeg-identity-motion",
+                profile="mirai-identity",
+                score=int(report.get("score") or 0),
+                passed=bool(report.get("passed")),
+                accepted=accepted,
+                metrics=report.get("metrics") or {},
+                meta={
+                    "video_id": item.get("id"),
+                    "source": identity_source,
+                    "identity_locked": True,
+                },
+            )
+            if accepted:
+                item["ai_video_path"] = path
+                item["ai_video_identity_locked"] = True
+                return path
+            print(
+                "[PIPELINE][AI-VIDEO] 固定キャラ動画が品質基準未満。"
+                "静止画ベース本編へ戻します。"
+            )
+            return None
+        except Exception as exc:
+            record_failure(
+                "ai_video.identity_motion",
+                exc,
+                {
+                    "video_id": item.get("id"),
+                    "source": identity_source,
+                },
+            )
+            print(
+                "[PIPELINE][AI-VIDEO] 固定キャラ動画生成失敗。"
+                f"静止画本編へ継続: {exc}"
+            )
+            return None
+
     if not ai_video_enabled():
         return None
     if not settings.ai_video_license_confirmed:

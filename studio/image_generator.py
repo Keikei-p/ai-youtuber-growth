@@ -11,12 +11,13 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 
 from config import settings
 from runtime_control import (
     visual_background_candidates,
     visual_candidate_count,
+    mirai_identity_lock_enabled,
     visual_highres_enabled,
     visual_min_score,
     visual_retry_rounds,
@@ -431,6 +432,174 @@ def _generate(
     return _generate_webui(prompt, preset, seed=seed), backend
 
 
+def _mirai_reference_path() -> Path | None:
+    path = Path(str(settings.mirai_reference_image or "")).expanduser()
+    return path if path.is_file() else None
+
+
+def _reference_for_preset(
+    path: Path,
+    preset: ImagePreset,
+) -> Image.Image:
+    with Image.open(path) as raw:
+        source = raw.convert("RGB")
+    return ImageOps.fit(
+        source,
+        (preset.width, preset.height),
+        method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.42),
+    )
+
+
+def _generate_reference_webui(
+    prompt: str,
+    preset: ImagePreset,
+    *,
+    seed: int | None = None,
+) -> tuple[Image.Image, str]:
+    path = _mirai_reference_path()
+    if path is None:
+        raise RuntimeError("ミライ基準画像が見つかりません。")
+    source = _reference_for_preset(path, preset)
+    buffer = io.BytesIO()
+    source.save(buffer, format="JPEG", quality=94)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    strength = max(
+        0.15,
+        min(float(settings.mirai_reference_strength), 0.55),
+    )
+    response = requests.post(
+        settings.sd_webui_url.rstrip("/") + "/sdapi/v1/img2img",
+        json={
+            "init_images": [encoded],
+            "prompt": prompt,
+            "negative_prompt": NEGATIVE_PROMPT,
+            "steps": preset.steps,
+            "width": preset.width,
+            "height": preset.height,
+            "denoising_strength": strength,
+            "cfg_scale": preset.guidance_scale,
+            "batch_size": 1,
+            "seed": int(seed) if seed is not None else -1,
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    images = response.json().get("images") or []
+    if not images:
+        raise RuntimeError("ミライ参照生成APIから画像が返りませんでした。")
+    raw = images[0].split(",", 1)[-1]
+    image = Image.open(
+        io.BytesIO(base64.b64decode(raw))
+    ).convert("RGB")
+    return image, "webui-reference"
+
+
+def _generate_reference_diffusers(
+    prompt: str,
+    preset: ImagePreset,
+    *,
+    seed: int | None = None,
+) -> tuple[Image.Image, str]:
+    import torch
+    from diffusers import StableDiffusionImg2ImgPipeline
+
+    path = _mirai_reference_path()
+    if path is None:
+        raise RuntimeError("ミライ基準画像が見つかりません。")
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "ミライ参照生成はCUDA利用時に実行します。"
+        )
+
+    source = _reference_for_preset(path, preset)
+    attempts = max(1, int(settings.studio_gpu_retries))
+    last_error: Exception | None = None
+    strength = max(
+        0.15,
+        min(float(settings.mirai_reference_strength), 0.55),
+    )
+
+    with exclusive_gpu_task("ミライ固定キャラ参照生成"):
+        unload_ollama_model(wait_seconds=2)
+        for attempt in range(1, attempts + 1):
+            pipe = None
+            try:
+                base = _load_diffusers_pipeline("cuda")
+                pipe = StableDiffusionImg2ImgPipeline(
+                    **base.components
+                )
+                pipe.enable_attention_slicing()
+                if hasattr(pipe, "enable_vae_slicing"):
+                    pipe.enable_vae_slicing()
+                generator = None
+                if seed is not None:
+                    generator = torch.Generator(
+                        device="cuda"
+                    ).manual_seed(int(seed))
+                result = pipe(
+                    prompt=prompt,
+                    negative_prompt=NEGATIVE_PROMPT,
+                    image=source,
+                    strength=strength,
+                    num_inference_steps=preset.steps,
+                    guidance_scale=preset.guidance_scale,
+                    generator=generator,
+                )
+                if not result.images:
+                    raise RuntimeError(
+                        "ミライ参照生成から画像が返りませんでした。"
+                    )
+                return (
+                    result.images[0].convert("RGB"),
+                    "diffusers-cuda-reference",
+                )
+            except Exception as exc:
+                last_error = exc
+                if not _looks_like_cuda_problem(exc):
+                    raise
+                print(
+                    "[STUDIO] ミライ参照生成のCUDA再試行 "
+                    f"{attempt}/{attempts}: {exc}"
+                )
+                _drop_pipeline()
+                release_torch_cuda_cache()
+                time.sleep(min(1.2 * attempt, 2.5))
+            finally:
+                if pipe is not None:
+                    try:
+                        del pipe
+                    except Exception:
+                        pass
+                _park_pipeline()
+                release_torch_cuda_cache()
+
+    raise RuntimeError(
+        "ミライ参照生成をGPU再試行しても復旧できませんでした: "
+        f"{last_error}"
+    )
+
+
+def _generate_mirai_reference(
+    prompt: str,
+    preset: ImagePreset,
+    *,
+    seed: int | None = None,
+) -> tuple[Image.Image, str]:
+    backend = _resolve_backend()
+    if backend == "diffusers":
+        return _generate_reference_diffusers(
+            prompt,
+            preset,
+            seed=seed,
+        )
+    return _generate_reference_webui(
+        prompt,
+        preset,
+        seed=seed,
+    )
+
+
 def _rounded_size(image: Image.Image, scale: float) -> tuple[int, int]:
     # Stable Diffusion系で扱いやすいよう8の倍数へ丸める。
     width = max(64, int(round(image.width * scale / 8.0)) * 8)
@@ -633,6 +802,7 @@ def _generate_best_image(
     *,
     asset_type: str,
     meta: dict | None = None,
+    generator_fn=None,
 ) -> dict:
     memory = VisualLearningMemory()
     quality_engine = MiraiVisualQualityEngine()
@@ -657,7 +827,8 @@ def _generate_best_image(
             profile=profile,
         )
         try:
-            generated, backend = _generate(
+            generator = generator_fn or _generate
+            generated, backend = generator(
                 evolved_prompt,
                 preset,
                 seed=seed_base + attempt_index * 9973,
@@ -782,16 +953,43 @@ def _asset_visual_meta(selection: dict, meta: dict | None = None) -> dict:
 
 def generate_mirai_image(expression: str = "normal") -> str:
     prompt = build_mirai_prompt(expression)
+    identity_locked = mirai_identity_lock_enabled()
+    reference = _mirai_reference_path()
+    if identity_locked and reference is None:
+        raise RuntimeError(
+            "ミライ固定キャラONですが基準画像がありません。"
+            "別人を生成せず安全停止します。"
+        )
+
+    meta = {
+        "expression": expression,
+        "identity_locked": identity_locked,
+        "reference_image": str(reference) if reference else "",
+    }
     selection = _generate_best_image(
-        prompt, MIRAI_PRESET, asset_type="mirai", meta={"expression": expression}
+        prompt,
+        MIRAI_PRESET,
+        asset_type="mirai",
+        meta=meta,
+        generator_fn=(
+            _generate_mirai_reference
+            if identity_locked
+            else None
+        ),
     )
     path = _save_selected_visual(
-        selection, folder="mirai", prefix=f"mirai_{expression}",
-        asset_type="mirai", meta={"expression": expression}
+        selection,
+        folder="mirai",
+        prefix=f"mirai_{expression}",
+        asset_type="mirai",
+        meta=meta,
     )
     record_asset(
-        "mirai", path, selection["prompt"], backend=selection["backend"],
-        meta=_asset_visual_meta(selection, {"expression": expression}),
+        "mirai",
+        path,
+        selection["prompt"],
+        backend=selection["backend"],
+        meta=_asset_visual_meta(selection, meta),
     )
     return str(path)
 

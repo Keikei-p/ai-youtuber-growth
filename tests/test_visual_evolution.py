@@ -89,6 +89,123 @@ class VisualEvolutionTests(unittest.TestCase):
         self.assertGreaterEqual(selected["quality"]["score"], 60)
         self.assertIs(selected["image"], good)
 
+    def test_reference_asset_is_valid_image(self) -> None:
+        path = Path("assets/character/mirai_reference.jpg")
+        self.assertTrue(path.is_file())
+        with Image.open(path) as image:
+            self.assertGreaterEqual(image.width, 512)
+            self.assertGreaterEqual(image.height, 512)
+
+    def test_mirai_generation_uses_reference_generator_when_locked(self) -> None:
+        reference = Path(self.tmp.name) / "reference.jpg"
+        Image.effect_noise((768, 1024), 60).convert("RGB").save(reference)
+        selected = {
+            "image": Image.effect_noise((512, 768), 70).convert("RGB"),
+            "backend": "fake-reference",
+            "quality": {
+                "score": 80,
+                "passed": True,
+                "metrics": {},
+                "issues": [],
+            },
+            "prompt": "same Mirai",
+            "profile": "detail",
+        }
+        saved = Path(self.tmp.name) / "mirai.png"
+        with (
+            patch.object(
+                image_generator,
+                "mirai_identity_lock_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                image_generator,
+                "_mirai_reference_path",
+                return_value=reference,
+            ),
+            patch.object(
+                image_generator,
+                "_generate_best_image",
+                return_value=selected,
+            ) as best,
+            patch.object(
+                image_generator,
+                "_save_selected_visual",
+                return_value=saved,
+            ),
+            patch.object(image_generator, "record_asset"),
+        ):
+            result = image_generator.generate_mirai_image("smile")
+
+        self.assertEqual(result, str(saved))
+        self.assertIs(
+            best.call_args.kwargs["generator_fn"],
+            image_generator._generate_mirai_reference,
+        )
+        self.assertTrue(
+            best.call_args.kwargs["meta"]["identity_locked"]
+        )
+
+    def test_identity_motion_is_used_even_when_animatediff_is_off(self) -> None:
+        source = Path(self.tmp.name) / "mirai.png"
+        source.write_bytes(b"image")
+        motion = Path(self.tmp.name) / "motion.mp4"
+        motion.write_bytes(b"motion")
+        item = {
+            "id": 101,
+            "character_image_path": str(source),
+            "title": "identity",
+            "idea": {"idea": "test", "angle": "test"},
+        }
+        report = {
+            "passed": True,
+            "score": 88,
+            "issues": [],
+            "metrics": {},
+        }
+        with (
+            patch.object(
+                production_pipeline,
+                "mirai_identity_video_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                production_pipeline,
+                "ai_video_enabled",
+                return_value=False,
+            ),
+            patch.object(
+                production_pipeline,
+                "generate_motion_clip",
+                return_value=str(motion),
+            ) as motion_gen,
+            patch.object(
+                production_pipeline,
+                "generate_animatediff_clip",
+            ) as animatediff,
+            patch.object(
+                production_pipeline.MiraiVisualQualityEngine,
+                "inspect_video_asset",
+                return_value=report,
+            ),
+            patch.object(
+                production_pipeline,
+                "visual_video_min_score",
+                return_value=60,
+            ),
+            patch.object(
+                production_pipeline.VisualLearningMemory,
+                "record_result",
+            ),
+        ):
+            result = production_pipeline._generate_ai_video_asset(item)
+
+        self.assertEqual(result, str(motion))
+        self.assertEqual(item["ai_video_path"], str(motion))
+        self.assertTrue(item["ai_video_identity_locked"])
+        motion_gen.assert_called_once()
+        animatediff.assert_not_called()
+
     def test_highres_refine_keeps_original_when_score_drops(self) -> None:
         original = Image.effect_noise((512, 768), 70).convert("RGB")
         worse = Image.new("RGB", (768, 1152), (5, 5, 5))

@@ -209,6 +209,34 @@ def set_ai_video_enabled(enabled: bool) -> None:
     )
 
 
+def mirai_identity_lock_enabled() -> bool:
+    return _bool_state(
+        "mirai_identity_lock_enabled",
+        settings.mirai_identity_lock_enabled,
+    )
+
+
+def set_mirai_identity_lock_enabled(enabled: bool) -> None:
+    set_channel_state(
+        "mirai_identity_lock_enabled",
+        "true" if enabled else "false",
+    )
+
+
+def mirai_identity_video_enabled() -> bool:
+    return _bool_state(
+        "mirai_identity_video_enabled",
+        settings.mirai_identity_video_enabled,
+    )
+
+
+def set_mirai_identity_video_enabled(enabled: bool) -> None:
+    set_channel_state(
+        "mirai_identity_video_enabled",
+        "true" if enabled else "false",
+    )
+
+
 def visual_candidate_count() -> int:
     return _int_state(
         "visual_candidate_count",
@@ -310,6 +338,9 @@ def visual_runtime_settings() -> dict:
         "retry_rounds": visual_retry_rounds(),
         "min_score": visual_min_score(),
         "video_min_score": visual_video_min_score(),
+        "mirai_identity_lock": mirai_identity_lock_enabled(),
+        "mirai_identity_video": mirai_identity_video_enabled(),
+        "mirai_reference_image": str(settings.mirai_reference_image),
         "highres_enabled": visual_highres_enabled(),
         "highres_scale": max(
             1.0,

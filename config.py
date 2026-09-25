@@ -46,7 +46,23 @@ class Settings:
     youtube_client_secret_file: str = os.getenv("YOUTUBE_CLIENT_SECRET_FILE", "client_secret.json")
     youtube_token_file: str = os.getenv("YOUTUBE_TOKEN_FILE", "token.json")
 
-    character_image: str = os.getenv("CHARACTER_IMAGE", "assets/character/default.png")
+    character_image: str = os.getenv(
+        "CHARACTER_IMAGE",
+        "assets/character/mirai_reference.jpg",
+    )
+    mirai_reference_image: str = os.getenv(
+        "MIRAI_REFERENCE_IMAGE",
+        "assets/character/mirai_reference.jpg",
+    )
+    mirai_identity_lock_enabled: bool = (
+        os.getenv("MIRAI_IDENTITY_LOCK_ENABLED", "true").lower() == "true"
+    )
+    mirai_reference_strength: float = float(
+        os.getenv("MIRAI_REFERENCE_STRENGTH", "0.35")
+    )
+    mirai_identity_video_enabled: bool = (
+        os.getenv("MIRAI_IDENTITY_VIDEO_ENABLED", "true").lower() == "true"
+    )
     background_dir: str = os.getenv("BACKGROUND_DIR", "assets/backgrounds")
     bgm_file: str = os.getenv("BGM_FILE", "")
     bgm_license_confirmed: bool = (
