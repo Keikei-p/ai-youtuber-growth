@@ -331,6 +331,7 @@ def render_videos(results: list[dict], character: dict) -> None:
                 character_image_path=item.get("character_image_path"),
                 background_image_path=item.get("background_image_path"),
                 background_image_paths=item.get("background_image_paths"),
+                ai_video_path=item.get("ai_video_path"),
             )
             item["output_path"] = str(video_path)
             item["status"] = "rendered"
