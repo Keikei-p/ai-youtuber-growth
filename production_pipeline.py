@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import wave
 
 from config import settings
 from gpu_manager import release_torch_cuda_cache, unload_ollama_model
@@ -17,6 +18,9 @@ from storage import (
     update_video_output,
 )
 from self_improvement import effective_scene_image_count, record_failure
+from mirai_engines.composer import MiraiComposer
+from mirai_engines.quality_engine import MiraiQualityEngine
+from mirai_engines.voice_engine import MiraiVoiceEngine
 from studio.asset_store import GENERATED_ROOT
 from studio.image_generator import (
     generate_background_image,
@@ -267,20 +271,29 @@ def prepare_visuals(results: list[dict]) -> None:
     print("[PIPELINE] STEP 2/4 画像工程完了")
 
 
+def _wav_duration(path: Path) -> float:
+    with wave.open(str(path), "rb") as handle:
+        rate = handle.getframerate()
+        if rate <= 0:
+            raise RuntimeError("音声サンプルレートが不正です。")
+        return handle.getnframes() / float(rate)
+
+
 def synthesize_audio(results: list[dict]) -> None:
     """
-    VOICEVOXを1本ずつ実行する。画像生成と重ねない。
+    Mirai Voice Engineが文章分割・感情・話速・ピッチ・抑揚・間を決定する。
+    VOICEVOXは波形生成providerとして1セグメントずつ使う。
     """
     if not results:
         return
 
-    print("[PIPELINE] STEP 3/4 音声工程開始")
+    print("[PIPELINE] STEP 3/5 Mirai Voice工程開始")
     release_torch_cuda_cache()
-    voice = VoicevoxClient()
-    if not voice.available():
+    engine = MiraiVoiceEngine(VoicevoxClient())
+    if not engine.available():
         for item in results:
-            item["media_error"] = "VOICEVOXが起動していません"
-        print("[PIPELINE] VOICEVOX未起動のため音声工程を中止")
+            item["media_error"] = "音声providerを利用できません"
+        print("[PIPELINE] 音声provider未起動のため音声工程を中止")
         return
 
     stamp = datetime.now().strftime("%Y%m%d")
@@ -288,8 +301,17 @@ def synthesize_audio(results: list[dict]) -> None:
         print(f"[PIPELINE][VOICE] {index}/{len(results)} #{item['id']}")
         audio_path = AUDIO_DIR / f"{stamp}_{item['id']}.wav"
         try:
-            voice.synthesize(item["script"], audio_path)
+            voice_result = engine.synthesize(
+                item["script"],
+                audio_path,
+            )
             item["audio_path"] = str(audio_path)
+            item["voice_plan"] = voice_result
+            print(
+                f"[PIPELINE][VOICE] #{item['id']} "
+                f"{len(voice_result.get('segments') or [])}セグメント / "
+                f"provider={voice_result.get('provider')}"
+            )
         except Exception as exc:
             item["media_error"] = f"音声生成失敗: {exc}"
             record_failure(
@@ -299,20 +321,22 @@ def synthesize_audio(results: list[dict]) -> None:
             )
             print(f"[PIPELINE][VOICE] #{item['id']} 失敗: {exc}")
 
-    print("[PIPELINE] STEP 3/4 音声工程完了")
+    print("[PIPELINE] STEP 3/5 Mirai Voice工程完了")
 
 
 def render_videos(results: list[dict], character: dict) -> None:
     """
-    最後にFFmpeg編集を1本ずつ行う。
-    画像 + 音声 + 自動字幕を縦Shorts MP4へ統合する。
+    Mirai Composerが動画構成を決め、FFmpeg rendererは計画を実行する。
+    完成後はMirai Quality Engineで投稿可能か検査する。
     """
     if not results:
         return
 
-    print("[PIPELINE] STEP 4/4 編集工程開始")
+    print("[PIPELINE] STEP 4/5 Mirai Composer/編集工程開始")
     release_torch_cuda_cache()
     stamp = datetime.now().strftime("%Y%m%d")
+    composer = MiraiComposer()
+    quality_engine = MiraiQualityEngine()
 
     for index, item in enumerate(results, start=1):
         print(f"[PIPELINE][EDIT] {index}/{len(results)} #{item['id']}")
@@ -324,6 +348,27 @@ def render_videos(results: list[dict], character: dict) -> None:
         audio_path = Path(audio_raw)
         video_path = VIDEO_DIR / f"{stamp}_{item['id']}.mp4"
         try:
+            audio_duration = _wav_duration(audio_path)
+            backgrounds = item.get("background_image_paths") or []
+            composition_plan = composer.plan(
+                script=item["script"],
+                audio_duration=audio_duration,
+                background_count=max(len(backgrounds), 1),
+                has_ai_video=bool(item.get("ai_video_path")),
+            )
+            plan_issues = composer.validate(
+                composition_plan,
+                audio_duration,
+            )
+            item["composition_plan"] = composition_plan
+            if plan_issues:
+                item["composition_warnings"] = plan_issues
+                record_failure(
+                    "composer.plan_validation",
+                    ",".join(plan_issues),
+                    {"video_id": item.get("id")},
+                )
+
             render_short(
                 title=item["title"],
                 script=item["script"],
@@ -334,20 +379,63 @@ def render_videos(results: list[dict], character: dict) -> None:
                 guest_image_path=(item.get("guest") or {}).get("image_path"),
                 character_image_path=item.get("character_image_path"),
                 background_image_path=item.get("background_image_path"),
-                background_image_paths=item.get("background_image_paths"),
+                background_image_paths=backgrounds,
                 ai_video_path=item.get("ai_video_path"),
+                composition_plan=composition_plan,
             )
-            item["output_path"] = str(video_path)
-            item["status"] = "rendered"
-            update_video_output(item["id"], str(video_path))
 
-            guest = item.get("guest") or {}
-            if guest.get("id"):
-                mark_guest_used(int(guest["id"]))
+            quality = quality_engine.inspect(
+                video_path,
+                video_id=int(item["id"]),
+                composition_plan=composition_plan,
+            )
+            item["quality"] = quality
+            item["quality_passed"] = bool(quality.get("passed"))
+            item["output_path"] = str(video_path)
+
+            if item["quality_passed"]:
+                item["status"] = "rendered"
+                update_video_output(
+                    item["id"],
+                    str(video_path),
+                    status="rendered",
+                )
+                guest = item.get("guest") or {}
+                if guest.get("id"):
+                    mark_guest_used(int(guest["id"]))
+                print(
+                    f"[PIPELINE][QUALITY] #{item['id']} "
+                    f"PASS {quality.get('score')}/100"
+                )
+            else:
+                item["status"] = "quality_failed"
+                update_video_output(
+                    item["id"],
+                    str(video_path),
+                    status="quality_failed",
+                )
+                issues = [
+                    issue.get("code")
+                    for issue in quality.get("issues") or []
+                ]
+                record_failure(
+                    "quality.validation",
+                    f"品質検査不合格: {issues}",
+                    {
+                        "video_id": item.get("id"),
+                        "score": quality.get("score"),
+                        "issues": issues,
+                    },
+                )
+                print(
+                    f"[PIPELINE][QUALITY] #{item['id']} "
+                    f"FAIL {quality.get('score')}/100 / {issues}"
+                )
 
             print(f"[PIPELINE][EDIT] #{item['id']} 完成: {video_path}")
         except Exception as exc:
             item["media_error"] = f"動画編集失敗: {exc}"
+            item["quality_passed"] = False
             record_failure(
                 "video.render",
                 exc,
@@ -355,7 +443,7 @@ def render_videos(results: list[dict], character: dict) -> None:
             )
             print(f"[PIPELINE][EDIT] #{item['id']} 失敗: {exc}")
 
-    print("[PIPELINE] STEP 4/4 編集工程完了")
+    print("[PIPELINE] STEP 4/5 Composer/Quality工程完了")
 
 
 def produce_media(results: list[dict], character: dict) -> None:
