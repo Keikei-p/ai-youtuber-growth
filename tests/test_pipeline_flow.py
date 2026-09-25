@@ -199,12 +199,13 @@ class PipelineFlowTests(unittest.TestCase):
             "title": "AI動画ライセンステスト",
             "idea": {"idea": "test", "angle": "test"},
         }
-        fake_settings = SimpleNamespace(
-            ai_video_license_confirmed=False,
-        )
         with (
-            patch.object(production_pipeline, "settings", fake_settings),
             patch.object(production_pipeline, "ai_video_enabled", return_value=True),
+            patch.object(
+                production_pipeline,
+                "ai_video_license_confirmed",
+                return_value=False,
+            ),
             patch.object(production_pipeline, "generate_animatediff_clip") as generated,
         ):
             result = production_pipeline._generate_ai_video_asset(item)

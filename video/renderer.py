@@ -158,8 +158,16 @@ def _paste_character(
     if path is None:
         return
 
-    with Image.open(path) as raw:
-        char = raw.convert("RGBA")
+    try:
+        with Image.open(path) as raw:
+            raw.load()
+            char = raw.convert("RGBA")
+    except (OSError, ValueError) as exc:
+        print(
+            "[RENDER] キャラクター画像を読み込めないため"
+            f"スキップします: {path} / {exc}"
+        )
+        return
 
     max_w, max_h = 720, 1050
     ratio = min(max_w / char.width, max_h / char.height, 1.0)
