@@ -176,6 +176,12 @@ def _ai_video_prompt(item: dict) -> str:
 def _generate_ai_video_asset(item: dict) -> str | None:
     if not ai_video_enabled():
         return None
+    if not settings.ai_video_license_confirmed:
+        print(
+            "[LEGAL][AI-VIDEO] AI動画モデルの利用条件が未確認のため"
+            "生成をスキップします。画像+軽量モーションで継続します。"
+        )
+        return None
     if get_channel_state("runtime_resource_mode", "").strip() == "urgent":
         print(
             "[PIPELINE][AI-VIDEO] 投稿が近いためAI動画素材を省略し、"
