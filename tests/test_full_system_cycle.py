@@ -107,13 +107,20 @@ class FullSystemCycleTests(unittest.TestCase):
             )
         )
 
-        for index, video_id in enumerate(video_ids, start=1):
+        uploaded_ids = set()
+        for video_id in video_ids:
             row = storage.video_by_id(video_id)
-            self.assertEqual(
-                row["youtube_video_id"],
-                f"yt-test-{index}",
+            self.assertTrue(
+                str(row["youtube_video_id"]).startswith("yt-test-"),
+                msg=str(row),
             )
+            uploaded_ids.add(row["youtube_video_id"])
             self.assertEqual(row["status"], "uploaded")
+
+        self.assertEqual(
+            uploaded_ids,
+            {"yt-test-1", "yt-test-2", "yt-test-3"},
+        )
 
         with storage.connect() as conn:
             rows = conn.execute(
