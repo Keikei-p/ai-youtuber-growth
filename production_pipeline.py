@@ -347,6 +347,7 @@ def render_videos(results: list[dict], character: dict) -> None:
 
         audio_path = Path(audio_raw)
         video_path = VIDEO_DIR / f"{stamp}_{item['id']}.mp4"
+        video_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             audio_duration = _wav_duration(audio_path)
             backgrounds = item.get("background_image_paths") or []
