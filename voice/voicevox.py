@@ -1,30 +1,73 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 import requests
+
 from config import settings
 
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(float(value), high))
+
+
 class VoicevoxClient:
+    """
+    波形生成provider。
+    感情・話速・間の決定はMirai Voice Engine側で行い、
+    ここではVOICEVOX APIへ安全な範囲で値を渡すだけ。
+    """
+
+    name = "voicevox"
+
     def available(self) -> bool:
         try:
-            r=requests.get(f"{settings.voicevox_url}/version",timeout=2)
-            return r.ok
+            response = requests.get(
+                f"{settings.voicevox_url}/version",
+                timeout=2,
+            )
+            return response.ok
         except requests.RequestException:
             return False
 
-    def synthesize(self,text:str,output_path:Path)->Path:
-        output_path.parent.mkdir(parents=True,exist_ok=True)
-        q=requests.post(
+    def synthesize(
+        self,
+        text: str,
+        output_path: Path,
+        voice_params: dict | None = None,
+    ) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        query_response = requests.post(
             f"{settings.voicevox_url}/audio_query",
-            params={"text":text,"speaker":settings.voicevox_speaker},
+            params={
+                "text": text,
+                "speaker": settings.voicevox_speaker,
+            },
             timeout=30,
         )
-        q.raise_for_status()
-        s=requests.post(
+        query_response.raise_for_status()
+        query = query_response.json()
+
+        params = voice_params or {}
+        if "speed" in params:
+            query["speedScale"] = _clamp(params["speed"], 0.5, 2.0)
+        if "pitch" in params:
+            query["pitchScale"] = _clamp(params["pitch"], -0.15, 0.15)
+        if "intonation" in params:
+            query["intonationScale"] = _clamp(
+                params["intonation"],
+                0.0,
+                2.0,
+            )
+        if "volume" in params:
+            query["volumeScale"] = _clamp(params["volume"], 0.0, 2.0)
+
+        synthesis = requests.post(
             f"{settings.voicevox_url}/synthesis",
-            params={"speaker":settings.voicevox_speaker},
-            json=q.json(),
+            params={"speaker": settings.voicevox_speaker},
+            json=query,
             timeout=120,
         )
-        s.raise_for_status()
-        output_path.write_bytes(s.content)
+        synthesis.raise_for_status()
+        output_path.write_bytes(synthesis.content)
         return output_path
