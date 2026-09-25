@@ -34,3 +34,59 @@ jobs:
         env:
           POSTS_PER_DAY: "3"
           DRY_RUN: "true"
+
+
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Ensure FFmpeg on Windows
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg -y --no-progress
+          }
+          ffmpeg -version
+          ffprobe -version
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Compile all Python on Windows
+        run: python -m compileall -q .
+      - name: Run all tests on Windows
+        run: python -m unittest discover -s tests -v
+      - name: Validate Windows automation scripts
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw automation/windows_cycle.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/windows_task_status.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/remote_access_enable.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/remote_access_disable.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/remote_access_status.ps1)) | Out-Null
+
+          if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) {
+            throw "schtasks.exe is unavailable"
+          }
+          if (-not (Get-Command powercfg.exe -ErrorAction SilentlyContinue)) {
+            throw "powercfg.exe is unavailable"
+          }
+
+          $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -Command exit 0"
+          $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddHours(1)
+          $settings = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -MultipleInstances IgnoreNew
+          $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings
+          if (-not $task.Settings.WakeToRun) {
+            throw "WakeToRun was not preserved in the scheduled-task definition"
+          }
+      - name: Import dashboard and run dry-run state command
+        shell: pwsh
+        env:
+          POSTS_PER_DAY: "3"
+          DRY_RUN: "true"
+        run: |
+          python -c "import webapp; print('webapp import ok')"
+          python main.py --show
