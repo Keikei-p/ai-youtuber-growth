@@ -1457,7 +1457,13 @@ class Handler(BaseHTTPRequestHandler):
                         bool(body["guest_image_auto_enabled"])
                     )
                 if "ai_video_enabled" in body:
-                    set_ai_video_enabled(bool(body["ai_video_enabled"]))
+                    enabled = bool(body["ai_video_enabled"])
+                    if enabled and not settings.ai_video_license_confirmed:
+                        raise ValueError(
+                            "AI動画モデルの公開/商用利用条件が未確認です。"
+                            " AI_VIDEO_LICENSE_CONFIRMED=true は確認後だけ設定してください。"
+                        )
+                    set_ai_video_enabled(enabled)
 
                 _wake_event.set()
                 self._json({"ok": True, "message": "設定を保存しました。自動運転へ反映します。"})
