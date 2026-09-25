@@ -9,7 +9,11 @@ from guest_manager import select_guest_for_next_video
 from gpu_manager import unload_ollama_model, release_torch_cuda_cache
 from production_pipeline import produce_media
 from metadata import build_metadata
-from runtime_control import posts_per_day, runtime_cancel_requested
+from runtime_control import (
+    clear_runtime_cancel,
+    posts_per_day,
+    runtime_cancel_requested,
+)
 from media_cleanup import cleanup_all_uploaded_media, cleanup_uploaded_media
 from paths import AUDIO_DIR, CHARACTER_FILE, PLAN_DIR, VIDEO_DIR, ensure_runtime_dirs
 from planner import plan_ideas
@@ -142,6 +146,7 @@ def run_generation(
 
     GPU負荷の異なる工程を同時実行しない。
     """
+    clear_runtime_cancel()
     ensure_runtime_dirs()
     init_db()
     character = load_character()
