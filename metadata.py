@@ -4,6 +4,7 @@ import re
 
 from ai_client import OllamaClient
 from storage import get_channel_state
+from voice.provider import voice_attribution
 
 BASE_TAGS = ["AIYouTuber", "ミライ", "AI", "YouTubeShorts", "Shorts"]
 
@@ -39,6 +40,20 @@ def _clean_tags(tags: list[str]) -> list[str]:
         used += extra
     return final[:25]
 
+def _append_disclosures(description: str) -> str:
+    lines = [str(description or "").strip()]
+    ai_notice = "この動画はAIを使って企画・音声・画像/映像を制作しています。"
+    if ai_notice not in description:
+        lines.append(ai_notice)
+    credit = voice_attribution()
+    if credit and credit not in description:
+        lines.append(credit)
+    return _truncate_utf8(
+        "\n\n".join(line for line in lines if line),
+        4800,
+    )
+
+
 def _fallback_metadata(written: dict, idea: dict, guest: dict | None) -> dict:
     title = _clean_title(written.get("title") or idea.get("idea") or "ミライのAI実験")
     guest_name = guest.get("name") if guest else None
@@ -53,9 +68,8 @@ def _fallback_metadata(written: dict, idea: dict, guest: dict | None) -> dict:
     hashtags = ["#AIYouTuber", "#ミライ", "#Shorts"]
     if guest_name:
         hashtags.append(f"#{guest_name}")
-    description = _truncate_utf8(
-        f"{description}\n\n{' '.join(hashtags)}",
-        4800,
+    description = _append_disclosures(
+        f"{description}\n\n{' '.join(hashtags)}"
     )
 
     tags = BASE_TAGS + [
@@ -121,9 +135,8 @@ def build_metadata(
         if not isinstance(data, dict):
             return fallback
         title = _clean_title(str(data.get("title") or fallback["title"]))
-        description = _truncate_utf8(
-            str(data.get("description") or fallback["description"]),
-            4800,
+        description = _append_disclosures(
+            str(data.get("description") or fallback["description"])
         )
         tags = _clean_tags(
             list(data.get("tags") or []) + BASE_TAGS
