@@ -12,6 +12,45 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 
 class VoicevoxClient:
+    def attribution(self) -> str:
+        # 公式のspeaker一覧から話者名を解決。サービス停止時は既知IDへフォールバック。
+        try:
+            response = requests.get(
+                f"{settings.voicevox_url}/speakers",
+                timeout=3,
+            )
+            response.raise_for_status()
+            for speaker in response.json() or []:
+                for style in speaker.get("styles") or []:
+                    if int(style.get("id")) == int(settings.voicevox_speaker):
+                        name = str(speaker.get("name") or "").strip()
+                        if name:
+                            return f"VOICEVOX:{name}"
+        except Exception:
+            pass
+
+        known = {
+            0: "四国めたん",
+            1: "ずんだもん",
+            2: "四国めたん",
+            3: "ずんだもん",
+            4: "四国めたん",
+            5: "ずんだもん",
+            6: "四国めたん",
+            7: "ずんだもん",
+            8: "春日部つむぎ",
+            9: "波音リツ",
+            10: "雨晴はう",
+            11: "玄野武宏",
+            13: "青山龍星",
+            14: "冥鳴ひまり",
+            16: "九州そら",
+            22: "ずんだもん",
+            38: "ずんだもん",
+        }
+        name = known.get(int(settings.voicevox_speaker))
+        return f"VOICEVOX:{name}" if name else ""
+
     """
     波形生成provider。
     感情・話速・間の決定はMirai Voice Engine側で行い、
