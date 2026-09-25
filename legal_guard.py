@@ -183,6 +183,23 @@ def assess_voice_license_risk(
             )
         )
 
+    if (
+        any(marker.lower() in text.lower() for marker in _REAL_ENTITY_MARKERS)
+        and re.search(
+            r"(応援|支持|支援|推薦|批判|非難|叩く|詐欺|犯罪|違法|"
+            r"悪質|ブラック|嘘つき|騙して)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    ):
+        risks.append(
+            PublishRisk(
+                "voice_license_targeted_support_or_criticism",
+                "block",
+                "現在のVOICEVOX音源規約では特定の個人・団体を応援、批判、非難する目的での利用が禁止されています。",
+            )
+        )
+
     unique: dict[str, PublishRisk] = {}
     for risk in risks:
         unique.setdefault(risk.code, risk)
