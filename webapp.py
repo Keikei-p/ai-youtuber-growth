@@ -379,6 +379,14 @@ def _status_payload() -> dict:
             .lower()
             == "true"
         ),
+        "remote_access_status": get_channel_state(
+            "remote_access_status",
+            "未確認",
+        ),
+        "remote_access_url": get_channel_state(
+            "remote_access_url",
+            "",
+        ),
         "log_tail": _read_log_tail(),
     }
 
@@ -580,6 +588,65 @@ def _consume_full_test_request() -> None:
         name="full-test-request",
         daemon=True,
     ).start()
+
+
+def _remote_access_enable() -> str:
+    output = _run_automation_script(
+        "remote_access_enable.ps1",
+    )
+    remote_url = ""
+    for line in output.splitlines():
+        if line.startswith("REMOTE_URL="):
+            remote_url = line.split("=", 1)[1].strip()
+            break
+
+    set_channel_state("remote_access_status", "enabled")
+    if remote_url:
+        set_channel_state("remote_access_url", remote_url)
+    return (
+        "プライベートリモート管理を有効化しました。\n"
+        + (f"{remote_url}\n" if remote_url else "")
+        + "Tailscale tailnet内からのみアクセスできます。"
+    )
+
+
+def _remote_access_disable() -> str:
+    output = _run_automation_script(
+        "remote_access_disable.ps1",
+    )
+    set_channel_state("remote_access_status", "disabled")
+    set_channel_state("remote_access_url", "")
+    return output
+
+
+def _remote_access_refresh() -> str:
+    output = _run_automation_script(
+        "remote_access_status.ps1",
+    )
+    remote_url = ""
+    state = "not_installed"
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("CONNECTED="):
+            state = "enabled"
+            remote_url = line.split("=", 1)[1].strip()
+            break
+        if line == "CONNECTED":
+            state = "enabled"
+        elif line == "NOT_CONNECTED":
+            state = "not_connected"
+        elif line == "NOT_INSTALLED":
+            state = "not_installed"
+        elif line.startswith("STATE="):
+            state = line.lower()
+
+    set_channel_state("remote_access_status", state)
+    if remote_url:
+        set_channel_state("remote_access_url", remote_url)
+    elif state != "enabled":
+        set_channel_state("remote_access_url", "")
+
+    return output
 
 
 def _update_and_restart() -> None:
@@ -856,6 +923,19 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div id="analytics" style="margin-top:12px"></div>
     </section>
 
+    <section class="card wide">
+      <h2>スマホ・外出先リモート管理</h2>
+      <p class="small">Tailscaleのプライベートネットワークだけで管理画面を共有します。一般公開はしません。</p>
+      <div class="row"><span>状態</span><span id="remoteAccessStatus" class="badge"></span></div>
+      <div id="remoteAccessUrl" class="small" style="word-break:break-all;margin:8px 0"></div>
+      <div class="actions">
+        <button class="primary" onclick="runAction('remote_on')">リモート管理を有効化</button>
+        <button onclick="runAction('remote_status')">状態を確認</button>
+        <button onclick="runAction('remote_off')">解除</button>
+      </div>
+      <div class="small" style="margin-top:8px">初回だけPCとスマホへTailscaleを導入し、同じtailnetへログインする必要があります。</div>
+    </section>
+
     <section class="card">
       <h2>PC自動起動</h2>
       <p class="small">PCを起動した時に、このWebアプリを自動で起動できます。</p>
@@ -919,6 +999,10 @@ async function refresh(){
     autostartStatus.className='badge '+(state.autostart_enabled?'ok':'');
     wakeTaskStatus.textContent=state.wake_task_enabled?'登録済み':'未登録';
     wakeTaskStatus.className='badge '+(state.wake_task_enabled?'ok':'');
+    const remoteOn=state.remote_access_status==='enabled';
+    remoteAccessStatus.textContent=remoteOn?'有効':(state.remote_access_status||'未確認');
+    remoteAccessStatus.className='badge '+(remoteOn?'ok':'');
+    remoteAccessUrl.textContent=state.remote_access_url?('外出先URL: '+state.remote_access_url):'外出先URLはまだありません。';
     if(state.current_job){
       lastCycle.textContent='実行中: '+state.current_job+' / 開始 '+(state.current_job_started_at||'');
     }
@@ -1395,6 +1479,18 @@ class Handler(BaseHTTPRequestHandler):
                     "wake_task_off": (
                         "スリープ復帰自動運転解除",
                         lambda: print(_remove_wake_task()),
+                    ),
+                    "remote_on": (
+                        "プライベートリモート管理有効化",
+                        lambda: print(_remote_access_enable()),
+                    ),
+                    "remote_status": (
+                        "プライベートリモート管理状態確認",
+                        lambda: print(_remote_access_refresh()),
+                    ),
+                    "remote_off": (
+                        "プライベートリモート管理解除",
+                        lambda: print(_remote_access_disable()),
                     ),
                     "night_test": (
                         "夜間テスト運用",
