@@ -3,7 +3,10 @@ import json
 from datetime import datetime, timezone
 
 from learner import build_channel_strategy, build_learning_note
-from learning_cleanup import cleanup_after_final_learning
+from learning_cleanup import (
+    cleanup_after_final_learning,
+    cleanup_status,
+)
 from mirai_engines.visual_learning import VisualLearningMemory
 from storage import (
     analytics_history,
@@ -93,21 +96,33 @@ def run_growth_cycle() -> int:
             "[GROWTH] Visual Strategy更新: "
             f"{json.dumps(visual_strategy, ensure_ascii=False)}"
         )
-        for video_id in finalized_video_ids:
-            try:
-                cleanup = cleanup_after_final_learning(video_id)
-                print(
-                    f"[GROWTH][CLEANUP] #{video_id} "
-                    f"removed={cleanup.get('removed_files', 0)} "
-                    f"freed={cleanup.get('freed_mb', 0)}MB "
-                    f"status={cleanup.get('status')}"
-                )
-            except Exception as exc:
-                print(
-                    f"[GROWTH][CLEANUP] #{video_id} 自動削除失敗: {exc}"
-                )
     else:
         print("[GROWTH] 新しく分析するチェックポイントはありません。")
+
+    # 以前のサイクルで7日学習済みでも、削除だけ失敗した動画を再試行する。
+    # cleanup_after_final_learning は冪等なので、成功済み動画は触らない。
+    final_ready_ids = {
+        int(row["video_id"])
+        for row in analytics_history(limit=300)
+        if int(row.get("checkpoint_hours") or 0) >= 168
+    }
+    final_ready_ids.update(finalized_video_ids)
+    for video_id in sorted(final_ready_ids):
+        try:
+            if cleanup_status(video_id):
+                continue
+            cleanup = cleanup_after_final_learning(video_id)
+            print(
+                f"[GROWTH][CLEANUP] #{video_id} "
+                f"removed={cleanup.get('removed_files', 0)} "
+                f"freed={cleanup.get('freed_mb', 0)}MB "
+                f"status={cleanup.get('status')}"
+            )
+        except Exception as exc:
+            print(
+                f"[GROWTH][CLEANUP] #{video_id} 自動削除失敗。"
+                f"次サイクルで再試行します: {exc}"
+            )
 
     return captured
 

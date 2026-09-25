@@ -77,6 +77,34 @@ class MiraiImprovementEngine:
                 }
             )
 
+        duplicate_failures = debug_categories.get(
+            "content_duplicate",
+            0,
+        )
+        if duplicate_failures >= 1:
+            recommendations.append(
+                {
+                    "area": "script",
+                    "priority": "high",
+                    "action": "直近テーマとフックの重複を自動回避する",
+                    "reason": (
+                        f"重複コンテンツ診断が{duplicate_failures}件あります。"
+                    ),
+                }
+            )
+            actions.append(
+                {
+                    "action_type": "planner_guidance",
+                    "title": "企画の多様性を強化",
+                    "value": (
+                        "直近10本と同じテーマ・フックを避ける。"
+                        "3本構成では実績型・改善型・新規実験を分散し、"
+                        "同じ内容ではなく成功した型だけを別テーマへ転用する。"
+                    ),
+                    "reason": "重複台本の再発防止。",
+                }
+            )
+
         if debug_categories.get("voice_service", 0) >= 2:
             recommendations.append(
                 {

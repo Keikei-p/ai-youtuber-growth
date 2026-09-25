@@ -69,6 +69,26 @@ def diagnose(
         confidence = 0.98
         evidence.append("database is locked")
         actions += ["WAL/busy timeout確認", "長時間トランザクションを避ける"]
+    elif any(
+        x in text
+        for x in (
+            "exact_duplicate_script",
+            "duplicate_script",
+            "content duplicate",
+        )
+    ):
+        category = "content_duplicate"
+        cause = (
+            "直近動画と同一または実質同じ台本を再生成しています。"
+            "企画ローテーションまたはフック分散が不足しています。"
+        )
+        confidence = 0.97
+        evidence.append("duplicate script/content")
+        actions += [
+            "直近企画を候補から除外",
+            "実績型・改善型・新規実験を分散",
+            "別フックへ切り替え",
+        ]
     elif any(x in text for x in ("json", "ollama", "ai response")):
         category = "text_model_output"
         cause = "ローカルLLMの出力形式が期待したJSON/文章形式から外れた可能性があります。"

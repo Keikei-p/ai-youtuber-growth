@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 
 from ai_client import OllamaClient
 from config import settings
@@ -33,6 +34,112 @@ FALLBACK_IDEAS = [
     }
 ]
 
+def _idea_text(row: dict) -> str:
+    raw = row.get("idea") if isinstance(row, dict) else ""
+    if isinstance(raw, dict):
+        raw = raw.get("idea") or ""
+    return str(raw or "").strip()
+
+
+def _idea_key(value: str) -> str:
+    value = re.sub(r"\s+", "", str(value or "")).lower()
+    value = re.sub(r"[【】\[\]（）()「」『』・:：#＃!?！？。、,.\-—_]", "", value)
+    return value
+
+
+def _fallback_variant(base: dict, cycle: int, serial: int) -> dict:
+    item = dict(base)
+    experiment_types = ("proven", "improve", "new")
+    item["experiment_type"] = experiment_types[(serial - 1) % 3]
+    if cycle <= 0:
+        return item
+
+    item["idea"] = f"{base['idea']}（成長実験{serial}）"
+    item["angle"] = (
+        f"{base.get('angle', '')}。前回との差を1点だけ変えて再検証する"
+    )
+    item["hook"] = f"成長実験{serial}。{base.get('hook', '')}"
+    return item
+
+
+def fallback_ideas(recent: list[dict], count: int) -> list[dict]:
+    count = max(1, int(count))
+    used = {
+        _idea_key(_idea_text(row))
+        for row in recent[:40]
+        if _idea_text(row)
+    }
+    selected: list[dict] = []
+    serial = 1
+
+    # 基本5企画を使い切った後も、成長実験番号付きの別検証として
+    # 無限ループせず安全に企画を分散できる。
+    for cycle in range(0, 50):
+        for base in FALLBACK_IDEAS:
+            candidate = _fallback_variant(base, cycle, serial)
+            serial += 1
+            key = _idea_key(candidate.get("idea", ""))
+            if not key or key in used:
+                continue
+            used.add(key)
+            selected.append(candidate)
+            if len(selected) >= count:
+                return selected
+    return selected
+
+
+def _validated_ideas(
+    data: list,
+    recent: list[dict],
+    count: int,
+) -> list[dict]:
+    used = {
+        _idea_key(_idea_text(row))
+        for row in recent[:40]
+        if _idea_text(row)
+    }
+    selected: list[dict] = []
+    for raw in data:
+        if not isinstance(raw, dict):
+            continue
+        idea = str(raw.get("idea") or "").strip()
+        if not idea:
+            continue
+        key = _idea_key(idea)
+        if not key or key in used:
+            continue
+        item = dict(raw)
+        item["idea"] = idea
+        item["angle"] = str(item.get("angle") or "").strip()
+        item["hook"] = str(item.get("hook") or "").strip()
+        experiment = str(item.get("experiment_type") or "new").strip().lower()
+        item["experiment_type"] = (
+            experiment
+            if experiment in {"proven", "improve", "new"}
+            else "new"
+        )
+        used.add(key)
+        selected.append(item)
+        if len(selected) >= count:
+            return selected
+
+    if len(selected) < count:
+        synthetic_recent = [
+            *recent,
+            *[
+                {"idea": item["idea"]}
+                for item in selected
+            ],
+        ]
+        selected.extend(
+            fallback_ideas(
+                synthetic_recent,
+                count - len(selected),
+            )
+        )
+    return selected[:count]
+
+
 def plan_ideas(character: dict, recent: list[dict], count: int | None = None) -> list[dict]:
     count = count or settings.posts_per_day
     client = OllamaClient()
@@ -50,7 +157,7 @@ def plan_ideas(character: dict, recent: list[dict], count: int | None = None) ->
     )
 
     if not client.available():
-        return FALLBACK_IDEAS[:count]
+        return fallback_ideas(recent, count)
 
     prompt = f"""
 あなたはYouTube Shorts専門の企画AIです。
@@ -98,4 +205,4 @@ JSON配列だけで返してください。
     data = client.generate_json(prompt)
     if not isinstance(data, list):
         raise ValueError("Planner output must be a JSON array")
-    return data[:count]
+    return _validated_ideas(data, recent, count)

@@ -31,6 +31,7 @@ from storage import (
     update_video_output,
 )
 from writer import fallback_script, rewrite_script, write_script
+from self_improvement import record_failure
 
 def load_character() -> dict:
     return json.loads(CHARACTER_FILE.read_text(encoding="utf-8"))
@@ -108,8 +109,16 @@ def upload_results(
             )
             if cleanup_local:
                 try:
-                    cleanup_uploaded_media(item["id"], item.get("output_path"))
-                    if settings.cleanup_after_upload:
+                    removed = cleanup_uploaded_media(
+                        item["id"],
+                        item.get("output_path"),
+                    )
+                    output_raw = str(item.get("output_path") or "").strip()
+                    if (
+                        removed
+                        and output_raw
+                        and not Path(output_raw).exists()
+                    ):
                         item["output_path"] = None
                 except Exception as cleanup_exc:
                     print(f"[CLEANUP] 投稿は成功済みですが削除処理でエラー: {cleanup_exc}")
@@ -157,6 +166,18 @@ def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict 
         return fallback
 
     print(f"[SKIP] 安全テンプレートも品質チェックNG: {issues}")
+    try:
+        record_failure(
+            "text.script_quality",
+            ",".join(issues) or "script_quality_failed",
+            {
+                "idea": str(idea.get("idea") or ""),
+                "angle": str(idea.get("angle") or ""),
+                "title": str(fallback.get("title") or ""),
+            },
+        )
+    except Exception as exc:
+        print(f"[IMPROVEMENT] 台本失敗記録をスキップ: {exc}")
     return None
 
 FIRST_EPISODE_STATE_KEY = "mirai_first_episode_completed"
@@ -434,6 +455,13 @@ def main() -> None:
         if args.show:
             print(item["script"])
             print()
+
+    if len(results) < target:
+        print(
+            f"[ERROR] 生成目標未達: {len(results)}/{target}。"
+            " 自動運転では次サイクルで再試行します。"
+        )
+        raise SystemExit(2)
 
 if __name__ == "__main__":
     main()

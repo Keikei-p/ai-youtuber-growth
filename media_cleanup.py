@@ -3,14 +3,25 @@ from pathlib import Path
 
 from config import settings
 from paths import AUDIO_DIR
-from storage import clear_video_output, uploaded_videos
+from storage import clear_video_output, snapshot_exists, uploaded_videos
+
+FINAL_LEARNING_HOURS = 168
 
 def cleanup_uploaded_media(video_id: int, output_path: str | None) -> list[Path]:
     """
-    YouTubeアップロード成功後だけ呼び出す。
-    MP4と同じstemのVOICEVOX WAVを削除し、DBのoutput_pathも空にする。
+    YouTubeアップロード後または手動掃除から呼び出す。
+    ただし7日(168h)学習が完了するまでは削除しない。
+    学習完了後だけMP4と同じstemのWAVを削除し、DBのoutput_pathも空にする。
     """
-    if not settings.cleanup_after_upload or not output_path:
+    if not output_path:
+        return []
+
+    # 投稿直後には消さない。24h/72h/7d学習の最終168hが完了してから削除する。
+    if not snapshot_exists(int(video_id), FINAL_LEARNING_HOURS):
+        print(
+            f"[CLEANUP] #{video_id} は7日学習前のため"
+            "MP4/WAVを保持します。"
+        )
         return []
 
     removed: list[Path] = []
