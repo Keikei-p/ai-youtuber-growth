@@ -43,7 +43,7 @@ class LegalGuardTests(unittest.TestCase):
         self.assertIn("defamation_or_allegation", codes)
         self.assertIn("entity_reputation", codes)
 
-    def test_missing_required_credit_blocks_publication(self) -> None:
+    def test_missing_required_credit_is_hard_blocked(self) -> None:
         result = publish_gate(
             {
                 "id": 42,
@@ -54,12 +54,49 @@ class LegalGuardTests(unittest.TestCase):
             required_credit="VOICEVOX:ずんだもん",
         )
         self.assertFalse(result["allowed"])
-        self.assertTrue(result["approval_id"])
+        self.assertTrue(result["hard_blocked"])
+        self.assertIsNone(result["approval_id"])
         codes = {
             item["code"]
             for item in result["risks"]
         }
         self.assertIn("missing_voice_credit", codes)
+
+    def test_zundamon_political_topic_is_hard_blocked(self) -> None:
+        result = publish_gate(
+            {
+                "id": 55,
+                "title": "選挙の話",
+                "script": "今日は選挙と候補者について話します。",
+                "description": "VOICEVOX:ずんだもん",
+            },
+            required_credit="VOICEVOX:ずんだもん",
+        )
+        self.assertFalse(result["allowed"])
+        self.assertTrue(result["hard_blocked"])
+        self.assertIsNone(result["approval_id"])
+        codes = {
+            item["code"]
+            for item in result["risks"]
+        }
+        self.assertIn("voice_license_politics_religion", codes)
+
+    def test_unresolved_required_voice_credit_is_hard_blocked(self) -> None:
+        result = publish_gate(
+            {
+                "id": 56,
+                "title": "安全な動画",
+                "script": "ミライの成長記録です。",
+                "description": "概要です。",
+            },
+            required_credit="__UNRESOLVED_REQUIRED_VOICE_CREDIT__",
+        )
+        self.assertFalse(result["allowed"])
+        self.assertTrue(result["hard_blocked"])
+        self.assertIn(
+            "unresolved_voice_credit",
+            {item["code"] for item in result["risks"]},
+        )
 
     def test_approved_risky_video_can_pass_gate(self) -> None:
         item = {
