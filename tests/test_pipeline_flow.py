@@ -154,7 +154,9 @@ class PipelineFlowTests(unittest.TestCase):
         }
 
         def fake_render_short(**kwargs):
-            Path(kwargs["output_path"]).write_bytes(b"bad-but-reviewable")
+            target = Path(kwargs["output_path"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"bad-but-reviewable")
 
         class FakeQuality:
             def inspect(self, *args, **kwargs):
