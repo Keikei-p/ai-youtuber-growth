@@ -23,9 +23,11 @@ from reviewer import review_script
 from storage import (
     export_json,
     init_db,
+    get_channel_state,
     mark_uploaded,
     recent_videos,
     save_video,
+    set_channel_state,
     update_video_output,
 )
 from writer import fallback_script, rewrite_script, write_script
@@ -157,6 +159,47 @@ def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict 
     print(f"[SKIP] 安全テンプレートも品質チェックNG: {issues}")
     return None
 
+FIRST_EPISODE_STATE_KEY = "mirai_first_episode_completed"
+
+
+def _first_episode_package() -> dict:
+    """初回だけ使う固定の自己紹介。2本目以降は通常の学習型企画へ戻す。"""
+    script = (
+        "はじめまして、ミライです。今日から完全AIユーチューバーとして活動を始めます。"
+        "このチャンネルでは、企画、台本、音声、画像、動画づくり、そして投稿後の分析まで、"
+        "AIができるだけ自分で進めます。まだ最初は完璧じゃありません。"
+        "でも、再生数や視聴維持率、みなさんの反応を学びながら、投稿するたびに少しずつ進化していきます。"
+        "AIの私がどこまで成長できるのか。今日が、その第1話です。ぜひ見守ってください。"
+    )
+    return {
+        "idea": {
+            "idea": "今日から完全AIユーチューバーになるミライの第1話",
+            "angle": "完全AI運営と、投稿後のデータから成長していく実験を短く宣言する自己紹介",
+            "hook": "今日から、完全AIユーチューバーになります。",
+            "experiment_type": "new",
+        },
+        "written": {
+            "title": "今日から、完全AIユーチューバーになります。【第1話】",
+            "script": script,
+        },
+        "metadata": {
+            "title": "今日から、完全AIユーチューバーになります。【第1話】",
+            "description": (
+                "はじめまして、AIユーチューバー「ミライ」です。\n\n"
+                "企画・台本・音声・画像・動画制作・投稿後の分析まで、AI中心で運営し、"
+                "視聴データや反応をもとに少しずつ改善していくチャンネルです。\n"
+                "まだ第1話。ここからどこまで成長できるのか、一緒に見届けてください。\n\n"
+                "※この動画にはAIで生成・編集した音声・画像・映像が含まれます。\n\n"
+                "#AIユーチューバー #完全AI運営 #AI #ミライ #AI成長記録"
+            ),
+            "tags": [
+                "AIユーチューバー", "完全AI運営", "AI", "ミライ",
+                "AI成長記録", "AI動画", "自動運営", "生成AI", "AIチャンネル",
+            ],
+        },
+    }
+
+
 def run_generation(
     render: bool = False,
     upload: bool = False,
@@ -180,6 +223,10 @@ def run_generation(
     recent = recent_videos(30)
     target = target_override or posts_per_day()
     results: list[dict] = []
+    first_episode_pending = (
+        get_channel_state(FIRST_EPISODE_STATE_KEY, "").strip().lower() != "true"
+    )
+    first_episode_reserved = False
 
     print(f"[PIPELINE] STEP 1/4 文章工程開始 / 目標 {target}本")
 
@@ -199,37 +246,46 @@ def run_generation(
             "企画→台本→品質確認→メタデータ"
         )
 
-        try:
-            ideas = plan_ideas(character, recent, 1)
-        except Exception as exc:
-            print(f"[PLAN] 企画生成失敗: {exc}")
-            ideas = []
+        is_first_episode = first_episode_pending and not first_episode_reserved
+        if is_first_episode:
+            package = _first_episode_package()
+            idea = dict(package["idea"])
+            written = dict(package["written"])
+            metadata = dict(package["metadata"])
+            guest = None
+            first_episode_reserved = True
+            print("[EPISODE-1] 初投稿専用: 完全AIユーチューバー開始動画を生成します。")
+        else:
+            try:
+                ideas = plan_ideas(character, recent, 1)
+            except Exception as exc:
+                print(f"[PLAN] 企画生成失敗: {exc}")
+                ideas = []
 
-        if not ideas:
-            failed_rounds += 1
-            continue
+            if not ideas:
+                failed_rounds += 1
+                continue
 
-        idea = dict(ideas[0])
+            idea = dict(ideas[0])
 
-        # ゲストはプロフィールだけ決める。
-        # 画像はSTEP 2まで生成しない。
-        guest = select_guest_for_next_video(
-            prepare_image=False,
-        )
-        if guest:
-            idea["guest"] = guest
+            # 第2話以降は従来どおり、学習戦略を使った完全自動企画。
+            guest = select_guest_for_next_video(
+                prepare_image=False,
+            )
+            if guest:
+                idea["guest"] = guest
 
-        written = _make_valid_script(character, idea, recent)
-        if not written:
-            failed_rounds += 1
-            continue
+            written = _make_valid_script(character, idea, recent)
+            if not written:
+                failed_rounds += 1
+                continue
 
-        metadata = build_metadata(
-            written=written,
-            idea=idea,
-            script=written["script"],
-            guest=guest,
-        )
+            metadata = build_metadata(
+                written=written,
+                idea=idea,
+                script=written["script"],
+                guest=guest,
+            )
 
         video_id = save_video(
             idea=idea["idea"],
@@ -251,6 +307,7 @@ def run_generation(
             "tags": metadata["tags"],
             "guest": guest,
             "status": "planned",
+            "first_episode": is_first_episode,
         }
         results.append(result)
         recent.insert(0, result)
@@ -273,6 +330,18 @@ def run_generation(
 
     if (render or upload) and not runtime_cancel_requested():
         render_results(results, character)
+        for item in results:
+            if (
+                item.get("first_episode")
+                and item.get("output_path")
+                and item.get("quality_passed") is not False
+            ):
+                set_channel_state(FIRST_EPISODE_STATE_KEY, "true")
+                set_channel_state("mirai_first_episode_video_id", str(item["id"]))
+                print(
+                    "[EPISODE-1] 第1話の完成を記録。"
+                    "次回から通常の完全学習型自動投稿へ移行します。"
+                )
     elif render or upload:
         print("[PIPELINE] 安全停止要求のためメディア工程をスキップします。")
 
