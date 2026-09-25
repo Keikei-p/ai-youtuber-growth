@@ -1126,12 +1126,15 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       </div>
       <div class="row"><span>ゲスト画像を自動生成</span><button id="guestImageAutoBtn" onclick="toggleGuestImageAuto()"></button></div>
       <div class="row"><span>AI動画素材を自動生成</span><button id="aiVideoBtn" onclick="toggleAiVideo()"></button></div>
-      <div class="row">
+      <div class="row" id="aiVideoLicenseRow">
         <span>AI動画モデルの利用条件</span>
         <label class="small">
           <input id="aiVideoLicenseConfirmed" type="checkbox" onchange="toggleAiVideoLicense()">
           確認済み
         </label>
+      </div>
+      <div id="aiVideoHint" class="small" style="margin:6px 0">
+        AI動画をONにするには、使用モデルの利用条件を確認して「確認済み」にチェックしてください。
       </div>
       <div class="small" style="margin:6px 0">
         使用モデル:
@@ -1343,10 +1346,16 @@ async function refresh(){
     guestImageAutoBtn.textContent=state.guest_image_auto_enabled?'ON':'OFF';
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
     aiVideoBtn.textContent=state.ai_video_enabled?'ON':'OFF';
-    aiVideoBtn.className=state.ai_video_enabled?'danger':'';
+    aiVideoBtn.className=state.ai_video_enabled?'primary':'';
     if(document.activeElement!==aiVideoLicenseConfirmed){
       aiVideoLicenseConfirmed.checked=Boolean(state.ai_video_license_confirmed);
     }
+    aiVideoLicenseRow.style.outline=(!state.ai_video_enabled&&!state.ai_video_license_confirmed)?'1px solid #8b6b30':'none';
+    aiVideoHint.textContent=state.ai_video_enabled
+      ? 'AI動画の自動生成はONです。'
+      : (state.ai_video_license_confirmed
+        ? '利用条件確認済みです。AI動画ボタンでON/OFFできます。'
+        : 'AI動画をONにするには、使用モデルの利用条件を確認して「確認済み」にチェックしてください。');
     aiVideoStatus.textContent='AI動画: '+(state.ai_video.available?'利用可能':'未準備')+' / '+escapeHtml(state.ai_video.backend||'')+' / '+state.ai_video.frames+' frames / '+state.ai_video.steps+' steps / '+state.ai_video.size.join('x')+(state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF')+(state.ai_video_license_confirmed?' / 利用条件確認済み':' / 利用条件未確認');
     const backend=state.studio.selected||'未接続';
     const gpu=state.studio.gpu_name||state.gpu.name||'CPU';
@@ -1458,7 +1467,8 @@ async function toggleAiVideoLicense(){
   if(next){
     const ok=confirm(
       'AI動画で使用するモデルの利用条件を確認し、用途に問題ないことを確認済みですか？\n\n'+
-      '確認済みの場合だけOKを押してください。'
+      '確認済みの場合だけOKを押してください。\n'+
+      'OK後、AI動画の自動生成もONにします。'
     );
     if(!ok){
       aiVideoLicenseConfirmed.checked=false;
@@ -1466,16 +1476,29 @@ async function toggleAiVideoLicense(){
     }
   }
   try{
-    await api('/api/settings',{ai_video_license_confirmed:next});
+    await api('/api/settings',{
+      ai_video_license_confirmed:next,
+      ai_video_enabled:next ? true : false
+    });
     await refresh();
+    if(next && state.ai_video_enabled){
+      alert('利用条件確認済みとして保存し、AI動画の自動生成をONにしました。');
+    }
   }catch(e){
     aiVideoLicenseConfirmed.checked=Boolean(state.ai_video_license_confirmed);
     alert(e.message);
+    await refresh();
   }
 }
 async function toggleAiVideo(){
   if(!state.ai_video_enabled && !state.ai_video_license_confirmed){
-    alert('先に「AI動画モデルの利用条件 → 確認済み」をチェックしてください。');
+    aiVideoLicenseRow.scrollIntoView({behavior:'smooth',block:'center'});
+    aiVideoLicenseRow.style.outline='2px solid #d6a23d';
+    alert(
+      'AI動画の安全ゲートが有効です。\n\n'+
+      '使用モデルの利用条件を確認したうえで、下の「確認済み」にチェックしてください。\n'+
+      'チェック後はAI動画も自動でONになります。'
+    );
     return;
   }
   if(!state.ai_video_enabled && !confirm('AI動画はGTX 1070では重い処理です。1本ずつ直列生成でONにしますか？')) return;

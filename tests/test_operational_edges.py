@@ -76,6 +76,27 @@ class OperationalEdgeTests(unittest.TestCase):
             )
             request.execute.assert_called_once_with()
 
+
+    def test_ai_video_license_gate_persists_and_disabling_license_disables_video(self) -> None:
+        import runtime_control
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_db = storage.DB_PATH
+            try:
+                storage.DB_PATH = Path(tmp) / "ai-video-gate.db"
+                storage.init_db()
+
+                runtime_control.set_ai_video_license_confirmed(True)
+                runtime_control.set_ai_video_enabled(True)
+                self.assertTrue(runtime_control.ai_video_license_confirmed())
+                self.assertTrue(runtime_control.ai_video_enabled())
+
+                runtime_control.set_ai_video_license_confirmed(False)
+                self.assertFalse(runtime_control.ai_video_license_confirmed())
+                self.assertFalse(runtime_control.ai_video_enabled())
+            finally:
+                storage.DB_PATH = old_db
+
     def test_upload_video_rejects_missing_file_before_auth(self) -> None:
         missing = Path("definitely-missing-final-test.mp4")
         with patch("youtube.uploader.get_credentials") as auth_mock:
