@@ -170,12 +170,12 @@ def cleanup_status(video_id: int) -> dict | None:
     except Exception:
         summary = {}
     return {
+        **summary,
         "status": "already_cleaned",
         "cleaned_at": row["cleaned_at"],
         "removed_files": int(row["removed_files"] or 0),
         "freed_bytes": int(row["freed_bytes"] or 0),
         "freed_mb": round(int(row["freed_bytes"] or 0) / 1024 / 1024, 2),
-        **summary,
     }
 
 
