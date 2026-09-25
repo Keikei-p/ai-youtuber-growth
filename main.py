@@ -54,7 +54,12 @@ def upload_results(
     from youtube.uploader import upload_video
 
     effective_privacy = privacy_status or settings.youtube_privacy_status
-    candidates = [item for item in results if item.get("output_path")]
+    candidates = [
+        item
+        for item in results
+        if item.get("output_path")
+        and item.get("quality_passed") is not False
+    ]
     if max_items is not None:
         candidates = candidates[:max_items]
 
