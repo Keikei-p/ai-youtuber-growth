@@ -559,7 +559,16 @@ def render_short(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     bgm_path = Path(settings.bgm_file) if settings.bgm_file else None
-    use_bgm = bool(bgm_path and bgm_path.exists())
+    use_bgm = bool(
+        bgm_path
+        and bgm_path.exists()
+        and settings.bgm_license_confirmed
+    )
+    if bgm_path and bgm_path.exists() and not settings.bgm_license_confirmed:
+        print(
+            "[LEGAL] BGM_FILEは設定されていますが、"
+            "BGM_LICENSE_CONFIRMED=true ではないため使用しません。"
+        )
 
     cmd = [
         "ffmpeg",
