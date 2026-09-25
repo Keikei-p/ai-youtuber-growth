@@ -68,7 +68,7 @@ from storage import (
     set_channel_state,
     video_by_id,
 )
-from voice.provider import voice_provider_status
+from voice.provider import voice_attribution_status, voice_provider_status
 from studio.asset_store import GENERATED_ROOT, list_assets
 from studio.image_generator import (
     generate_background_image,
@@ -278,6 +278,28 @@ def _engine_status() -> dict:
     }
 
 
+def _rights_status() -> dict:
+    voice_credit = voice_attribution_status()
+    bgm_configured = bool(str(settings.bgm_file or "").strip())
+    return {
+        "publish_guard": True,
+        "ai_disclosure": True,
+        "voice_credit_required": bool(voice_credit["required"]),
+        "voice_credit_resolved": bool(voice_credit["resolved"]),
+        "voice_credit": str(voice_credit["credit"] or ""),
+        "bgm_configured": bgm_configured,
+        "bgm_license_ok": (
+            (not bgm_configured)
+            or bool(settings.bgm_license_confirmed)
+        ),
+        "ai_video_enabled": bool(ai_video_enabled()),
+        "ai_video_license_ok": (
+            (not ai_video_enabled())
+            or bool(settings.ai_video_license_confirmed)
+        ),
+    }
+
+
 def _queue_status() -> list[dict]:
     rows = queued_items()
     return [
@@ -431,6 +453,7 @@ def _status_payload() -> dict:
         "services": services,
         "voice_provider": voice_provider_status(),
         "engines": _engine_status(),
+        "rights": _rights_status(),
         "system_ready": all(services.values()),
         "queue": _queue_status(),
         "videos": _video_status(),
@@ -894,6 +917,12 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div id="engineStatus"></div>
     </section>
 
+    <section class="card wide">
+      <h2>権利・公開安全</h2>
+      <p class="small">自動投稿前に、音声クレジット・第三者素材・AI開示・高リスク内容を安全側で確認します。</p>
+      <div id="rightsStatus"></div>
+    </section>
+
     <section class="card">
       <h2>運用設定</h2>
       <div class="row"><span>1日投稿数</span><input id="postsPerDay" type="number" min="1" max="10" style="width:92px"></div>
@@ -1072,6 +1101,19 @@ async function refresh(){
     const engines=state.engines||{};
     engineStatus.innerHTML=Object.values(engines).map(x=>
       '<div class="row"><span><b>'+escapeHtml(x.name)+'</b><div class="small">'+escapeHtml(x.detail||'')+'</div></span>'+badge(Boolean(x.available))+'</div>'
+    ).join('');
+    const rights=state.rights||{};
+    const creditDetail=rights.voice_credit_resolved
+      ? (rights.voice_credit||'不要')
+      : '必須クレジット未解決';
+    rightsStatus.innerHTML=[
+      ['公開前リスクガード',Boolean(rights.publish_guard),'危険内容は自動投稿しない'],
+      ['AI生成開示',Boolean(rights.ai_disclosure),'YouTubeへAI生成として送信'],
+      ['音声クレジット',Boolean(rights.voice_credit_resolved),creditDetail],
+      ['BGM権利',Boolean(rights.bgm_license_ok),rights.bgm_configured?'権利確認フラグ':'BGM未設定'],
+      ['AI動画モデル',Boolean(rights.ai_video_license_ok),rights.ai_video_enabled?'ライセンス確認':'AI動画OFF']
+    ].map(x=>
+      '<div class="row"><span><b>'+escapeHtml(x[0])+'</b><div class="small">'+escapeHtml(x[2])+'</div></span>'+badge(x[1])+'</div>'
     ).join('');
     if(document.activeElement!==postsPerDay) postsPerDay.value=state.posts_per_day;
     if(document.activeElement!==postTimes) postTimes.value=state.post_times;
