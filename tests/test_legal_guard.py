@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import storage
@@ -21,7 +22,11 @@ class LegalGuardTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_default_voicevox_speaker_has_required_credit(self) -> None:
-        with patch("voice.voicevox.settings.voicevox_speaker", 3):
+        fake_settings = SimpleNamespace(
+            voicevox_speaker=3,
+            voicevox_url="http://127.0.0.1:50021",
+        )
+        with patch("voice.voicevox.settings", fake_settings):
             self.assertEqual(
                 VoicevoxClient().attribution(),
                 "VOICEVOX:ずんだもん",
@@ -98,11 +103,30 @@ class LegalGuardTests(unittest.TestCase):
             {item["code"] for item in result["risks"]},
         )
 
-    def test_approved_risky_video_can_pass_gate(self) -> None:
+    def test_targeted_company_attack_cannot_be_approved_around_voice_license(self) -> None:
         item = {
             "id": 77,
             "title": "確認が必要",
             "script": "この株式会社の社長は詐欺師です。",
+            "description": "VOICEVOX:ずんだもん",
+        }
+        result = publish_gate(
+            item,
+            required_credit="VOICEVOX:ずんだもん",
+        )
+        self.assertFalse(result["allowed"])
+        self.assertTrue(result["hard_blocked"])
+        self.assertIsNone(result["approval_id"])
+        self.assertIn(
+            "voice_license_targeted_support_or_criticism",
+            {risk["code"] for risk in result["risks"]},
+        )
+
+    def test_non_license_review_risk_can_require_explicit_approval(self) -> None:
+        item = {
+            "id": 78,
+            "title": "法律の話",
+            "script": "この条件なら訴えれば勝てると考えます。",
             "description": "VOICEVOX:ずんだもん",
         }
         first = publish_gate(
@@ -110,6 +134,8 @@ class LegalGuardTests(unittest.TestCase):
             required_credit="VOICEVOX:ずんだもん",
         )
         self.assertFalse(first["allowed"])
+        self.assertFalse(first.get("hard_blocked", False))
+        self.assertTrue(first["approval_id"])
         resolve_approval(int(first["approval_id"]), True)
 
         second = publish_gate(
