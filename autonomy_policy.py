@@ -159,6 +159,10 @@ def _apply_approved_payload(
     課金・コード大改修・外部アカウント操作はここでは実行しない。
     """
     if action_type == "increase_resource_load":
+        value = payload.get("value")
+        if isinstance(value, dict):
+            payload = {**payload, **value}
+
         if "scene_images" in payload:
             count = max(1, min(int(payload["scene_images"]), 4))
             set_channel_state(
@@ -166,8 +170,15 @@ def _apply_approved_payload(
                 str(count),
             )
             return f"シーン画像数を{count}へ変更しました。"
+
         if "ai_video_enabled" in payload:
-            enabled = bool(payload["ai_video_enabled"])
+            raw = payload["ai_video_enabled"]
+            enabled = (
+                raw
+                if isinstance(raw, bool)
+                else str(raw).strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
             set_channel_state(
                 "ai_video_enabled",
                 "true" if enabled else "false",
@@ -176,6 +187,19 @@ def _apply_approved_payload(
                 "AI動画自動生成をONにしました。"
                 if enabled else "AI動画自動生成をOFFにしました。"
             )
+
+        # 数値だけ返された場合はシーン画像数として扱う。
+        if isinstance(value, (int, float, str)):
+            try:
+                count = max(1, min(int(value), 4))
+            except (TypeError, ValueError):
+                count = None
+            if count is not None:
+                set_channel_state(
+                    "learned_scene_images_override",
+                    str(count),
+                )
+                return f"シーン画像数を{count}へ変更しました。"
 
     return (
         "承認済みとして記録しました。"
