@@ -146,9 +146,9 @@ def run_generation(
 
     GPU負荷の異なる工程を同時実行しない。
     """
-    clear_runtime_cancel()
     ensure_runtime_dirs()
     init_db()
+    clear_runtime_cancel()
     character = load_character()
     recent = recent_videos(30)
     target = target_override or posts_per_day()
