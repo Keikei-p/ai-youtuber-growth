@@ -136,6 +136,27 @@ def set_guest_image_auto_enabled(enabled: bool) -> None:
     )
 
 
+def voice_provider_name() -> str:
+    value = get_channel_state("mirai_voice_provider", "").strip().lower()
+    if value in {"voicevox", "mirai_local"}:
+        return value
+    configured = str(
+        settings.mirai_voice_provider or "voicevox"
+    ).strip().lower()
+    if configured in {"voicevox", "mirai_local"}:
+        return configured
+    return "voicevox"
+
+
+def set_voice_provider_name(value: str) -> None:
+    value = str(value or "").strip().lower()
+    if value not in {"voicevox", "mirai_local"}:
+        raise ValueError(
+            "voice provider must be voicevox or mirai_local"
+        )
+    set_channel_state("mirai_voice_provider", value)
+
+
 def ai_video_enabled() -> bool:
     return _bool_state("ai_video_enabled", settings.ai_video_enabled)
 

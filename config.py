@@ -31,6 +31,13 @@ class Settings:
     voicevox_speaker: int = int(os.getenv("VOICEVOX_SPEAKER", "3"))
     voicevox_exe: str = os.getenv("VOICEVOX_EXE", "")
     mirai_voice_provider: str = os.getenv("MIRAI_VOICE_PROVIDER", "voicevox")
+    mirai_tts_url: str = os.getenv(
+        "MIRAI_TTS_URL",
+        "http://127.0.0.1:50150",
+    )
+    mirai_tts_timeout_seconds: int = int(
+        os.getenv("MIRAI_TTS_TIMEOUT_SECONDS", "120")
+    )
 
     app_root: str = os.getenv("APP_ROOT", ".")
     data_dir: str = os.getenv("DATA_DIR", "data")

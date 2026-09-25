@@ -51,9 +51,11 @@ from runtime_control import (
     set_post_times,
     set_posts_per_day,
     set_upload_privacy,
+    set_voice_provider_name,
     request_runtime_cancel,
     set_web_interval_seconds,
     upload_privacy,
+    voice_provider_name,
     visual_runtime_settings,
     web_interval_seconds,
 )
@@ -202,7 +204,7 @@ def _ensure_local_services() -> None:
     voice_status = voice_provider_status()
     if (
         not voice_status["available"]
-        and str(settings.mirai_voice_provider).strip().lower() == "voicevox"
+        and voice_provider_name() == "voicevox"
     ):
         paths = _candidate_voicevox_paths()
         if paths:
@@ -248,9 +250,15 @@ def _read_log_tail(max_chars: int = 12000) -> str:
 
 def _service_status() -> dict:
     voice_status = voice_provider_status()
+    selected_voice = voice_provider_name()
     return {
         "ollama": OllamaClient().available(),
-        "voicevox": bool(voice_status["available"]),
+        "voice": bool(voice_status["available"]),
+        "voicevox": (
+            bool(voice_status["available"])
+            if selected_voice == "voicevox"
+            else True
+        ),
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "youtube_token": Path(settings.youtube_token_file).exists(),
     }
@@ -490,7 +498,10 @@ def _status_payload() -> dict:
             "",
         ),
         "services": services,
-        "voice_provider": voice_provider_status(),
+        "voice_provider": {
+            **voice_provider_status(),
+            "selected": voice_provider_name(),
+        },
         "engines": _engine_status(),
         "rights": _rights_status(),
         "system_ready": all(services.values()),
@@ -1011,6 +1022,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div class="row"><span>投稿時刻</span><input id="postTimes" placeholder="09:00,15:00,21:00" style="width:190px"></div>
       <div class="row"><span>ゲスト出演</span><input id="guestEvery" type="number" min="0" max="100" style="width:92px"></div>
       <div class="row"><span>新ゲスト</span><input id="guestNewEvery" type="number" min="0" max="500" style="width:92px"></div>
+      <div class="row"><span>音声provider</span>
+        <select id="voiceProvider" style="min-width:180px">
+          <option value="voicevox">VOICEVOX（移行用）</option>
+          <option value="mirai_local">Mirai Local TTS（自作）</option>
+        </select>
+      </div>
+      <div class="small">Mirai Local TTSはローカルAPI接続。切替は再起動なしで次の音声生成から反映されます。</div>
       <div class="actions" style="margin-top:12px"><button class="primary" onclick="saveOperationSettings()">運用設定を保存</button></div>
     </section>
 
@@ -1218,6 +1236,8 @@ async function refresh(){
     if(document.activeElement!==postTimes) postTimes.value=state.post_times;
     if(document.activeElement!==guestEvery) guestEvery.value=state.guest_every;
     if(document.activeElement!==guestNewEvery) guestNewEvery.value=state.guest_new_every;
+    const voiceState=state.voice_provider||{};
+    if(document.activeElement!==voiceProvider) voiceProvider.value=voiceState.selected||'voicevox';
     autostartStatus.textContent=state.autostart_enabled?'登録済み':'未登録';
     autostartStatus.className='badge '+(state.autostart_enabled?'ok':'');
     wakeTaskStatus.textContent=state.wake_task_enabled?'登録済み':'未登録';
@@ -1640,6 +1660,8 @@ class Handler(BaseHTTPRequestHandler):
                     set_guest_appearance_every(int(body["guest_every"]))
                 if "guest_new_every" in body:
                     set_guest_new_every(int(body["guest_new_every"]))
+                if "voice_provider" in body:
+                    set_voice_provider_name(str(body["voice_provider"]))
                 if "guest_image_auto_enabled" in body:
                     set_guest_image_auto_enabled(
                         bool(body["guest_image_auto_enabled"])

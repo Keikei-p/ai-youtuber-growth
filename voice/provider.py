@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from config import settings
+from runtime_control import voice_provider_name
+from voice.mirai_local import MiraiLocalClient
 from voice.voicevox import VoicevoxClient
 
 
 def build_voice_provider():
-    name = str(settings.mirai_voice_provider or "voicevox").strip().lower()
+    name = voice_provider_name()
     if name == "voicevox":
         return VoicevoxClient()
-    raise RuntimeError(
-        f"未対応の音声providerです: {name}. "
-        "voice/provider.pyへproviderを追加してください。"
-    )
+    if name == "mirai_local":
+        return MiraiLocalClient()
+    raise RuntimeError(f"未対応の音声providerです: {name}.")
 
 
 def voice_provider_status() -> dict:
@@ -24,7 +25,7 @@ def voice_provider_status() -> dict:
         }
     except Exception as exc:
         return {
-            "name": str(settings.mirai_voice_provider or "unknown"),
+            "name": voice_provider_name(),
             "available": False,
             "error": str(exc),
         }
@@ -42,7 +43,7 @@ def voice_attribution() -> str:
 
 
 def voice_attribution_status() -> dict:
-    provider_name = str(settings.mirai_voice_provider or "").strip().lower()
+    provider_name = voice_provider_name()
     credit = voice_attribution()
     required = provider_name == "voicevox"
     return {
