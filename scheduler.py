@@ -236,6 +236,24 @@ def _restore_after_full_test(
     _save_full_test_state(state)
 
 
+def abort_full_test(reason: str = "安全停止") -> int:
+    state = _full_test_state()
+    if not state.get("active"):
+        return 0
+
+    video_ids = [
+        int(value)
+        for value in state.get("video_ids") or []
+        if str(value).isdigit()
+    ]
+    cancelled = cancel_queued_videos(video_ids)
+    state["active"] = False
+    state["status"] = reason
+    state["finished_at"] = _now().isoformat(timespec="seconds")
+    _save_full_test_state(state)
+    return cancelled
+
+
 def _maybe_finish_full_test() -> None:
     state = _full_test_state()
     if not state.get("active"):
