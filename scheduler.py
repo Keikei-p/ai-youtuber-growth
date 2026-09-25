@@ -389,6 +389,11 @@ def start_today_full_test(
     _save_full_test_state(state)
 
     if queued_count != target:
+        cancelled = cancel_queued_videos(video_ids)
+        print(
+            f"[FULL-TEST] 生成不足のため"
+            f"{cancelled}件のテストキューをキャンセルしました。"
+        )
         _restore_after_full_test(
             state,
             f"生成不足 {queued_count}/{target}",
@@ -587,6 +592,18 @@ def run_due() -> None:
         now.isoformat(timespec="minutes"),
         oldest_allowed.isoformat(timespec="minutes"),
     )
+
+    if full_test.get("active"):
+        test_ids = {
+            int(value)
+            for value in full_test.get("video_ids") or []
+            if str(value).isdigit()
+        }
+        rows = [
+            row
+            for row in rows
+            if int(row["video_id"]) in test_ids
+        ]
 
     if not rows:
         print("[SCHEDULE] 現在、投稿時刻を迎えた動画はありません。")
