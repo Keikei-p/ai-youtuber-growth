@@ -14,7 +14,7 @@ def upload_video(
     privacy_status: str = "private",
     category_id: str = "22",
     default_language: str = "ja",
-    contains_synthetic_media: bool = False,
+    contains_synthetic_media: bool = True,
 ) -> str:
     if not video_path.exists():
         raise FileNotFoundError(video_path)
