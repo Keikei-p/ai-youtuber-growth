@@ -311,6 +311,15 @@ def start_today_full_test(
             f"本日{end_hour}:00を過ぎているため開始できません。"
         )
 
+    if not _generation_runtime_ready():
+        raise RuntimeError(
+            "完全テストを開始できません。Ollama/VOICEVOX/FFmpegを確認してください。"
+        )
+    if not Path(settings.youtube_token_file).exists():
+        raise RuntimeError(
+            "YouTube認証が未完了です。完全テストを開始できません。"
+        )
+
     target = max(1, min(int(target), 3))
     slots = _test_slots(now, end_at, target)
     if len(slots) != target:
@@ -334,6 +343,7 @@ def start_today_full_test(
             for slot in slots
         ],
         "video_ids": [],
+        "generation_failures": 0,
         "previous": previous,
     }
     _save_full_test_state(state)
@@ -406,15 +416,32 @@ def _advance_full_test_generation() -> None:
         target_override=1,
     )
     if not results or not results[0].get("output_path"):
-        state["status"] = f"生成失敗 {index}/{target}"
+        failures = int(state.get("generation_failures") or 0) + 1
+        state["generation_failures"] = failures
+        state["status"] = f"生成失敗 {index}/{target} / 再試行 {failures}/3"
         _save_full_test_state(state)
         record_failure(
             "full_test.generate",
             "1本の完成動画を生成できませんでした",
-            {"index": index + 1, "target": target},
+            {
+                "index": index + 1,
+                "target": target,
+                "attempt": failures,
+            },
         )
+        if failures >= 3:
+            cancel_queued_videos(video_ids)
+            _restore_after_full_test(
+                state,
+                f"生成失敗で停止 {index}/{target}",
+            )
+            print(
+                "[FULL-TEST] 同じ生成失敗が3回続いたため、"
+                "PC負荷を避けてテストを停止しました。"
+            )
         return
 
+    state["generation_failures"] = 0
     item = results[0]
     video_id = int(item["id"])
     slot = datetime.fromisoformat(str(slots_raw[index]))
