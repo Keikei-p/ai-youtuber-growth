@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
+from legal_guard import publish_gate
 from main import run_generation
 from resource_governor import background_production_decision
 from self_improvement import (
@@ -41,7 +42,7 @@ from storage import (
     update_queue_schedule,
     video_by_id,
 )
-from voice.provider import voice_provider_status
+from voice.provider import voice_attribution, voice_provider_status
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -712,6 +713,18 @@ def run_due() -> None:
             if not output_path:
                 raise FileNotFoundError("動画ファイルのパスがありません")
 
+            gate = publish_gate(
+                row,
+                required_credit=voice_attribution(),
+            )
+            if not gate["allowed"]:
+                print(
+                    f"[LEGAL] #{row['video_id']} は公開前確認待ち。"
+                    f" approval_id={gate.get('approval_id')} / "
+                    f"{gate.get('risks')}"
+                )
+                continue
+
             youtube_id = upload_video(
                 video_path=Path(output_path),
                 title=row["title"],
@@ -723,7 +736,7 @@ def run_due() -> None:
                 privacy_status=upload_privacy(),
                 category_id=settings.youtube_category_id,
                 default_language=settings.youtube_default_language,
-                contains_synthetic_media=settings.youtube_contains_synthetic_media,
+                contains_synthetic_media=True,
             )
             mark_uploaded(row["video_id"], youtube_id)
             mark_queue_uploaded(
