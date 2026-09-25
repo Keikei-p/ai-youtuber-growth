@@ -176,8 +176,9 @@ def _test_slots(
     if count <= 0:
         return []
 
-    # 3本を先に生成する時間を確保し、最後は18時の15分前までに投稿。
-    earliest = _ceil_to_quarter(now + timedelta(minutes=150))
+    # 1本ずつ完結するため、最初の投稿判定は約45分後から。
+    # 生成が長引いて時刻を過ぎた場合は、完成直後のrun_dueで投稿する。
+    earliest = _ceil_to_quarter(now + timedelta(minutes=45))
     latest = end_at - timedelta(minutes=15)
     if latest <= now:
         return []
