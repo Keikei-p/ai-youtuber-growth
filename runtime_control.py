@@ -144,3 +144,13 @@ def set_ai_video_enabled(enabled: bool) -> None:
         "ai_video_enabled",
         "true" if enabled else "false",
     )
+
+
+def runtime_cancel_requested() -> bool:
+    return _bool_state("runtime_cancel_requested", False)
+
+def request_runtime_cancel() -> None:
+    set_channel_state("runtime_cancel_requested", "true")
+
+def clear_runtime_cancel() -> None:
+    set_channel_state("runtime_cancel_requested", "false")
