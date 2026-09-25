@@ -5,7 +5,11 @@ from pathlib import Path
 
 from config import settings
 from gpu_manager import release_torch_cuda_cache, unload_ollama_model
-from runtime_control import ai_video_enabled, guest_image_auto_enabled
+from runtime_control import (
+    ai_video_enabled,
+    guest_image_auto_enabled,
+    runtime_cancel_requested,
+)
 from storage import (
     active_guests,
     get_channel_state,
@@ -355,6 +359,18 @@ def render_videos(results: list[dict], character: dict) -> None:
 
 
 def produce_media(results: list[dict], character: dict) -> None:
+    if runtime_cancel_requested():
+        print("[PIPELINE] 安全停止要求のためメディア制作を開始しません。")
+        return
+
     prepare_visuals(results)
+    if runtime_cancel_requested():
+        print("[PIPELINE] 安全停止要求: 画像工程後に停止します。")
+        return
+
     synthesize_audio(results)
+    if runtime_cancel_requested():
+        print("[PIPELINE] 安全停止要求: 音声工程後に停止します。")
+        return
+
     render_videos(results, character)
