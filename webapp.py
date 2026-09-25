@@ -49,7 +49,13 @@ from runtime_control import (
     web_interval_seconds,
 )
 from resource_governor import resource_snapshot
-from scheduler import prepare_upcoming, run_due, tick
+from scheduler import (
+    full_test_status,
+    prepare_upcoming,
+    run_due,
+    start_today_full_test,
+    tick,
+)
 from storage import (
     active_guests,
     analytics_history,
@@ -361,6 +367,7 @@ def _status_payload() -> dict:
         "videos": _video_status(),
         "guests": _guest_status(),
         "growth": _growth_status(),
+        "full_test": full_test_status(),
         "last_cycle_at": last_cycle_at,
         "last_cycle_result": last_cycle_result,
         "current_job": current_job,
@@ -483,6 +490,96 @@ def _night_test_mode() -> str:
         "・スリープ復帰チェック: 60分ごと\n\n"
         + wake_output
     )
+
+
+def _run_today_full_test() -> dict:
+    wake_message = ""
+    try:
+        wake_message = _install_wake_task(30)
+    except Exception as exc:
+        wake_message = (
+            "WakeToRun登録は失敗しましたが、"
+            f"Webアプリ稼働中のテストは続行します: {exc}"
+        )
+        _append_log("[FULL-TEST] " + wake_message)
+
+    result = start_today_full_test(
+        target=3,
+        end_hour=18,
+    )
+    print("[FULL-TEST] " + wake_message)
+    print(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return result
+
+
+def _consume_full_test_request() -> None:
+    request_path = ROOT / "automation" / "full_test_request.json"
+    if not request_path.exists():
+        return
+
+    try:
+        request = json.loads(
+            request_path.read_text(
+                encoding="utf-8",
+            )
+        )
+    except Exception as exc:
+        _append_log(
+            f"[FULL-TEST] request読込失敗: {exc}"
+        )
+        return
+
+    request_id = str(request.get("request_id") or "").strip()
+    if not request_id:
+        return
+
+    consumed = get_channel_state(
+        "full_test_consumed_request_id",
+        "",
+    ).strip()
+    if consumed == request_id:
+        return
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    if str(request.get("date") or "") != today:
+        return
+
+    end_hour = int(request.get("end_hour") or 18)
+    if datetime.now().hour >= end_hour:
+        set_channel_state(
+            "full_test_consumed_request_id",
+            request_id,
+        )
+        _append_log(
+            "[FULL-TEST] requestは終了時刻後のため"
+            "開始せず消化扱いにしました。"
+        )
+        return
+
+    # 二重起動防止を先に記録。
+    set_channel_state(
+        "full_test_consumed_request_id",
+        request_id,
+    )
+
+    def runner():
+        result = _run_captured(
+            "今日18時まで3本完全テスト",
+            _run_today_full_test,
+        )
+        _append_log(result.get("message", ""))
+
+    threading.Thread(
+        target=runner,
+        name="full-test-request",
+        daemon=True,
+    ).start()
 
 
 def _update_and_restart() -> None:
@@ -664,6 +761,15 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div class="actions" style="margin-top:12px"><button class="primary" onclick="saveOperationSettings()">運用設定を保存</button></div>
     </section>
 
+    <section class="card full">
+      <h2>今日18時まで3本・完全自動テスト</h2>
+      <div id="fullTestStatus" class="studio-status small"></div>
+      <div class="actions">
+        <button class="primary" onclick="runAction('full_test_today')">3本完全テストを開始/確認</button>
+      </div>
+      <div class="small" style="margin-top:8px">通常制作フローで3本作成し、YouTubeへprivateで時刻分散して自動投稿します。18時で打ち切り、通常設定へ戻ります。</div>
+    </section>
+
     <section class="card wide">
       <h2>投稿キュー</h2>
       <div id="queue" class="queue"></div>
@@ -816,6 +922,9 @@ async function refresh(){
     if(state.current_job){
       lastCycle.textContent='実行中: '+state.current_job+' / 開始 '+(state.current_job_started_at||'');
     }
+    const ft=state.full_test||{};
+    const ftSlots=(ft.slots||[]).map(x=>String(x).slice(11,16)).join(' / ');
+    fullTestStatus.textContent='状態: '+(ft.status||'未実行')+' / 投稿 '+(ft.uploaded||0)+'/'+(ft.target||3)+(ftSlots?' / 予定 '+ftSlots:'')+(ft.end_at?' / 終了 '+String(ft.end_at).slice(11,16):'');
     queue.innerHTML=state.queue.length?state.queue.map(x=>'<div class="q"><b>'+escapeHtml(x.title)+'</b><div class="small">'+x.scheduled_for+' / #'+x.video_id+' / retry '+x.attempts+'</div></div>').join(''):'<div class="small">キューなし</div>';
     guests.innerHTML=state.guests.length?state.guests.map(x=>'<div class="row"><span>'+escapeHtml(x.name)+'</span><span class="small">'+x.appearances+'回 '+(x.has_image?'画像あり':'画像未生成')+'</span></div>').join(''):'<div class="small">まだゲストなし</div>';
     guestImageAutoBtn.textContent=state.guest_image_auto_enabled?'ON':'OFF';
@@ -1240,6 +1349,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 actions = {
+                    "full_test_today": (
+                        "今日18時まで3本完全テスト",
+                        _run_today_full_test,
+                    ),
                     "cycle": ("1サイクル", tick),
                     "prepare": ("動画準備", prepare_upcoming),
                     "due": ("投稿時刻確認", run_due),
@@ -1343,6 +1456,7 @@ def run(open_browser: bool = True) -> None:
         return
 
     _ensure_local_services()
+    _consume_full_test_request()
 
     worker = threading.Thread(
         target=_cycle_worker,
