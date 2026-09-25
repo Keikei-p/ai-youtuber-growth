@@ -4,6 +4,7 @@ import struct
 import tempfile
 import unittest
 import wave
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -190,6 +191,25 @@ class PipelineFlowTests(unittest.TestCase):
         self.assertTrue(Path(item["output_path"]).is_file())
         row = storage.video_by_id(video_id)
         self.assertEqual(row["status"], "quality_failed")
+
+
+    def test_ai_video_generation_is_skipped_until_license_confirmed(self) -> None:
+        item = {
+            "id": 88,
+            "title": "AI動画ライセンステスト",
+            "idea": {"idea": "test", "angle": "test"},
+        }
+        fake_settings = SimpleNamespace(
+            ai_video_license_confirmed=False,
+        )
+        with (
+            patch.object(production_pipeline, "settings", fake_settings),
+            patch.object(production_pipeline, "ai_video_enabled", return_value=True),
+            patch.object(production_pipeline, "generate_animatediff_clip") as generated,
+        ):
+            result = production_pipeline._generate_ai_video_asset(item)
+        self.assertIsNone(result)
+        generated.assert_not_called()
 
 
 if __name__ == "__main__":
