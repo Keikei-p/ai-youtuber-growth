@@ -434,7 +434,21 @@ def _generate(
 
 def _mirai_reference_path() -> Path | None:
     path = Path(str(settings.mirai_reference_image or "")).expanduser()
-    return path if path.is_file() else None
+    if not path.is_file():
+        return None
+    try:
+        with Image.open(path) as raw:
+            raw.verify()
+        with Image.open(path) as raw:
+            if raw.width < 256 or raw.height < 256:
+                return None
+        return path
+    except Exception as exc:
+        print(
+            "[STUDIO] ミライ基準画像を無効扱いにします: "
+            f"{path} / {exc}"
+        )
+        return None
 
 
 def _reference_for_preset(
@@ -953,18 +967,22 @@ def _asset_visual_meta(selection: dict, meta: dict | None = None) -> dict:
 
 def generate_mirai_image(expression: str = "normal") -> str:
     prompt = build_mirai_prompt(expression)
-    identity_locked = mirai_identity_lock_enabled()
+    identity_requested = mirai_identity_lock_enabled()
     reference = _mirai_reference_path()
-    if identity_locked and reference is None:
-        raise RuntimeError(
-            "ミライ固定キャラONですが基準画像がありません。"
-            "別人を生成せず安全停止します。"
+    identity_locked = bool(identity_requested and reference is not None)
+
+    if identity_requested and reference is None:
+        print(
+            "[STUDIO] ミライ固定キャラ用の正常な基準画像がないため、"
+            "identity-lockをこの生成だけ安全スキップします。"
         )
 
     meta = {
         "expression": expression,
+        "identity_requested": identity_requested,
         "identity_locked": identity_locked,
         "reference_image": str(reference) if reference else "",
+        "identity_fallback": bool(identity_requested and not identity_locked),
     }
     selection = _generate_best_image(
         prompt,

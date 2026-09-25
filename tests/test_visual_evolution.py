@@ -89,12 +89,60 @@ class VisualEvolutionTests(unittest.TestCase):
         self.assertGreaterEqual(selected["quality"]["score"], 60)
         self.assertIs(selected["image"], good)
 
-    def test_reference_asset_is_valid_image(self) -> None:
-        path = Path("assets/character/mirai_reference.jpg")
-        self.assertTrue(path.is_file())
-        with Image.open(path) as image:
-            self.assertGreaterEqual(image.width, 512)
-            self.assertGreaterEqual(image.height, 512)
+    def test_invalid_reference_asset_is_safely_ignored(self) -> None:
+        invalid = Path(self.tmp.name) / "broken.jpg"
+        invalid.write_bytes(b"not-a-valid-image")
+        fake_settings = SimpleNamespace(
+            mirai_reference_image=str(invalid),
+        )
+        with patch.object(image_generator, "settings", fake_settings):
+            self.assertIsNone(image_generator._mirai_reference_path())
+
+    def test_missing_or_invalid_reference_falls_back_to_normal_generation(self) -> None:
+        invalid = Path(self.tmp.name) / "broken.jpg"
+        invalid.write_bytes(b"broken")
+        selected = {
+            "image": Image.effect_noise((512, 768), 70).convert("RGB"),
+            "backend": "fake",
+            "quality": {
+                "score": 80,
+                "passed": True,
+                "metrics": {},
+                "issues": [],
+            },
+            "prompt": "mirai",
+            "profile": "detail",
+        }
+        saved = Path(self.tmp.name) / "mirai-fallback.png"
+        fake_settings = SimpleNamespace(
+            mirai_reference_image=str(invalid),
+        )
+        with (
+            patch.object(image_generator, "settings", fake_settings),
+            patch.object(
+                image_generator,
+                "mirai_identity_lock_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                image_generator,
+                "_generate_best_image",
+                return_value=selected,
+            ) as best,
+            patch.object(
+                image_generator,
+                "_save_selected_visual",
+                return_value=saved,
+            ),
+            patch.object(image_generator, "record_asset"),
+        ):
+            result = image_generator.generate_mirai_image("normal")
+
+        self.assertEqual(result, str(saved))
+        self.assertIsNone(best.call_args.kwargs["generator_fn"])
+        self.assertTrue(best.call_args.kwargs["meta"]["identity_requested"])
+        self.assertFalse(best.call_args.kwargs["meta"]["identity_locked"])
+        self.assertTrue(best.call_args.kwargs["meta"]["identity_fallback"])
 
     def test_mirai_generation_uses_reference_generator_when_locked(self) -> None:
         reference = Path(self.tmp.name) / "reference.jpg"
