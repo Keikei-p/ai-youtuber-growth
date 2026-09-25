@@ -858,9 +858,9 @@ HTML = r"""<!doctype html>
 :root{font-family:Inter,"Yu Gothic UI",Meiryo,sans-serif;color:#eef5ff;background:#08111f}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(135deg,#07111f,#10223c 55%,#151a36);min-height:100vh}
 .wrap{max-width:1280px;margin:auto;padding:20px}.top{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-h1{margin:0;font-size:28px}.sub{color:#a8bad2;font-size:14px}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:18px}
+h1{margin:0;font-size:28px}.sub{color:#a8bad2;font-size:14px}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:18px;grid-auto-flow:dense}
 .card{grid-column:span 4;background:rgba(14,27,48,.88);border:1px solid #263d5d;border-radius:18px;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.22)}
-.card.wide{grid-column:span 8}.card.full{grid-column:span 12}.card h2{font-size:17px;margin:0 0 14px}
+.card.wide{grid-column:span 8}.card.half{grid-column:span 6}.card.full{grid-column:span 12}.card h2{font-size:17px;margin:0 0 14px}
 .row{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #20344e}.row:last-child{border:0}
 .badge{padding:5px 9px;border-radius:999px;font-size:12px;background:#233b59}.ok{background:#124d3c}.ng{background:#5b2630}
 button,select,input{border:1px solid #355275;background:#102844;color:#fff;border-radius:10px;padding:10px 12px}
@@ -868,9 +868,9 @@ button{cursor:pointer;font-weight:700}button.primary{background:#2274db}button.d
 .queue{display:grid;gap:9px}.q{padding:11px;border-radius:12px;background:#0b1b30}.small{font-size:12px;color:#9cb0c9}.strategy{line-height:1.7;background:#0b1b30;padding:13px;border-radius:12px}
 pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;border-radius:12px;max-height:330px;overflow:auto;color:#bcd0e7}
 .toggle{display:flex;align-items:center;gap:8px}.hero{display:flex;gap:12px;align-items:center}.orb{width:52px;height:52px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#c4dcff,#6598ef 45%,#243c7c);box-shadow:0 0 30px #4c82e855}
-.studio-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px}.asset{background:#0b1b30;border-radius:12px;overflow:hidden;border:1px solid #20344e}.asset img{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#06101c}.asset .meta{padding:9px}.studio-status{margin:8px 0 14px;padding:10px;border-radius:12px;background:#0b1b30}
+.studio-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px}.asset{background:#0b1b30;border-radius:12px;overflow:hidden;border:1px solid #20344e}.asset img{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#06101c}.asset video{display:block;width:100%;aspect-ratio:9/16;object-fit:contain;background:#000}.asset .meta{padding:9px}.studio-status{margin:8px 0 14px;padding:10px;border-radius:12px;background:#0b1b30}
 .library-list{display:grid;gap:12px}.library-item{background:#0b1b30;border:1px solid #20344e;border-radius:14px;padding:14px}.library-head{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}.library-meta{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.library-item details{margin-top:12px}.library-item summary{cursor:pointer;font-weight:700;color:#dcecff}.library-item video{display:block;width:min(100%,360px);max-height:640px;margin-top:10px;border-radius:12px;background:#000}.library-images{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:12px}.library-images img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:10px;background:#06101c}.linkbtn{display:inline-block;text-decoration:none;border:1px solid #355275;background:#102844;color:#fff;border-radius:10px;padding:8px 10px;font-size:12px;font-weight:700}
-@media(max-width:900px){.card,.card.wide{grid-column:span 12}.wrap{padding:12px}h1{font-size:22px}}
+@media(max-width:900px){.card,.card.wide,.card.half{grid-column:span 12}.wrap{padding:12px}h1{font-size:22px}button,select,input{max-width:100%}.actions input,.actions select{min-width:0!important;flex:1 1 180px}}
 </style>
 </head>
 <body>
@@ -911,13 +911,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       </div>
     </section>
 
-    <section class="card wide">
+    <section class="card half">
       <h2>Mirai 自作エンジン</h2>
       <p class="small">判断・構成・品質・原因究明・改善はミライ側。外部ツールはprovider/実行器として使用します。</p>
       <div id="engineStatus"></div>
     </section>
 
-    <section class="card wide">
+    <section class="card half">
       <h2>権利・公開安全</h2>
       <p class="small">自動投稿前に、音声クレジット・第三者素材・AI開示・高リスク内容を安全側で確認します。</p>
       <div id="rightsStatus"></div>
@@ -1027,7 +1027,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <div id="analytics" style="margin-top:12px"></div>
     </section>
 
-    <section class="card wide">
+    <section class="card full">
       <h2>スマホ・外出先リモート管理</h2>
       <p class="small">Tailscaleのプライベートネットワークだけで管理画面を共有します。一般公開はしません。</p>
       <div class="row"><span>状態</span><span id="remoteAccessStatus" class="badge"></span></div>
@@ -1152,10 +1152,15 @@ async function refresh(){
     studioInstallBtn.textContent=installing?'AIスタジオ導入中…':'AIスタジオをPCへ導入';
     studioGuestSelect.innerHTML=state.guests.length?state.guests.map(x=>'<option value="'+x.id+'">'+escapeHtml(x.name)+'</option>').join(''):'<option value="">ゲストなし</option>';
     studioAssets.innerHTML=state.studio_assets.length?state.studio_assets.map(x=>{
-      const img=x.url?'<img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy">':'';
+      const isVideo=(x.type==='ai_video'||x.type==='motion_video'||String(x.url||'').toLowerCase().endsWith('.mp4'));
+      const media=x.url
+        ? (isVideo
+          ? '<video controls preload="none" src="'+escapeHtml(x.url)+'"></video>'
+          : '<img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy">')
+        : '';
       const name=(x.meta&&x.meta.guest_name)?' / '+escapeHtml(x.meta.guest_name):'';
-      return '<div class="asset">'+img+'<div class="meta"><b>'+escapeHtml(x.type||'asset')+name+'</b><div class="small">'+escapeHtml(x.backend||'')+' / '+escapeHtml(x.created_at||'')+'</div></div></div>';
-    }).join(''):'<div class="small">まだ生成画像がありません。</div>';
+      return '<div class="asset">'+media+'<div class="meta"><b>'+escapeHtml(x.type||'asset')+name+'</b><div class="small">'+escapeHtml(x.backend||'')+' / '+escapeHtml(x.created_at||'')+'</div></div></div>';
+    }).join(''):'<div class="small">まだ生成素材がありません。</div>';
     videos.innerHTML=state.videos.length?state.videos.map(x=>{
       const local=x.has_local_file
         ? '<span class="badge ok">PC動画あり</span>'
