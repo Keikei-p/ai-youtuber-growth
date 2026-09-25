@@ -38,6 +38,7 @@ APPROVAL_ACTIONS = {
     "increase_resource_load",
     "large_model_download",
     "external_account_change",
+    "content_risk_publish",
 }
 
 
@@ -158,6 +159,16 @@ def _apply_approved_payload(
     承認後にアプリ内だけで安全に反映できる設定変更。
     課金・コード大改修・外部アカウント操作はここでは実行しない。
     """
+    if action_type == "content_risk_publish":
+        video_id = int(payload.get("video_id") or 0)
+        if video_id <= 0:
+            return "動画IDが不正なため公開承認を反映できませんでした。"
+        set_channel_state(
+            f"legal_publish_approved_{video_id}",
+            "true",
+        )
+        return f"動画#{video_id}のリスク確認を承認しました。次回投稿判定で公開可能になります。"
+
     if action_type == "increase_resource_load":
         value = payload.get("value")
         if isinstance(value, dict):
