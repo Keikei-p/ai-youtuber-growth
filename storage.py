@@ -540,6 +540,25 @@ def occupied_schedule_times() -> set[str]:
         ).fetchall()
     return {str(r["scheduled_for"]) for r in rows}
 
+def cancel_queued_videos(video_ids: list[int]) -> int:
+    ids = [int(value) for value in video_ids if int(value) > 0]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    with connect() as conn:
+        cur = conn.execute(
+            f"""
+            UPDATE posting_queue
+            SET status = 'cancelled',
+                error = COALESCE(error, 'test window ended')
+            WHERE status = 'queued'
+              AND video_id IN ({placeholders})
+            """,
+            ids,
+        )
+        return int(cur.rowcount or 0)
+
+
 def update_queue_schedule(queue_id: int, scheduled_for: str) -> None:
     with connect() as conn:
         conn.execute(
