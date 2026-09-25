@@ -13,22 +13,7 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 class VoicevoxClient:
     def attribution(self) -> str:
-        # 公式のspeaker一覧から話者名を解決。サービス停止時は既知IDへフォールバック。
-        try:
-            response = requests.get(
-                f"{settings.voicevox_url}/speakers",
-                timeout=3,
-            )
-            response.raise_for_status()
-            for speaker in response.json() or []:
-                for style in speaker.get("styles") or []:
-                    if int(style.get("id")) == int(settings.voicevox_speaker):
-                        name = str(speaker.get("name") or "").strip()
-                        if name:
-                            return f"VOICEVOX:{name}"
-        except Exception:
-            pass
-
+        # 既知IDは即解決。未知IDのみ公式Engineのspeaker一覧へ問い合わせる。
         known = {
             0: "四国めたん",
             1: "ずんだもん",
@@ -46,10 +31,37 @@ class VoicevoxClient:
             14: "冥鳴ひまり",
             16: "九州そら",
             22: "ずんだもん",
+            36: "四国めたん",
+            37: "四国めたん",
             38: "ずんだもん",
+            61: "中国うさぎ",
+            62: "中国うさぎ",
+            63: "中国うさぎ",
+            64: "中国うさぎ",
+            65: "波音リツ",
+            75: "ずんだもん",
+            76: "ずんだもん",
         }
-        name = known.get(int(settings.voicevox_speaker))
-        return f"VOICEVOX:{name}" if name else ""
+        speaker_id = int(settings.voicevox_speaker)
+        name = known.get(speaker_id)
+        if name:
+            return f"VOICEVOX:{name}"
+
+        try:
+            response = requests.get(
+                f"{settings.voicevox_url}/speakers",
+                timeout=3,
+            )
+            response.raise_for_status()
+            for speaker in response.json() or []:
+                for style in speaker.get("styles") or []:
+                    if int(style.get("id")) == speaker_id:
+                        name = str(speaker.get("name") or "").strip()
+                        if name:
+                            return f"VOICEVOX:{name}"
+        except Exception:
+            pass
+        return ""
 
     """
     波形生成provider。
