@@ -668,10 +668,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       <h2>投稿キュー</h2>
       <div id="queue" class="queue"></div>
       <div class="actions" style="margin-top:12px">
-        <button onclick="runAction('prepare')">次の動画を準備</button>
+        <button class="primary" onclick="runAction('generate_one')">通常運転テスト：1本制作</button>
+        <button class="primary" onclick="runPrivateTest()">通常運転フルテスト：YouTube非公開</button>
+        <button onclick="runAction('prepare')">次の投稿枠を準備</button>
         <button onclick="runAction('due')">投稿時刻を確認</button>
-        <button onclick="runAction('generate_one')">1本だけ生成</button>
-        <button onclick="runPrivateTest()">非公開テスト投稿1本</button>
+      </div>
+      <div class="small" style="margin-top:8px">
+        1本制作はYouTubeへ投稿しません。フルテストは制作→YouTube非公開投稿まで確認し、完成動画はPCにも残します。
       </div>
     </section>
 
@@ -966,7 +969,7 @@ async function saveOperationSettings(){
   refresh();
 }
 async function runPrivateTest(){
-  if(!confirm('動画を1本生成してYouTubeへ非公開でテスト投稿します。実行しますか？')) return;
+  if(!confirm('通常運転と同じ制作フローで1本生成し、YouTubeへ非公開でテスト投稿します。完成動画はPCにも残します。実行しますか？')) return;
   await runAction('private_test');
 }
 async function runNightTest(){
@@ -1240,9 +1243,9 @@ class Handler(BaseHTTPRequestHandler):
                     "cycle": ("1サイクル", tick),
                     "prepare": ("動画準備", prepare_upcoming),
                     "due": ("投稿時刻確認", run_due),
-                    "private_test": ("非公開テスト投稿", run_private_upload_test),
+                    "private_test": ("通常運転フルテスト（非公開）", run_private_upload_test),
                     "generate_one": (
-                        "1本生成",
+                        "通常運転テスト（1本制作）",
                         lambda: run_generation(
                             render=True,
                             upload=False,
