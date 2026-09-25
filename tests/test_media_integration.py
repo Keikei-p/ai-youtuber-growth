@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import shutil
 import struct
 import tempfile
@@ -33,9 +34,15 @@ class MediaIntegrationTests(unittest.TestCase):
                 handle.setnchannels(1)
                 handle.setsampwidth(2)
                 handle.setframerate(rate)
-                handle.writeframes(
-                    struct.pack("<h", 0) * frame_count
-                )
+                samples = bytearray()
+                for index in range(frame_count):
+                    value = int(
+                        1800 * math.sin(
+                            2 * math.pi * 220 * index / rate
+                        )
+                    )
+                    samples.extend(struct.pack("<h", value))
+                handle.writeframes(bytes(samples))
 
             script = "これは統合テストです。完成動画の品質を確認します。"
             composer = MiraiComposer()
