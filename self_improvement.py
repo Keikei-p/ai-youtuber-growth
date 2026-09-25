@@ -9,6 +9,9 @@ from typing import Any
 from ai_client import OllamaClient
 from autonomy_policy import classify_action, request_approval
 from config import settings
+from mirai_engines.debug_engine import MiraiDebugEngine
+from mirai_engines.improvement_engine import MiraiImprovementEngine
+from mirai_engines.quality_engine import MiraiQualityEngine
 from storage import (
     analytics_history,
     connect,
@@ -118,11 +121,26 @@ def record_failure(
         category=category,
         occurrences=occurrences,
     )
+    diagnosis = {}
+    try:
+        diagnosis = MiraiDebugEngine().diagnose_and_store(
+            stage,
+            message,
+            context=context or {},
+            occurrences=occurrences,
+        )
+    except Exception as exc:
+        diagnosis = {
+            "category": "debug_engine_error",
+            "likely_cause": str(exc),
+        }
+
     return {
         "fingerprint": fingerprint,
         "occurrences": occurrences,
         "category": category,
         "adaptations": adaptations,
+        "diagnosis": diagnosis,
     }
 
 
@@ -365,34 +383,43 @@ def _process_improvement_actions(data: dict) -> tuple[list[str], list[int], list
     return applied, approvals, queued_tests
 
 
+def _merge_unique(
+    first: list[dict],
+    second: list[dict],
+    key_fields: tuple[str, ...],
+) -> list[dict]:
+    result: list[dict] = []
+    seen: set[str] = set()
+    for item in [*first, *second]:
+        if not isinstance(item, dict):
+            continue
+        key = "|".join(str(item.get(field) or "") for field in key_fields)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
 def run_improvement_review() -> dict:
     failures = failure_summary()
     analytics = analytics_history(12)
     strategy = get_channel_state("growth_strategy", "")
 
-    fallback = {
-        "summary": (
-            "失敗履歴と動画成績を蓄積中です。"
-            "同じGPU失敗が繰り返された場合は負荷を自動で下げます。"
-        ),
-        "recommendations": [],
-        "actions": [],
-        "requires_code_change": False,
-    }
+    # 中核は自作の決定論的エンジン。Ollamaが落ちても改善は止まらない。
+    baseline = MiraiImprovementEngine().review()
+    data = dict(baseline)
 
     client = OllamaClient()
-    if not client.available():
-        set_channel_state(
-            "ai_improvement_report",
-            json.dumps(fallback, ensure_ascii=False),
-        )
-        return fallback
+    if client.available():
+        prompt = f"""
+あなたはMirai Improvement Engineの補助AIです。
+自作エンジンの診断を優先し、追加の改善案だけをJSONで返してください。
 
-    prompt = f"""
-あなたは自律型AI YouTuber制作アプリの改善担当AIです。
-失敗を繰り返さず、PC負荷を抑え、動画品質と会話品質を上げる改善案を出します。
+自作エンジンの結果:
+{json.dumps(baseline, ensure_ascii=False)}
 
-現在の失敗集計:
+失敗集計:
 {json.dumps(failures, ensure_ascii=False)}
 
 最近の動画分析:
@@ -405,12 +432,9 @@ def run_improvement_review() -> dict:
 - 同時に重いGPU処理を実行しない
 - GTX 1070 8GBを前提にする
 - 投稿公開設定や課金を勝手に変更しない
-- コード変更が必要な案はrequires_code_change=trueにする
-- 同じ失敗への再発防止を優先
-- 動画品質、字幕、画像、話し方、テンポの改善も考える
-- 安全な学習/企画/話し方/負荷軽減はactionsに構造化する
-- 負荷増加・大型モデル・課金・外部契約・大幅コード変更・削除・公開範囲変更は必ず承認対象にする
-- 小さい非破壊コード改善はminor_code_changeとして提案できるが、実行前テストが必要
+- コード変更が必要な案はrequires_code_change=true
+- 安全な学習/企画/話し方/負荷軽減のみ自動action可
+- 負荷増加・大型モデル・課金・外部契約・大幅コード変更・削除・公開範囲変更は承認対象
 - JSONだけ返す
 
 {{
@@ -434,12 +458,31 @@ def run_improvement_review() -> dict:
   "requires_code_change":false
 }}
 """
-    try:
-        data = client.generate_json(prompt)
-        if not isinstance(data, dict):
-            raise ValueError("invalid improvement review")
-    except Exception:
-        data = fallback
+        try:
+            ai_data = client.generate_json(prompt)
+            if isinstance(ai_data, dict):
+                data["summary"] = (
+                    str(baseline.get("summary") or "")
+                    + " / AI補助: "
+                    + str(ai_data.get("summary") or "")
+                ).strip(" /")
+                data["recommendations"] = _merge_unique(
+                    baseline.get("recommendations") or [],
+                    ai_data.get("recommendations") or [],
+                    ("area", "action"),
+                )
+                data["actions"] = _merge_unique(
+                    baseline.get("actions") or [],
+                    ai_data.get("actions") or [],
+                    ("action_type", "title"),
+                )
+                data["requires_code_change"] = bool(
+                    baseline.get("requires_code_change")
+                    or ai_data.get("requires_code_change")
+                )
+                data["source"] = "mirai-engine+ollama-assist"
+        except Exception as exc:
+            data["ai_assist_error"] = str(exc)
 
     applied, approvals, queued_tests = _process_improvement_actions(data)
     data["applied_actions"] = applied
@@ -484,6 +527,8 @@ def improvement_state() -> dict:
             "[]",
         ),
         "recent_failures": recent_failures(8),
+        "recent_quality": MiraiQualityEngine().recent(8),
+        "recent_diagnoses": MiraiDebugEngine().recent(8),
     }
 
 
