@@ -16,6 +16,7 @@ class OperationalEdgeTests(unittest.TestCase):
             video_path.write_bytes(b"fake-mp4")
 
             credentials = object()
+            media_upload = object()
             service = MagicMock()
             request = MagicMock()
             request.execute.return_value = {"id": "youtube-test-id"}
@@ -24,6 +25,10 @@ class OperationalEdgeTests(unittest.TestCase):
             with (
                 patch("youtube.uploader.get_credentials", return_value=credentials),
                 patch("youtube.uploader.build", return_value=service) as build_mock,
+                patch(
+                    "youtube.uploader.MediaFileUpload",
+                    return_value=media_upload,
+                ) as media_mock,
             ):
                 youtube_id = upload_video(
                     video_path=video_path,
@@ -42,7 +47,13 @@ class OperationalEdgeTests(unittest.TestCase):
                 "v3",
                 credentials=credentials,
             )
+            media_mock.assert_called_once_with(
+                str(video_path),
+                mimetype="video/mp4",
+                resumable=True,
+            )
             insert_kwargs = service.videos.return_value.insert.call_args.kwargs
+            self.assertIs(insert_kwargs["media_body"], media_upload)
             self.assertEqual(insert_kwargs["part"], "snippet,status")
             self.assertEqual(len(insert_kwargs["body"]["snippet"]["title"]), 100)
             self.assertEqual(
