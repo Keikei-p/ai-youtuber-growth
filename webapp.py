@@ -25,6 +25,8 @@ from growth_engine import show_growth_state
 from gpu_manager import gpu_snapshot
 from guest_manager import create_guest_now
 from main import run_cleanup_uploaded, run_generation, run_private_upload_test
+from maintenance import compact_runtime_storage, rotate_log, storage_snapshot
+from quick_test import run_quick_diagnostics
 from paths import VIDEO_DIR
 from runtime_control import (
     ai_video_enabled,
@@ -38,6 +40,11 @@ from runtime_control import (
     set_ai_video_enabled,
     set_auto_upload_enabled,
     set_automation_enabled,
+    set_visual_background_candidates,
+    set_visual_candidate_count,
+    set_visual_min_score,
+    set_visual_retry_rounds,
+    set_visual_video_min_score,
     set_guest_appearance_every,
     set_guest_image_auto_enabled,
     set_guest_new_every,
@@ -47,6 +54,7 @@ from runtime_control import (
     request_runtime_cancel,
     set_web_interval_seconds,
     upload_privacy,
+    visual_runtime_settings,
     web_interval_seconds,
 )
 from resource_governor import resource_snapshot
@@ -100,10 +108,22 @@ _current_job_started_at: str | None = None
 _stop_event = threading.Event()
 _wake_event = threading.Event()
 _http_server: ThreadingHTTPServer | None = None
+_storage_cache_at = 0.0
+_storage_cache: dict = {}
+
+
+def _cached_storage_snapshot() -> dict:
+    global _storage_cache_at, _storage_cache
+    now = time.time()
+    if not _storage_cache or now - _storage_cache_at >= 30:
+        _storage_cache = storage_snapshot()
+        _storage_cache_at = now
+    return dict(_storage_cache)
 
 
 def _append_log(text: str) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    rotate_log(LOG_FILE)
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with LOG_FILE.open("a", encoding="utf-8") as f:
         f.write(f"\n[{stamp}]\n{text.rstrip()}\n")
@@ -463,6 +483,12 @@ def _status_payload() -> dict:
         "studio": studio_status(),
         "gpu": gpu_snapshot(),
         "studio_assets": _studio_assets(),
+        "visual_runtime": visual_runtime_settings(),
+        "storage": _cached_storage_snapshot(),
+        "quick_diagnostics_last": get_channel_state(
+            "quick_diagnostics_last",
+            "",
+        ),
         "services": services,
         "voice_provider": voice_provider_status(),
         "engines": _engine_status(),
@@ -755,6 +781,11 @@ def _remote_access_refresh() -> str:
 
 
 def _update_and_restart() -> None:
+    """
+    ユーザー操作としての再起動は不要。
+    設定変更はDBから即時反映し、Pythonコード更新時だけ裏で
+    新プロセスへ自動引継ぎする。
+    """
     git = shutil.which("git")
     if not git:
         raise RuntimeError("Gitが見つかりません")
@@ -772,6 +803,14 @@ def _update_and_restart() -> None:
             "未保存の変更を確認してください。"
         )
 
+    before = subprocess.run(
+        [git, "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
     pull = subprocess.run(
         [git, "pull", "--ff-only"],
         cwd=ROOT,
@@ -781,6 +820,36 @@ def _update_and_restart() -> None:
     )
     print(pull.stdout.strip() or "Already up to date.")
 
+    after = subprocess.run(
+        [git, "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    if before == after:
+        print("[UPDATE] すでに最新版です。プロセス入替は不要です。")
+        return
+
+    changed = subprocess.run(
+        [git, "diff", "--name-only", before, after],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    needs_process_swap = any(
+        Path(name).suffix.lower() in {".py", ".pyw"}
+        for name in changed
+    )
+    print("[UPDATE] 変更: " + ", ".join(changed[:30]))
+
+    if not needs_process_swap:
+        print("[UPDATE] Pythonコード変更なし。再起動なしで更新完了。")
+        return
+
+    print("[UPDATE] Pythonコードを安全に自動引継ぎします。手動再起動は不要です。")
     helper = ROOT / "restart_helper.pyw"
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     subprocess.Popen(
@@ -1021,6 +1090,23 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
     </section>
 
     <section class="card full">
+      <h2>軽量・再起動なし運用</h2>
+      <p class="small">本番画質は落とさず、テストと保存容量だけを軽くします。下の画質設定は保存直後から次の生成へ反映されます。</p>
+      <div class="row"><span>キャラ候補数</span><input id="visualCandidates" type="number" min="1" max="4" style="width:92px"></div>
+      <div class="row"><span>背景候補数</span><input id="visualBackgroundCandidates" type="number" min="1" max="3" style="width:92px"></div>
+      <div class="row"><span>低品質時の再生成</span><input id="visualRetries" type="number" min="0" max="2" style="width:92px"></div>
+      <div class="row"><span>画像の最低品質点</span><input id="visualMinScore" type="number" min="40" max="95" style="width:92px"></div>
+      <div class="row"><span>AI動画の最低品質点</span><input id="visualVideoMinScore" type="number" min="40" max="95" style="width:92px"></div>
+      <div class="actions" style="margin-top:12px">
+        <button class="primary" onclick="saveVisualSettings()">画質設定を即時反映</button>
+        <button onclick="runAction('quick_test')">軽量クイックテスト</button>
+        <button onclick="runAction('compact_storage')">容量を安全に最適化</button>
+      </div>
+      <div id="quickOpsStatus" class="studio-status small" style="margin-top:12px"></div>
+      <div class="small">クイックテストは一時ファイルだけを使い、AIモデルの重い本番生成やYouTube投稿は行いません。</div>
+    </section>
+
+    <section class="card full">
       <h2>AI改善センター</h2>
       <p class="small">失敗を記録し、同じ失敗を繰り返さないよう負荷設定を学習します。コード変更案は勝手に適用しません。</p>
       <div class="actions" style="margin-bottom:12px">
@@ -1070,7 +1156,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
       </div>
       <div class="small" style="margin-top:8px">夜間テストではローカル動画だけ制作し、YouTube自動投稿はOFFにします。</div>
       <div class="actions" style="margin-top:12px">
-        <button onclick="updateRestart()">最新版へ更新して再起動</button>
+        <button onclick="smartUpdate()">最新版を自動反映（手動再起動不要）</button>
       </div>
     </section>
 
@@ -1215,6 +1301,22 @@ async function refresh(){
         : '<img src="'+escapeHtml(x.url)+'?t='+encodeURIComponent(x.created_at||'')+'" loading="lazy">';
       return '<div>'+media+'<div class="small">'+escapeHtml(label||x.type||'素材')+'</div></div>';
     }).join(''):'<div class="small">まだ生成素材がありません。</div>';
+    const vr=state.visual_runtime||{};
+    if(document.activeElement!==visualCandidates) visualCandidates.value=vr.candidate_count??2;
+    if(document.activeElement!==visualBackgroundCandidates) visualBackgroundCandidates.value=vr.background_candidates??1;
+    if(document.activeElement!==visualRetries) visualRetries.value=vr.retry_rounds??1;
+    if(document.activeElement!==visualMinScore) visualMinScore.value=vr.min_score??60;
+    if(document.activeElement!==visualVideoMinScore) visualVideoMinScore.value=vr.video_min_score??60;
+    const storage=state.storage||{};
+    let quickText='容量: '+Number(storage.total_mb||0).toFixed(2)+'MB';
+    if(state.quick_diagnostics_last){
+      try{
+        const quick=JSON.parse(state.quick_diagnostics_last);
+        quickText+=' / 軽量テスト: '+(quick.ok?'PASS':'要確認')+' / '+escapeHtml(quick.finished_at||'');
+      }catch(e){}
+    }
+    quickOpsStatus.textContent=quickText;
+
     const rs=state.resource||{};
     const rmem=(rs.memory||{});
     const rgpu=(rs.gpu||{});
@@ -1306,6 +1408,20 @@ async function saveOperationSettings(){
   alert(data.message);
   refresh();
 }
+
+async function saveVisualSettings(){
+  try{
+    await api('/api/settings',{
+      visual_candidate_count:Number(visualCandidates.value),
+      visual_background_candidates:Number(visualBackgroundCandidates.value),
+      visual_retry_rounds:Number(visualRetries.value),
+      visual_min_score:Number(visualMinScore.value),
+      visual_video_min_score:Number(visualVideoMinScore.value)
+    });
+    await refresh();
+    alert('画質設定を再起動なしで反映しました。');
+  }catch(e){alert(e.message)}
+}
 async function runPrivateTest(){
   if(!confirm('通常運転と同じ制作フローで1本生成し、YouTubeへ非公開でテスト投稿します。完成動画はPCにも残します。実行しますか？')) return;
   await runAction('private_test');
@@ -1321,11 +1437,23 @@ async function safeStop(){
   alert(data.message);
   refresh();
 }
-async function updateRestart(){
-  if(!confirm('GitHubの最新版を取り込み、Webアプリを再起動します。よろしいですか？')) return;
-  const data=await api('/api/action',{action:'update_restart'});
-  alert(data.message+'\n数秒後に自動で再起動します。');
-  setTimeout(()=>location.reload(),5000);
+async function smartUpdate(){
+  if(!confirm('最新版を取り込みます。設定変更は即時反映、Pythonコード更新時だけ裏で自動引継ぎします。続けますか？')) return;
+  try{
+    const data=await api('/api/action',{action:'update_smart'});
+    alert(data.message+'\n手動でPCやアプリを再起動する必要はありません。');
+    let tries=0;
+    const timer=setInterval(async()=>{
+      tries++;
+      try{
+        await api('/api/status');
+        clearInterval(timer);
+        await refresh();
+      }catch(e){
+        if(tries>30) clearInterval(timer);
+      }
+    },1000);
+  }catch(e){alert(e.message)}
 }
 async function runAction(action){
   const data=await api('/api/action',{action});
@@ -1524,6 +1652,20 @@ class Handler(BaseHTTPRequestHandler):
                             " AI_VIDEO_LICENSE_CONFIRMED=true は確認後だけ設定してください。"
                         )
                     set_ai_video_enabled(enabled)
+                if "visual_candidate_count" in body:
+                    set_visual_candidate_count(int(body["visual_candidate_count"]))
+                if "visual_background_candidates" in body:
+                    set_visual_background_candidates(
+                        int(body["visual_background_candidates"])
+                    )
+                if "visual_retry_rounds" in body:
+                    set_visual_retry_rounds(int(body["visual_retry_rounds"]))
+                if "visual_min_score" in body:
+                    set_visual_min_score(int(body["visual_min_score"]))
+                if "visual_video_min_score" in body:
+                    set_visual_video_min_score(
+                        int(body["visual_video_min_score"])
+                    )
 
                 _wake_event.set()
                 self._json({"ok": True, "message": "設定を保存しました。自動運転へ反映します。"})
@@ -1625,6 +1767,22 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                     "guest": ("新ゲスト生成", create_guest_now),
                     "cleanup": ("投稿済みファイル掃除", run_cleanup_uploaded),
+                    "quick_test": (
+                        "軽量クイックテスト",
+                        lambda: print(json.dumps(
+                            run_quick_diagnostics(),
+                            ensure_ascii=False,
+                            indent=2,
+                        )),
+                    ),
+                    "compact_storage": (
+                        "安全な容量最適化",
+                        lambda: print(json.dumps(
+                            compact_runtime_storage(),
+                            ensure_ascii=False,
+                            indent=2,
+                        )),
+                    ),
                     "services": ("AIサービス起動確認", _ensure_local_services),
                     "improvement_review": (
                         "AI改善分析",
@@ -1670,8 +1828,8 @@ class Handler(BaseHTTPRequestHandler):
                         "夜間テスト運用",
                         lambda: print(_night_test_mode()),
                     ),
-                    "update_restart": (
-                        "最新版更新と再起動",
+                    "update_smart": (
+                        "最新版を自動反映",
                         _update_and_restart,
                     ),
                 }
@@ -1682,7 +1840,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 label, func = actions[action]
 
-                if action == "update_restart":
+                if action == "update_smart":
                     result = _run_captured(label, func)
                     _append_log(result.get("message", ""))
                     self._json(

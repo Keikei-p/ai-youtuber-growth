@@ -10,6 +10,8 @@ from runtime_control import (
     ai_video_enabled,
     guest_image_auto_enabled,
     runtime_cancel_requested,
+    visual_min_score,
+    visual_video_min_score,
 )
 from storage import (
     active_guests,
@@ -75,7 +77,7 @@ def _ensure_mirai_visual(item: dict) -> str | None:
     if existing:
         report = MiraiVisualQualityEngine().inspect_image(existing, asset_type="mirai")
         item["mirai_visual_quality"] = report
-        threshold = max(40, min(int(getattr(settings, "visual_min_score", 60)), 95))
+        threshold = visual_min_score()
         if bool(report.get("passed")) and int(report.get("score") or 0) >= threshold:
             item["character_image_path"] = str(existing)
             item["mirai_visual"] = VisualLearningMemory().find_by_path(existing) or {
@@ -211,9 +213,7 @@ def _generate_ai_video_asset(item: dict) -> str | None:
             path, asset_type="ai_video"
         )
         item["ai_video_visual"] = report
-        threshold = max(
-            40, min(int(getattr(settings, "visual_video_min_score", 60)), 95)
-        )
+        threshold = visual_video_min_score()
         accepted = bool(report.get("passed")) and int(report.get("score") or 0) >= threshold
         VisualLearningMemory().record_result(
             asset_type="ai_video", path=path, prompt=prompt,
@@ -256,7 +256,7 @@ def _ensure_guest_visual(item: dict) -> str | None:
     if existing and Path(existing).exists():
         report = MiraiVisualQualityEngine().inspect_image(existing, asset_type="guest")
         item["guest_visual_quality"] = report
-        threshold = max(40, min(int(getattr(settings, "visual_min_score", 60)), 95))
+        threshold = visual_min_score()
         if bool(report.get("passed")) and int(report.get("score") or 0) >= threshold:
             item["guest_visual"] = VisualLearningMemory().find_by_path(existing) or {
                 "score": int(report.get("score") or 0), "profile": "",

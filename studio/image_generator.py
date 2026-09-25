@@ -14,6 +14,12 @@ import requests
 from PIL import Image
 
 from config import settings
+from runtime_control import (
+    visual_background_candidates,
+    visual_candidate_count,
+    visual_min_score,
+    visual_retry_rounds,
+)
 from mirai_engines.visual_learning import VisualLearningMemory
 from mirai_engines.visual_quality_engine import MiraiVisualQualityEngine
 from gpu_manager import (
@@ -445,7 +451,7 @@ def _seed_base() -> int:
 
 
 def _visual_min_score() -> int:
-    return max(40, min(int(getattr(settings, "visual_min_score", 60)), 95))
+    return visual_min_score()
 
 
 def _generate_best_image(
@@ -459,11 +465,11 @@ def _generate_best_image(
     quality_engine = MiraiVisualQualityEngine()
     preferred = memory.recommended_profile(asset_type)
     candidate_count = (
-        max(1, min(int(getattr(settings, "visual_candidate_count", 2)), 4))
+        visual_candidate_count()
         if asset_type in {"mirai", "guest"}
-        else max(1, min(int(getattr(settings, "visual_background_candidates", 1)), 3))
+        else visual_background_candidates()
     )
-    retry_rounds = max(0, min(int(getattr(settings, "visual_retry_rounds", 1)), 2))
+    retry_rounds = visual_retry_rounds()
     threshold = _visual_min_score()
     seed_base = _seed_base()
     candidates: list[dict] = []

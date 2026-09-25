@@ -58,7 +58,8 @@ def record_asset(
     }
     rows = _load()
     rows.append(row)
-    _save(rows[-500:])
+    # UI用索引は小さく保つ。学習履歴はSQLite側に残るため品質は落ちない。
+    _save(rows[-250:])
     return row
 
 

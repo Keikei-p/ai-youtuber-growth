@@ -146,6 +146,96 @@ def set_ai_video_enabled(enabled: bool) -> None:
     )
 
 
+def visual_candidate_count() -> int:
+    return _int_state(
+        "visual_candidate_count",
+        settings.visual_candidate_count,
+        1,
+        4,
+    )
+
+
+def set_visual_candidate_count(value: int) -> None:
+    set_channel_state(
+        "visual_candidate_count",
+        str(max(1, min(4, int(value)))),
+    )
+
+
+def visual_background_candidates() -> int:
+    return _int_state(
+        "visual_background_candidates",
+        settings.visual_background_candidates,
+        1,
+        3,
+    )
+
+
+def set_visual_background_candidates(value: int) -> None:
+    set_channel_state(
+        "visual_background_candidates",
+        str(max(1, min(3, int(value)))),
+    )
+
+
+def visual_retry_rounds() -> int:
+    return _int_state(
+        "visual_retry_rounds",
+        settings.visual_retry_rounds,
+        0,
+        2,
+    )
+
+
+def set_visual_retry_rounds(value: int) -> None:
+    set_channel_state(
+        "visual_retry_rounds",
+        str(max(0, min(2, int(value)))),
+    )
+
+
+def visual_min_score() -> int:
+    return _int_state(
+        "visual_min_score",
+        settings.visual_min_score,
+        40,
+        95,
+    )
+
+
+def set_visual_min_score(value: int) -> None:
+    set_channel_state(
+        "visual_min_score",
+        str(max(40, min(95, int(value)))),
+    )
+
+
+def visual_video_min_score() -> int:
+    return _int_state(
+        "visual_video_min_score",
+        settings.visual_video_min_score,
+        40,
+        95,
+    )
+
+
+def set_visual_video_min_score(value: int) -> None:
+    set_channel_state(
+        "visual_video_min_score",
+        str(max(40, min(95, int(value)))),
+    )
+
+
+def visual_runtime_settings() -> dict:
+    return {
+        "candidate_count": visual_candidate_count(),
+        "background_candidates": visual_background_candidates(),
+        "retry_rounds": visual_retry_rounds(),
+        "min_score": visual_min_score(),
+        "video_min_score": visual_video_min_score(),
+    }
+
+
 def runtime_cancel_requested() -> bool:
     return _bool_state("runtime_cancel_requested", False)
 
