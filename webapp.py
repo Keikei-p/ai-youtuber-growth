@@ -68,7 +68,7 @@ from storage import (
     set_channel_state,
     video_by_id,
 )
-from voice.voicevox import VoicevoxClient
+from voice.provider import build_voice_provider, voice_provider_status
 from studio.asset_store import GENERATED_ROOT, list_assets
 from studio.image_generator import (
     generate_background_image,
@@ -176,7 +176,11 @@ def _ensure_local_services() -> None:
             except Exception as exc:
                 _append_log(f"[SERVICE] Ollama自動起動失敗: {exc}")
 
-    if not VoicevoxClient().available():
+    voice_status = voice_provider_status()
+    if (
+        not voice_status["available"]
+        and str(settings.mirai_voice_provider).strip().lower() == "voicevox"
+    ):
         paths = _candidate_voicevox_paths()
         if paths:
             try:
@@ -220,9 +224,10 @@ def _read_log_tail(max_chars: int = 12000) -> str:
 
 
 def _service_status() -> dict:
+    voice_status = voice_provider_status()
     return {
         "ollama": OllamaClient().available(),
-        "voicevox": VoicevoxClient().available(),
+        "voicevox": bool(voice_status["available"]),
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "youtube_token": Path(settings.youtube_token_file).exists(),
     }
@@ -364,6 +369,7 @@ def _status_payload() -> dict:
         "gpu": gpu_snapshot(),
         "studio_assets": _studio_assets(),
         "services": services,
+        "voice_provider": voice_provider_status(),
         "system_ready": all(services.values()),
         "queue": _queue_status(),
         "videos": _video_status(),
