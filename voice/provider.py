@@ -39,3 +39,14 @@ def voice_attribution() -> str:
     except Exception:
         pass
     return ""
+
+
+def voice_attribution_status() -> dict:
+    provider_name = str(settings.mirai_voice_provider or "").strip().lower()
+    credit = voice_attribution()
+    required = provider_name == "voicevox"
+    return {
+        "required": required,
+        "credit": credit,
+        "resolved": (not required) or bool(credit),
+    }
