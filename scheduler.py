@@ -31,8 +31,11 @@ from storage import (
     occupied_schedule_times,
     queue_video,
     queued_items,
+    get_channel_state,
+    queue_for_day,
     set_channel_state,
     update_queue_schedule,
+    video_by_id,
 )
 from voice.voicevox import VoicevoxClient
 from youtube.uploader import upload_video
@@ -83,6 +86,301 @@ def _next_free_slots(start: datetime, count: int, days: int = 14) -> list[dateti
 
     return slots
 
+
+FULL_TEST_STATE_KEY = "today_full_test_state"
+
+
+def _full_test_state() -> dict:
+    raw = get_channel_state(FULL_TEST_STATE_KEY, "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_full_test_state(state: dict) -> None:
+    set_channel_state(
+        FULL_TEST_STATE_KEY,
+        json.dumps(state, ensure_ascii=False),
+    )
+
+
+def full_test_status() -> dict:
+    state = _full_test_state()
+    if not state:
+        return {
+            "active": False,
+            "status": "未実行",
+            "target": 0,
+            "uploaded": 0,
+            "video_ids": [],
+            "slots": [],
+            "end_at": None,
+        }
+
+    video_ids = [
+        int(value)
+        for value in state.get("video_ids") or []
+        if str(value).isdigit()
+    ]
+    uploaded = 0
+    rows: list[dict] = []
+    for video_id in video_ids:
+        row = video_by_id(video_id)
+        if row:
+            rows.append(row)
+            if row.get("youtube_video_id"):
+                uploaded += 1
+
+    return {
+        "active": bool(state.get("active")),
+        "status": str(state.get("status") or "準備中"),
+        "target": int(state.get("target") or 0),
+        "uploaded": uploaded,
+        "video_ids": video_ids,
+        "slots": list(state.get("slots") or []),
+        "end_at": state.get("end_at"),
+        "started_at": state.get("started_at"),
+        "videos": [
+            {
+                "id": row.get("id"),
+                "title": row.get("title"),
+                "youtube_video_id": row.get("youtube_video_id"),
+                "status": row.get("status"),
+            }
+            for row in rows
+        ],
+    }
+
+
+def _ceil_to_quarter(value: datetime) -> datetime:
+    value = value.replace(second=0, microsecond=0)
+    remainder = value.minute % 15
+    if remainder:
+        value += timedelta(minutes=15 - remainder)
+    return value
+
+
+def _test_slots(
+    now: datetime,
+    end_at: datetime,
+    count: int,
+) -> list[datetime]:
+    if count <= 0:
+        return []
+
+    # 3本を先に生成する時間を確保し、最後は18時の15分前までに投稿。
+    earliest = _ceil_to_quarter(now + timedelta(minutes=150))
+    latest = end_at - timedelta(minutes=15)
+    if latest <= now:
+        return []
+
+    if earliest > latest:
+        earliest = _ceil_to_quarter(now + timedelta(minutes=30))
+
+    if count == 1:
+        return [min(earliest, latest)]
+
+    total_seconds = max(
+        (latest - earliest).total_seconds(),
+        (count - 1) * 15 * 60,
+    )
+    step = total_seconds / (count - 1)
+
+    slots: list[datetime] = []
+    for index in range(count):
+        slot = earliest + timedelta(seconds=step * index)
+        slot = _ceil_to_quarter(slot)
+        if slot > latest:
+            slot = latest
+        if slots and slot <= slots[-1]:
+            slot = slots[-1] + timedelta(minutes=15)
+        slots.append(slot)
+
+    if slots[-1] > latest:
+        shift = slots[-1] - latest
+        slots = [slot - shift for slot in slots]
+
+    return slots
+
+
+def _restore_after_full_test(
+    state: dict,
+    final_status: str,
+) -> None:
+    previous = state.get("previous") or {}
+    set_automation_enabled(
+        bool(previous.get("automation_enabled", False))
+    )
+    set_auto_upload_enabled(
+        bool(previous.get("auto_upload_enabled", False))
+    )
+    try:
+        set_upload_privacy(
+            str(previous.get("privacy") or "private")
+        )
+    except Exception:
+        set_upload_privacy("private")
+
+    state["active"] = False
+    state["status"] = final_status
+    state["finished_at"] = _now().isoformat(timespec="seconds")
+    _save_full_test_state(state)
+
+
+def _maybe_finish_full_test() -> None:
+    state = _full_test_state()
+    if not state.get("active"):
+        return
+
+    target = int(state.get("target") or 0)
+    status = full_test_status()
+    if target > 0 and status["uploaded"] >= target:
+        print(
+            f"[FULL-TEST] {status['uploaded']}/{target}本の"
+            "非公開自動投稿が完了しました。"
+        )
+        _restore_after_full_test(state, "成功")
+        return
+
+    end_raw = str(state.get("end_at") or "")
+    try:
+        end_at = datetime.fromisoformat(end_raw)
+    except Exception:
+        return
+
+    if _now() >= end_at:
+        print(
+            f"[FULL-TEST] 18時の終了時刻に到達。"
+            f"{status['uploaded']}/{target}本完了。"
+        )
+        _restore_after_full_test(
+            state,
+            (
+                "成功"
+                if status["uploaded"] >= target
+                else f"未完了 {status['uploaded']}/{target}"
+            ),
+        )
+
+
+def start_today_full_test(
+    *,
+    target: int = 3,
+    end_hour: int = 18,
+) -> dict:
+    """
+    今日だけの実運転テスト。
+    3本を通常制作フローで生成し、YouTubeへprivateで自動投稿する。
+    テスト終了後は元の自動運転/投稿設定へ戻す。
+    """
+    init_db()
+    existing = _full_test_state()
+    if existing.get("active"):
+        return full_test_status()
+
+    now = _now()
+    end_at = now.replace(
+        hour=end_hour,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    if now >= end_at:
+        raise RuntimeError(
+            f"本日{end_hour}:00を過ぎているため開始できません。"
+        )
+
+    target = max(1, min(int(target), 3))
+    slots = _test_slots(now, end_at, target)
+    if len(slots) != target:
+        raise RuntimeError(
+            "18時までに3本分の投稿枠を確保できません。"
+        )
+
+    previous = {
+        "automation_enabled": automation_enabled(),
+        "auto_upload_enabled": auto_upload_enabled(),
+        "privacy": upload_privacy(),
+    }
+    state = {
+        "active": True,
+        "status": "3本生成中",
+        "target": target,
+        "started_at": now.isoformat(timespec="seconds"),
+        "end_at": end_at.isoformat(timespec="minutes"),
+        "slots": [
+            slot.isoformat(timespec="minutes")
+            for slot in slots
+        ],
+        "video_ids": [],
+        "previous": previous,
+    }
+    _save_full_test_state(state)
+
+    # 実アップロードは行うが、テスト中は必ずprivate。
+    set_automation_enabled(True)
+    set_auto_upload_enabled(True)
+    set_upload_privacy("private")
+
+    print(
+        "[FULL-TEST] 今日18時までの3本完全テスト開始: "
+        + ", ".join(slot.strftime("%H:%M") for slot in slots)
+    )
+    print(
+        "[FULL-TEST] YouTube投稿は3本ともprivate。"
+        "制作・キュー・自動投稿経路は通常運転と同じです。"
+    )
+
+    try:
+        results = run_generation(
+            render=True,
+            upload=False,
+            target_override=target,
+        )
+    except Exception:
+        state["status"] = "生成失敗"
+        _save_full_test_state(state)
+        _restore_after_full_test(state, "生成失敗")
+        raise
+
+    queued_count = 0
+    video_ids: list[int] = []
+    for item, slot in zip(results, slots):
+        if not item.get("output_path"):
+            continue
+        video_id = int(item["id"])
+        queue_video(
+            video_id,
+            slot.isoformat(timespec="minutes"),
+        )
+        video_ids.append(video_id)
+        queued_count += 1
+        print(
+            f"[FULL-TEST] #{video_id} -> "
+            f"{slot.strftime('%H:%M')} private投稿予定"
+        )
+
+    state["video_ids"] = video_ids
+    state["status"] = (
+        "投稿待ち"
+        if queued_count == target
+        else f"生成不足 {queued_count}/{target}"
+    )
+    _save_full_test_state(state)
+
+    if queued_count != target:
+        _restore_after_full_test(
+            state,
+            f"生成不足 {queued_count}/{target}",
+        )
+
+    return full_test_status()
+
+
 def reschedule_missed() -> int:
     """
     投稿時刻を大きく過ぎた queued 動画は、その場でまとめて投稿せず、
@@ -93,10 +391,18 @@ def reschedule_missed() -> int:
     cutoff = now - timedelta(minutes=max(settings.post_grace_minutes, 0))
     queued = queued_items()
 
+    full_test = _full_test_state()
+    test_ids = {
+        int(value)
+        for value in full_test.get("video_ids") or []
+        if str(value).isdigit()
+    } if full_test.get("active") else set()
+
     overdue = [
         item
         for item in queued
         if _parse_iso(item["scheduled_for"]) < cutoff
+        and int(item["video_id"]) not in test_ids
     ]
 
     if not overdue:
@@ -248,9 +554,18 @@ def run_due() -> None:
     reschedule_missed()
 
     now = _now()
-    oldest_allowed = now - timedelta(
-        minutes=max(settings.post_grace_minutes, 0)
-    )
+    full_test = _full_test_state()
+    if full_test.get("active"):
+        try:
+            oldest_allowed = datetime.fromisoformat(
+                str(full_test.get("started_at"))
+            )
+        except Exception:
+            oldest_allowed = now - timedelta(hours=12)
+    else:
+        oldest_allowed = now - timedelta(
+            minutes=max(settings.post_grace_minutes, 0)
+        )
 
     rows = due_queue(
         now.isoformat(timespec="minutes"),
@@ -259,6 +574,7 @@ def run_due() -> None:
 
     if not rows:
         print("[SCHEDULE] 現在、投稿時刻を迎えた動画はありません。")
+        _maybe_finish_full_test()
         return
 
     if not auto_upload_enabled():
@@ -266,6 +582,7 @@ def run_due() -> None:
             f"[SCHEDULE] {len(rows)}本が投稿時刻を迎えていますが、"
             "Web/設定上の自動投稿がOFFのため投稿しません。"
         )
+        _maybe_finish_full_test()
         return
 
     for row in rows:
@@ -321,6 +638,8 @@ def run_due() -> None:
                 f"(試行 {row.get('attempts', 0) + 1}/5): {exc}"
             )
 
+    _maybe_finish_full_test()
+
 def show_queue() -> None:
     init_db()
     reschedule_missed()
@@ -342,7 +661,16 @@ def show_queue() -> None:
         )
 
 def tick() -> None:
-    # 先に過去動画を学習し、その最新戦略で次の動画を作る。
+    full_test = _full_test_state()
+    if full_test.get("active"):
+        # 完全テスト中は通常の「次の3本補充」を止め、
+        # 指定した3本だけを投稿する。
+        print("[FULL-TEST] テストセッション中: 指定3本のみ運転")
+        run_due()
+        _maybe_finish_full_test()
+        return
+
+    # 通常運転。
     run_growth_cycle()
     try:
         maybe_run_improvement_review(min_hours=12)
