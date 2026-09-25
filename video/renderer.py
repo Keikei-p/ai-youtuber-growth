@@ -206,9 +206,10 @@ def _make_frame(
     path: Path,
     index: int,
     total: int,
+    background_index: int | None = None,
 ) -> None:
     base = _load_background(
-        index,
+        index if background_index is None else background_index,
         background_image_path=background_image_path,
         background_image_paths=background_image_paths,
     ).convert("RGBA")
@@ -314,6 +315,7 @@ def _render_motion_segment(
     output_path: Path,
     duration: float,
     index: int,
+    motion: str | None = None,
 ) -> Path:
     """
     1枚の完成フレームに緩やかなカメラ移動を付ける。
@@ -322,22 +324,30 @@ def _render_motion_segment(
     duration = max(float(duration), 0.35)
     frames = max(1, int(duration * 30))
 
-    # シーンごとに少しだけ動きを変える。
-    if index % 3 == 0:
-        zoom = "min(zoom+0.00055,1.045)"
-        x = "iw/2-(iw/zoom/2)"
-        y = "ih/2-(ih/zoom/2)"
-    elif index % 3 == 1:
+    selected = motion or (
+        "push_in" if index % 3 == 0
+        else "pan_left" if index % 3 == 1
+        else "pan_right"
+    )
+    if selected == "pan_left":
         zoom = "min(zoom+0.00040,1.035)"
         x = "min(iw-iw/zoom,max(0,(iw-iw/zoom)*on/{frames}))".format(
             frames=max(frames - 1, 1)
         )
         y = "ih/2-(ih/zoom/2)"
-    else:
+    elif selected == "pan_right":
         zoom = "min(zoom+0.00045,1.04)"
         x = "max(0,(iw-iw/zoom)*(1-on/{frames}))".format(
             frames=max(frames - 1, 1)
         )
+        y = "ih/2-(ih/zoom/2)"
+    elif selected == "soft_hold":
+        zoom = "min(zoom+0.00018,1.018)"
+        x = "iw/2-(iw/zoom/2)"
+        y = "ih/2-(ih/zoom/2)"
+    else:
+        zoom = "min(zoom+0.00055,1.045)"
+        x = "iw/2-(iw/zoom/2)"
         y = "ih/2-(ih/zoom/2)"
 
     vf = (
@@ -447,13 +457,28 @@ def render_short(
     background_image_path: str | None = None,
     background_image_paths: list[str] | None = None,
     ai_video_path: str | None = None,
+    composition_plan: dict | None = None,
 ) -> Path:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg が見つかりません。FFmpegをインストールしてください。")
 
     duration = max(_audio_duration(audio_path), 1.0)
-    chunks = _chunks(script)
-    per = duration / len(chunks)
+    planned_scenes = (composition_plan or {}).get("scenes") or []
+    if planned_scenes:
+        chunks = [str(scene.get("text") or "") for scene in planned_scenes]
+        scene_durations = [
+            max(float(scene.get("duration") or 0.35), 0.35)
+            for scene in planned_scenes
+        ]
+        total_planned = sum(scene_durations)
+        if total_planned > 0:
+            factor = duration / total_planned
+            scene_durations = [value * factor for value in scene_durations]
+    else:
+        chunks = _chunks(script)
+        per = duration / len(chunks)
+        scene_durations = [per for _ in chunks]
+        planned_scenes = [{} for _ in chunks]
     work = output_path.parent / f".frames_{output_path.stem}"
     work.mkdir(parents=True, exist_ok=True)
 
@@ -472,6 +497,9 @@ def render_short(
             frame,
             i,
             len(chunks),
+            background_index=int(
+                (planned_scenes[i] or {}).get("background_index", i)
+            ),
         )
         frames.append(frame)
 
@@ -484,14 +512,18 @@ def render_short(
     )
     segments: list[Path] = []
     for i, frame in enumerate(frames):
+        scene = planned_scenes[i] or {}
+        scene_duration = scene_durations[i]
+        scene_motion = str(scene.get("motion") or "") or None
+        use_ai_scene = bool(scene.get("use_ai_video", i == 0))
         segment = work / f"segment_{i:03d}.mp4"
-        if i == 0 and ai_path is not None:
+        if use_ai_scene and ai_path is not None:
             try:
                 _render_ai_background_segment(
                     ai_video_path=ai_path,
                     frame_path=frame,
                     output_path=segment,
-                    duration=per,
+                    duration=scene_duration,
                 )
             except Exception as exc:
                 print(
@@ -501,15 +533,17 @@ def render_short(
                 _render_motion_segment(
                     frame_path=frame,
                     output_path=segment,
-                    duration=per,
+                    duration=scene_duration,
                     index=i,
+                    motion=scene_motion,
                 )
         else:
             _render_motion_segment(
                 frame_path=frame,
                 output_path=segment,
-                duration=per,
+                duration=scene_duration,
                 index=i,
+                motion=scene_motion,
             )
         segments.append(segment)
 
