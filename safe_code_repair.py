@@ -35,7 +35,7 @@ def inspect_code_health(root: Path = ROOT) -> dict[str, Any]:
             "file": "automation/install_windows_task.ps1",
             "detail": "WakeToRun設定が見つかりません。",
         })
-    if "# MIRAI_RECOVERY_TRIGGERS" not in install_text:
+    if "MIRAI_RECOVERY_TRIGGERS" not in install_text:
         issues.append({
             "code": "recovery_triggers_missing",
             "file": "automation/install_windows_task.ps1",
