@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from safe_code_repair import inspect_code_health
-from storage import get_channel_state, set_channel_state
+from storage import (
+    acquire_runtime_lock,
+    get_channel_state,
+    release_runtime_lock,
+    set_channel_state,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -81,7 +86,7 @@ def _known_repair_dirty_files(output: str) -> list[str]:
     return files
 
 
-def safe_self_update(root: Path = ROOT) -> dict[str, Any]:
+def _safe_self_update_locked(root: Path = ROOT) -> dict[str, Any]:
     """
     origin/main の更新を別worktreeで検証してからfast-forwardする。
     ユーザーのローカル変更は触らない。
@@ -346,6 +351,37 @@ def safe_self_update(root: Path = ROOT) -> dict[str, Any]:
         "validation": "\n".join(validation_output)[-5000:],
         "safe_repair_reconciled": repair_stash_dropped,
     })
+
+def safe_self_update(root: Path = ROOT) -> dict[str, Any]:
+    # 本番repoでは生成/学習サイクルとコード更新を同時実行しない。
+    # テスト用一時repo(root != ROOT)ではproduction DB lockを触らない。
+    if root != ROOT:
+        return _safe_self_update_locked(root)
+
+    try:
+        acquired = acquire_runtime_lock(
+            "scheduler_tick",
+            owner="safe-self-update",
+            ttl_minutes=180,
+        )
+    except Exception as exc:
+        return _save({
+            "status": "deferred",
+            "reason": "cycle_lock_error",
+            "detail": str(exc),
+        })
+
+    if not acquired:
+        return _save({
+            "status": "deferred",
+            "reason": "automation_cycle_active",
+        })
+
+    try:
+        return _safe_self_update_locked(root)
+    finally:
+        release_runtime_lock("scheduler_tick")
+
 
 def main() -> None:
     result = safe_self_update()
