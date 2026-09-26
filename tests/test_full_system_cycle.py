@@ -90,6 +90,11 @@ class FullSystemCycleTests(unittest.TestCase):
             ),
             patch.object(scheduler, "cleanup_uploaded_media"),
             patch.object(scheduler, "_maybe_finish_full_test"),
+            patch.object(
+                scheduler,
+                "_upload_runtime_block_reason",
+                return_value="",
+            ),
         ):
             scheduler.run_due()
 

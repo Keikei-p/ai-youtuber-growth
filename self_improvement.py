@@ -12,6 +12,7 @@ from config import settings
 from mirai_engines.debug_engine import MiraiDebugEngine
 from mirai_engines.improvement_engine import MiraiImprovementEngine
 from mirai_engines.quality_engine import MiraiQualityEngine
+from safe_code_repair import repair_known_code_invariants
 from storage import (
     analytics_history,
     connect,
@@ -73,6 +74,21 @@ def _classify(message: str) -> str:
         return "voice"
     if "ffmpeg" in text or "動画編集" in text or "render" in text:
         return "render"
+    if any(
+        marker in text
+        for marker in (
+            "invalid_grant", "oauth", "token.json", "unauthorized",
+        )
+    ):
+        return "upload_auth"
+    if any(
+        marker in text
+        for marker in (
+            "quotaexceeded", "dailylimitexceeded", "429",
+            "ratelimitexceeded", "backenderror", "503",
+        )
+    ):
+        return "upload_api"
     if "youtube" in text or "upload" in text or "投稿" in text:
         return "upload"
     if "ollama" in text or "json" in text or "台本" in text:
@@ -121,6 +137,20 @@ def record_failure(
         category=category,
         occurrences=occurrences,
     )
+    code_repair: dict[str, Any] | None = None
+    if (
+        occurrences >= 2
+        and (
+            stage.startswith("youtube.")
+            or stage.startswith("scheduler.")
+            or "wake" in stage.lower()
+        )
+    ):
+        code_repair = repair_known_code_invariants()
+        if code_repair.get("status") == "applied":
+            adaptations.append(
+                "既知の軽微コード不変条件をテスト後に自動修復"
+            )
     diagnosis = {}
     try:
         diagnosis = MiraiDebugEngine().diagnose_and_store(
@@ -141,6 +171,7 @@ def record_failure(
         "category": category,
         "adaptations": adaptations,
         "diagnosis": diagnosis,
+        "code_repair": code_repair,
     }
 
 
@@ -346,6 +377,24 @@ def _process_improvement_actions(data: dict) -> tuple[list[str], list[int], list
             continue
 
         if mode == "test_then_auto":
+            repair_id = (
+                str(value.get("repair_id") or "")
+                if isinstance(value, dict)
+                else ""
+            )
+            if (
+                action_type == "minor_code_change"
+                and repair_id == "known_invariants"
+            ):
+                repair_result = repair_known_code_invariants()
+                if repair_result.get("status") in {
+                    "healthy",
+                    "applied",
+                }:
+                    applied.append(
+                        "既知の軽微コード修正をテスト後に自動反映"
+                    )
+                    continue
             queued = {
                 "action_type": action_type,
                 "title": title,
@@ -501,6 +550,8 @@ def run_improvement_review() -> dict:
 
 
 def improvement_state() -> dict:
+    from upload_recovery import recent_recovery_events
+
     raw = get_channel_state("ai_improvement_report", "")
     try:
         report = json.loads(raw) if raw else {}
@@ -529,6 +580,11 @@ def improvement_state() -> dict:
         "recent_failures": recent_failures(8),
         "recent_quality": MiraiQualityEngine().recent(8),
         "recent_diagnoses": MiraiDebugEngine().recent(8),
+        "upload_recovery": recent_recovery_events(12),
+        "safe_code_repair_last": get_channel_state(
+            "safe_code_repair_last",
+            "",
+        ),
     }
 
 

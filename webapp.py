@@ -23,6 +23,11 @@ from native_models.lab import migration_summary
 from mirai_engines.evolution_controller import evolution_status
 from autonomy_policy import autonomy_state, resolve_approval
 from config import settings
+from delivery_supervisor import (
+    arm_production_autonomy,
+    disarm_production_autonomy,
+    self_heal_delivery_controls,
+)
 from growth_engine import show_growth_state
 from gpu_manager import gpu_snapshot
 from guest_manager import create_guest_now
@@ -85,6 +90,7 @@ from storage import (
     init_db,
     queued_items,
     set_channel_state,
+    upload_history,
     video_by_id,
 )
 from voice.provider import voice_attribution_status, voice_provider_status
@@ -428,6 +434,7 @@ def _video_status() -> list[dict]:
                 "guest_name": row.get("guest_name"),
                 "views": row.get("views") or 0,
                 "error": row.get("queue_error"),
+                "upload_history": upload_history(int(row["id"]), 10),
                 "quality_score": (
                     quality_map.get(int(row["id"]), {}).get("score")
                 ),
@@ -522,6 +529,7 @@ def _status_payload() -> dict:
     return {
         "automation_enabled": automation_enabled(),
         "auto_upload_enabled": auto_upload_enabled(),
+        "dry_run": bool(settings.dry_run),
         "privacy": upload_privacy(),
         "interval_seconds": web_interval_seconds(),
         "posts_per_day": posts_per_day(),
@@ -1472,15 +1480,22 @@ async function refresh(){
       const youtube=x.youtube_video_id
         ? '<a class="linkbtn" target="_blank" rel="noopener" href="https://youtu.be/'+encodeURIComponent(x.youtube_video_id)+'">YouTubeで開く</a>'
         : '';
-      const postingNow=state.current_job===('YouTube投稿 #'+x.id);
-      const manualPost=(!x.youtube_video_id&&x.has_local_file)
+      const postingNow=state.current_job===('YouTube投稿 #'+x.id)||state.current_job===('YouTube再投稿 #'+x.id);
+      const manualPost=(!x.youtube_video_id)
         ? '<button class="primary" '+(postingNow?'disabled':'')+' onclick="postLibraryVideo('+x.id+')">'+(postingNow?'投稿中…':'YouTubeへ投稿')+'</button>'
+        : '';
+      const repost=x.youtube_video_id
+        ? '<button '+(postingNow?'disabled':'')+' onclick="repostLibraryVideo('+x.id+')">'+(postingNow?'再投稿中…':'再投稿')+'</button>'
+        : '';
+      const historyCount=(x.upload_history||[]).length;
+      const history=historyCount
+        ? '<span class="badge">投稿履歴 '+historyCount+'回</span>'
         : '';
       return '<div class="library-item">'
         +'<div class="library-head"><div><b>#'+x.id+' '+escapeHtml(x.title)+'</b>'
         +'<div class="small">'+escapeHtml(x.created_at||'')+' / '+escapeHtml(x.status||'')+' / '+Number(x.views||0)+' views</div></div>'
-        +'<div class="actions">'+manualPost+youtube+'</div></div>'
-        +'<div class="library-meta">'+local+yt+queue+guest+quality+'</div>'
+        +'<div class="actions">'+manualPost+repost+youtube+'</div></div>'
+        +'<div class="library-meta">'+local+yt+queue+guest+quality+history+'</div>'
         +err+preview+'</div>';
     }).join(''):'<div class="small">まだ動画履歴がありません。</div>';
     libraryImages.innerHTML=state.studio_assets.length?state.studio_assets.slice(0,40).map(x=>{
@@ -1545,6 +1560,28 @@ async function postLibraryVideo(id){
     setTimeout(refresh,1500);
   }catch(e){
     alert('投稿開始に失敗しました: '+e.message);
+    await refresh();
+  }
+}
+async function repostLibraryVideo(id){
+  const mode=(state&&state.privacy)||'private';
+  const labels={private:'非公開',unlisted:'限定公開',public:'公開'};
+  const label=labels[mode]||mode;
+  if(!confirm(
+    '動画 #'+id+' をYouTubeへ「'+label+'」で再投稿しますか？\n\n'+
+    '新しいYouTube動画としてアップロードします。旧動画は削除せず、旧IDも履歴に残します。'
+  )) return;
+  try{
+    const data=await api('/api/action',{
+      action:'repost_library_video',
+      video_id:id,
+      privacy_status:mode
+    });
+    alert(data.message);
+    await refresh();
+    setTimeout(refresh,1500);
+  }catch(e){
+    alert('再投稿開始に失敗しました: '+e.message);
     await refresh();
   }
 }
@@ -1918,6 +1955,7 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     return
                 status = apply_daily_auto_preset(count)
+                arm_production_autonomy()
                 wake_note = ""
                 if os.name == "nt":
                     try:
@@ -1944,7 +1982,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 sync_wake_task = False
                 if "automation_enabled" in body:
-                    set_automation_enabled(bool(body["automation_enabled"]))
+                    automation_value = bool(body["automation_enabled"])
+                    set_automation_enabled(automation_value)
+                    if automation_value and auto_upload_enabled():
+                        arm_production_autonomy()
+                    elif not automation_value:
+                        disarm_production_autonomy()
                 if "auto_upload_enabled" in body:
                     enabled = bool(body["auto_upload_enabled"])
                     if enabled:
@@ -1958,7 +2001,11 @@ class Handler(BaseHTTPRequestHandler):
                             ) from exc
                     set_auto_upload_enabled(enabled)
                     if enabled:
+                        if automation_enabled():
+                            arm_production_autonomy()
                         sync_wake_task = True
+                    else:
+                        disarm_production_autonomy()
                 if "privacy" in body:
                     set_upload_privacy(str(body["privacy"]))
                 if "interval_seconds" in body:
@@ -2075,7 +2122,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "message": message})
                     return
 
-                if action == "upload_library_video":
+                if action in {
+                    "upload_library_video",
+                    "repost_library_video",
+                }:
+                    force_reupload = action == "repost_library_video"
                     video_id = int(body.get("video_id") or 0)
                     if video_id <= 0:
                         self._json(
@@ -2109,11 +2160,16 @@ class Handler(BaseHTTPRequestHandler):
                             400,
                         )
                         return
-                    label = f"YouTube投稿 #{video_id}"
+                    label = (
+                        f"YouTube再投稿 #{video_id}"
+                        if force_reupload
+                        else f"YouTube投稿 #{video_id}"
+                    )
                     func = lambda: print(json.dumps(
                         upload_saved_video_now(
                             video_id,
                             privacy_status,
+                            force_reupload=force_reupload,
                         ),
                         ensure_ascii=False,
                         indent=2,
@@ -2309,6 +2365,42 @@ def run(open_browser: bool = True) -> None:
 
     init_db()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 自動運転がONなのにWindowsタスクが消失/古い場合は、
+    # 管理画面起動時に毎回再登録して自己修復する。
+    first_episode_pending = (
+        get_channel_state(
+            "mirai_first_episode_video_id",
+            "",
+        ).strip().isdigit()
+        and get_channel_state(
+            "mirai_first_episode_uploaded",
+            "false",
+        ).strip().lower() != "true"
+        and get_channel_state(
+            "runtime_cancel_requested",
+            "false",
+        ).strip().lower() != "true"
+    )
+    if (
+        os.name == "nt"
+        and (
+            (automation_enabled() and auto_upload_enabled())
+            or first_episode_pending
+        )
+    ):
+        try:
+            wake_result = _install_wake_task(60)
+            _append_log(
+                "[AUTO-POST] startup wake-task self-heal OK\n"
+                + wake_result
+            )
+        except Exception as exc:
+            _append_log(
+                "[AUTO-POST] startup wake-task self-heal failed: "
+                + str(exc)
+            )
+
     url = f"http://{HOST}:{PORT}"
 
     try:

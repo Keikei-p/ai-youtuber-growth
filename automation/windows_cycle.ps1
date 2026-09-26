@@ -36,9 +36,9 @@ try {
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] wake/cycle start")
 
     # スリープ復帰直後はNIC/DNSが戻るまで時間がかかることがある。
-    # 最大60秒待ち、戻らなければキューを消費せず次の回復トリガーへ回す。
+    # 最大90秒待ち、戻らなければキューを消費せず次の回復トリガーへ回す。
     $NetworkReady = $false
-    for ($i = 0; $i -lt 12; $i++) {
+    for ($i = 0; $i -lt 18; $i++) {
         try {
             if (Test-NetConnection -ComputerName "www.googleapis.com" -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue) {
                 $NetworkReady = $true
@@ -51,6 +51,22 @@ try {
     if (-not $NetworkReady) {
         Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] network not ready after wake; keep queue and retry later")
         exit 0
+    }
+
+    # MIRAI_DUE_FIRST: スリープ復帰後は重いAIサービスより投稿を最優先。
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] due-first start")
+    & $Python "scheduler.py" "--run-due" *>> $LogFile
+    $DueExitCode = $LASTEXITCODE
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] due-first end exit=" + $DueExitCode)
+    if ($DueExitCode -ne 0) {
+        throw "scheduler.py --run-due failed with exit code $DueExitCode"
+    }
+
+    # MIRAI_SAFE_SELF_UPDATE: 投稿判定を先に終えた後でだけ自己更新を確認。
+    if (Test-Path (Join-Path $RepoRoot "safe_self_update.py")) {
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check")
+        & $Python "safe_self_update.py" *>> $LogFile
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check end")
     }
 
     try {
@@ -90,6 +106,16 @@ try {
 }
 catch {
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] ERROR: " + $_.Exception.Message)
+    try {
+        if ($Python -and (Test-Path (Join-Path $RepoRoot "safe_code_repair.py"))) {
+            Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check start")
+            & $Python "safe_code_repair.py" *>> $LogFile
+            Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check end")
+        }
+    }
+    catch {
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded repair failed: " + $_.Exception.Message)
+    }
     throw
 }
 finally {

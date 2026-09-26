@@ -114,6 +114,28 @@ def init_db() -> None:
             attempts INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(video_id) REFERENCES videos(id)
         );
+
+        CREATE TABLE IF NOT EXISTS youtube_upload_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL,
+            youtube_video_id TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL,
+            privacy_status TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            replaced_youtube_video_id TEXT,
+            UNIQUE(video_id, youtube_video_id),
+            FOREIGN KEY(video_id) REFERENCES videos(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_upload_history_video
+        ON youtube_upload_history(video_id, id DESC);
+
+        CREATE TABLE IF NOT EXISTS youtube_upload_locks (
+            video_id INTEGER PRIMARY KEY,
+            acquired_at TEXT NOT NULL,
+            owner TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY(video_id) REFERENCES videos(id)
+        );
         """)
 
         video_columns = {
@@ -156,6 +178,25 @@ def init_db() -> None:
             """
         )
 
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO youtube_upload_history (
+                video_id, youtube_video_id, uploaded_at,
+                privacy_status, source, replaced_youtube_video_id
+            )
+            SELECT
+                id,
+                youtube_video_id,
+                COALESCE(uploaded_at, created_at),
+                '',
+                'legacy_migration',
+                NULL
+            FROM videos
+            WHERE youtube_video_id IS NOT NULL
+              AND youtube_video_id != ''
+            """
+        )
+
 def dashboard_videos(limit: int = 30) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -181,10 +222,11 @@ def video_by_id(video_id: int) -> dict[str, Any] | None:
         row = conn.execute(
             """
             SELECT
-                v.id, v.created_at, v.title, v.status, v.output_path,
-                v.youtube_video_id, v.uploaded_at, v.views, v.likes,
-                v.comments, v.avg_view_percentage, v.description,
-                v.tags_json, v.script, g.name AS guest_name
+                v.id, v.created_at, v.idea, v.angle, v.title,
+                v.status, v.output_path, v.youtube_video_id, v.uploaded_at,
+                v.views, v.likes, v.comments, v.avg_view_percentage,
+                v.description, v.tags_json, v.script, v.guest_id,
+                g.name AS guest_name
             FROM videos v
             LEFT JOIN guests g ON g.id = v.guest_id
             WHERE v.id = ?
@@ -264,18 +306,133 @@ def mark_uploaded(
     video_id: int,
     youtube_video_id: str,
     uploaded_at: str | None = None,
+    *,
+    privacy_status: str = "",
+    source: str = "",
+    replaced_youtube_video_id: str | None = None,
 ) -> None:
     uploaded_at = uploaded_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     with connect() as conn:
+        current = conn.execute(
+            "SELECT youtube_video_id FROM videos WHERE id = ?",
+            (video_id,),
+        ).fetchone()
+        previous = (
+            str(current["youtube_video_id"])
+            if current and current["youtube_video_id"]
+            else None
+        )
+        replaced = replaced_youtube_video_id or (
+            previous if previous and previous != youtube_video_id else None
+        )
         conn.execute(
             """
             UPDATE videos
             SET youtube_video_id = ?, status = 'uploaded',
-                uploaded_at = COALESCE(uploaded_at, ?)
+                uploaded_at = ?
             WHERE id = ?
             """,
             (youtube_video_id, uploaded_at, video_id),
         )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO youtube_upload_history (
+                video_id, youtube_video_id, uploaded_at,
+                privacy_status, source, replaced_youtube_video_id
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                video_id,
+                youtube_video_id,
+                uploaded_at,
+                str(privacy_status or ""),
+                str(source or ""),
+                replaced,
+            ),
+        )
+
+        first_row = conn.execute(
+            "SELECT value FROM channel_state WHERE key = ?",
+            ("mirai_first_episode_video_id",),
+        ).fetchone()
+        if first_row and str(first_row["value"]).strip() == str(video_id):
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            conn.execute(
+                """
+                INSERT INTO channel_state (key, value, updated_at)
+                VALUES (?, 'true', ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = 'true',
+                    updated_at = excluded.updated_at
+                """,
+                ("mirai_first_episode_uploaded", now),
+            )
+
+
+def acquire_upload_lock(
+    video_id: int,
+    *,
+    owner: str = "",
+    ttl_minutes: int = 120,
+) -> bool:
+    now = datetime.now(timezone.utc)
+    cutoff = now.timestamp() - max(5, int(ttl_minutes)) * 60
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT acquired_at FROM youtube_upload_locks WHERE video_id = ?",
+            (video_id,),
+        ).fetchone()
+        if row:
+            try:
+                acquired = datetime.fromisoformat(str(row["acquired_at"]))
+                if acquired.tzinfo is None:
+                    acquired = acquired.replace(tzinfo=timezone.utc)
+                if acquired.timestamp() >= cutoff:
+                    return False
+            except Exception:
+                pass
+            conn.execute(
+                "DELETE FROM youtube_upload_locks WHERE video_id = ?",
+                (video_id,),
+            )
+        conn.execute(
+            """
+            INSERT INTO youtube_upload_locks (
+                video_id, acquired_at, owner
+            ) VALUES (?, ?, ?)
+            """,
+            (
+                video_id,
+                now.isoformat(timespec="seconds"),
+                str(owner or "")[:200],
+            ),
+        )
+        return True
+
+
+def release_upload_lock(video_id: int) -> None:
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM youtube_upload_locks WHERE video_id = ?",
+            (video_id,),
+        )
+
+
+def upload_history(video_id: int, limit: int = 20) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id, video_id, youtube_video_id, uploaded_at,
+                privacy_status, source, replaced_youtube_video_id
+            FROM youtube_upload_history
+            WHERE video_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (video_id, max(1, min(int(limit), 100))),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 def uploaded_videos(limit: int = 20) -> list[dict[str, Any]]:
     with connect() as conn:
@@ -536,6 +693,45 @@ def queue_for_day(day_prefix: str) -> list[dict[str, Any]]:
         ).fetchall()
     return [dict(r) for r in rows]
 
+def queue_item_for_video(video_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                q.id AS queue_id, q.video_id, q.scheduled_for, q.status,
+                q.uploaded_at, q.error, q.attempts
+            FROM posting_queue q
+            WHERE q.video_id = ?
+            LIMIT 1
+            """,
+            (video_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def reset_queue_for_video(
+    video_id: int,
+    scheduled_for: str,
+    *,
+    error: str = "",
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO posting_queue (
+                video_id, scheduled_for, status, error, attempts
+            ) VALUES (?, ?, 'queued', ?, 0)
+            ON CONFLICT(video_id) DO UPDATE SET
+                scheduled_for = excluded.scheduled_for,
+                status = 'queued',
+                uploaded_at = NULL,
+                error = excluded.error,
+                attempts = 0
+            """,
+            (video_id, scheduled_for, str(error)[:1000]),
+        )
+
+
 def queued_items() -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -672,6 +868,54 @@ def mark_queue_error(queue_id: int, error: str) -> None:
             """,
             (error[:1000], queue_id),
         )
+
+def set_queue_recovery(
+    queue_id: int,
+    *,
+    scheduled_for: str | None = None,
+    error: str = "",
+    increment_attempt: bool = False,
+) -> None:
+    with connect() as conn:
+        if scheduled_for:
+            conn.execute(
+                """
+                UPDATE posting_queue
+                SET scheduled_for = ?,
+                    status = 'queued',
+                    error = ?,
+                    attempts = CASE
+                        WHEN ? = 1 THEN MIN(attempts + 1, 4)
+                        ELSE attempts
+                    END
+                WHERE id = ?
+                """,
+                (
+                    scheduled_for,
+                    str(error)[:1000],
+                    1 if increment_attempt else 0,
+                    queue_id,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE posting_queue
+                SET status = 'queued',
+                    error = ?,
+                    attempts = CASE
+                        WHEN ? = 1 THEN MIN(attempts + 1, 4)
+                        ELSE attempts
+                    END
+                WHERE id = ?
+                """,
+                (
+                    str(error)[:1000],
+                    1 if increment_attempt else 0,
+                    queue_id,
+                ),
+            )
+
 
 def export_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -29,6 +29,10 @@ def automation_enabled() -> bool:
 
 def set_automation_enabled(enabled: bool) -> None:
     set_channel_state("automation_enabled", "true" if enabled else "false")
+    if enabled:
+        # 「安全停止」は再度ONにした時点で解除する。
+        # 以前はこのラッチが残り、投稿だけが永久停止するケースがあった。
+        set_channel_state("runtime_cancel_requested", "false")
 
 def auto_upload_enabled() -> bool:
     return _bool_state("auto_upload_enabled", settings.auto_upload_enabled)

@@ -9,8 +9,9 @@ from zoneinfo import ZoneInfo
 from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
+from delivery_supervisor import self_heal_delivery_controls
 from legal_guard import publish_gate
-from main import run_generation
+from main import load_character, render_results, run_generation
 from native_models.auto_train import maybe_run_native_retraining
 from resource_governor import background_production_decision
 from self_improvement import (
@@ -26,9 +27,12 @@ from runtime_control import (
     set_automation_enabled,
     set_upload_privacy,
     upload_privacy,
+    runtime_cancel_requested,
 )
 from media_cleanup import cleanup_uploaded_media
 from storage import (
+    acquire_upload_lock,
+    active_guests,
     cancel_queued_videos,
     due_queue,
     init_db,
@@ -37,14 +41,19 @@ from storage import (
     mark_uploaded,
     mark_video_queue_uploaded,
     occupied_schedule_times,
+    queue_item_for_video,
     queue_video,
     queued_items,
+    release_upload_lock,
+    reset_queue_for_video,
     get_channel_state,
     set_channel_state,
     update_queue_schedule,
     video_by_id,
 )
 from voice.provider import voice_attribution_status, voice_provider_status
+from upload_recovery import recover_upload_failure
+from youtube.auth import get_credentials
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -548,6 +557,109 @@ def reschedule_missed() -> int:
 
     return moved
 
+def ensure_first_episode_delivery() -> dict:
+    """
+    第1話は「生成完了」ではなく「YouTube投稿成功」まで未完了扱い。
+    既存の第1話IDがあれば、その動画を最優先で復旧・即時キューへ戻す。
+    """
+    raw_id = get_channel_state(
+        "mirai_first_episode_video_id",
+        "",
+    ).strip()
+    if not raw_id.isdigit():
+        return {"status": "not_created"}
+
+    video_id = int(raw_id)
+    row = video_by_id(video_id)
+    if not row:
+        set_channel_state(
+            "mirai_first_episode_video_id",
+            "",
+        )
+        set_channel_state(
+            "mirai_first_episode_completed",
+            "false",
+        )
+        set_channel_state(
+            "mirai_first_episode_uploaded",
+            "false",
+        )
+        return {"status": "missing_record"}
+
+    if str(row.get("youtube_video_id") or "").strip():
+        set_channel_state(
+            "mirai_first_episode_uploaded",
+            "true",
+        )
+        return {
+            "status": "uploaded",
+            "video_id": video_id,
+            "youtube_video_id": row.get("youtube_video_id"),
+        }
+
+    # レンダリング済みフラグは互換用として保持するが、
+    # 投稿成功までは first_episode_uploaded=false のまま。
+    set_channel_state(
+        "mirai_first_episode_uploaded",
+        "false",
+    )
+
+    output = str(row.get("output_path") or "").strip()
+    if not output or not Path(output).is_file():
+        try:
+            row = regenerate_saved_video(video_id)
+        except Exception as exc:
+            record_failure(
+                "episode1.regenerate",
+                exc,
+                {"video_id": video_id},
+            )
+            return {
+                "status": "regeneration_failed",
+                "video_id": video_id,
+                "error": str(exc),
+            }
+
+    now = _now()
+    queue = queue_item_for_video(video_id)
+    due_now = now.isoformat(timespec="minutes")
+    recovery_backoff = (
+        str((queue or {}).get("error") or "").startswith(
+            ("[AUTO-RECOVERY:", "[ACTION-REQUIRED:")
+        )
+    )
+    if (
+        not queue
+        or queue.get("status") != "queued"
+        or (
+            _parse_iso(str(queue.get("scheduled_for"))) > now
+            and not recovery_backoff
+        )
+    ):
+        reset_queue_for_video(
+            video_id,
+            due_now,
+            error="[EPISODE-1] delivery recovery",
+        )
+
+    set_channel_state(
+        "first_episode_delivery_last",
+        json.dumps(
+            {
+                "video_id": video_id,
+                "scheduled_for": due_now,
+                "status": "queued_priority",
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return {
+        "status": "queued_priority",
+        "video_id": video_id,
+        "scheduled_for": due_now,
+    }
+
+
 def _generation_runtime_ready() -> bool:
     problems: list[str] = []
     if not OllamaClient().available():
@@ -570,9 +682,25 @@ def prepare_upcoming() -> None:
     """
     常に「次の投稿枠」を POSTS_PER_DAY 本ぶん先回りして準備する。
     夜に実行した場合は自動的に翌日の枠へ回る。
+    ただし第1話が生成済み未投稿なら、まず第1話の配送を完了させる。
     """
     init_db()
     reschedule_missed()
+
+    first_episode = ensure_first_episode_delivery()
+    first_episode_bootstrap = first_episode.get("status") in {
+        "not_created",
+        "missing_record",
+    }
+    if first_episode.get("status") in {
+        "queued_priority",
+        "regeneration_failed",
+    }:
+        print(
+            "[EPISODE-1] 第1話がYouTubeへ届くまで"
+            "2話以降の自動生成を保留します。"
+        )
+        return
 
     if not _generation_runtime_ready():
         return
@@ -585,7 +713,8 @@ def prepare_upcoming() -> None:
         if _parse_iso(item["scheduled_for"]) > now
     ]
 
-    target = posts_per_day()
+    # 初回は第1話だけ。投稿成功後に通常の日次本数へ戻す。
+    target = 1 if first_episode_bootstrap else posts_per_day()
     missing = max(target - len(future_queued), 0)
 
     if missing <= 0:
@@ -673,99 +802,238 @@ def prepare_upcoming() -> None:
 
     print(f"[SCHEDULE] {queued_count}本を投稿キューへ追加しました。")
 
-def upload_saved_video_now(
-    video_id: int,
-    privacy_status: str | None = None,
-) -> dict:
+def _safe_upload_metadata(row: dict) -> tuple[str, str, list[str]]:
+    title = " ".join(str(row.get("title") or "").split())[:100]
+    if not title:
+        title = "ミライ AI YouTuber"
+
+    description = str(row.get("description") or (
+        "AIが自分で企画・制作・分析しながら成長するチャンネルです。"
+    ))[:5000]
+
+    try:
+        raw_tags = json.loads(row.get("tags_json") or "[]")
+    except Exception:
+        raw_tags = []
+    if not isinstance(raw_tags, list):
+        raw_tags = []
+
+    tags: list[str] = []
+    total = 0
+    for raw in raw_tags:
+        tag = " ".join(str(raw or "").split()).strip("#, ")
+        if not tag or tag in tags:
+            continue
+        tag = tag[:60]
+        projected = total + len(tag) + (1 if tags else 0)
+        if projected > 450 or len(tags) >= 30:
+            break
+        tags.append(tag)
+        total = projected
+
+    return title, description, tags
+
+
+def regenerate_saved_video(video_id: int) -> dict:
     """
-    生成ライブラリなど、ユーザーの明示操作から完成済み動画を即時投稿する。
-    自動投稿ON/OFFとは独立して動くが、公開前ガードと二重投稿防止は共通。
+    投稿予定のMP4が欠損している場合、保存済み台本とメタデータから
+    同じ動画レコードを再レンダリングする。新しい企画IDは作らない。
     """
-    init_db()
     row = video_by_id(int(video_id))
     if not row:
         raise ValueError(f"動画 #{video_id} が見つかりません")
 
-    existing = str(row.get("youtube_video_id") or "").strip()
-    if existing:
-        return {
-            "status": "already_uploaded",
-            "video_id": int(video_id),
-            "youtube_video_id": existing,
-            "privacy": None,
-        }
+    item = {
+        "id": int(video_id),
+        "idea": {
+            "idea": str(row.get("idea") or row.get("title") or ""),
+            "angle": str(row.get("angle") or ""),
+        },
+        "angle": str(row.get("angle") or ""),
+        "title": str(row.get("title") or ""),
+        "script": str(row.get("script") or ""),
+        "description": str(row.get("description") or ""),
+        "tags": json.loads(row.get("tags_json") or "[]"),
+        "status": "rendering",
+    }
 
-    output_path = str(row.get("output_path") or "").strip()
-    if not output_path:
-        raise FileNotFoundError("完成動画ファイルのパスがありません")
-
-    candidate = Path(output_path)
-    if not candidate.is_file():
-        raise FileNotFoundError(f"完成動画ファイルが見つかりません: {candidate}")
-
-    privacy = str(privacy_status or upload_privacy()).strip().lower()
-    if privacy not in {"private", "unlisted", "public"}:
-        raise ValueError("privacy must be private, unlisted, or public")
-
-    voice_status = voice_attribution_status()
-    required_credit = (
-        voice_status["credit"]
-        if voice_status["resolved"]
-        else "__UNRESOLVED_REQUIRED_VOICE_CREDIT__"
-    )
-    gate = publish_gate(
-        row,
-        required_credit=required_credit,
-    )
-    if not gate["allowed"]:
-        risks = ", ".join(
-            str(item)
-            for item in (gate.get("risks") or [])
+    guest_id = row.get("guest_id")
+    if guest_id:
+        guest = next(
+            (
+                candidate
+                for candidate in active_guests(100)
+                if int(candidate["id"]) == int(guest_id)
+            ),
+            None,
         )
+        if guest:
+            item["guest"] = guest
+
+    print(f"[AUTO-RECOVERY] #{video_id} 欠損動画を保存済み台本から再生成")
+    render_results([item], load_character())
+
+    refreshed = video_by_id(int(video_id))
+    output = str((refreshed or {}).get("output_path") or "").strip()
+    if not output or not Path(output).is_file():
         raise RuntimeError(
-            "公開前確認待ちのため投稿を停止しました。"
-            + (f" {risks}" if risks else "")
+            f"動画 #{video_id} の自動再生成後もMP4を確認できません"
+        )
+    set_channel_state(
+        f"video_regeneration_requested_{video_id}",
+        "false",
+    )
+    return refreshed or row
+
+
+def _ensure_video_output(row: dict) -> dict:
+    output = str(row.get("output_path") or "").strip()
+    if output and Path(output).is_file():
+        return row
+    return regenerate_saved_video(
+        int(row.get("video_id") or row.get("id") or 0)
+    )
+
+
+def upload_saved_video_now(
+    video_id: int,
+    privacy_status: str | None = None,
+    *,
+    force_reupload: bool = False,
+) -> dict:
+    """
+    生成ライブラリから完成済み動画を即時投稿/再投稿する。
+    再投稿は新しいYouTube動画として作成し、旧IDは履歴へ保持する。
+    """
+    init_db()
+    video_id = int(video_id)
+    if not acquire_upload_lock(
+        video_id,
+        owner="library_repost" if force_reupload else "library_manual",
+    ):
+        raise RuntimeError(
+            f"動画 #{video_id} は別の投稿処理が実行中です。"
         )
 
     try:
-        youtube_id = upload_video(
-            video_path=candidate,
-            title=str(row.get("title") or ""),
-            description=str(row.get("description") or (
-                "AIが自分で企画・制作・分析しながら"
-                "成長するチャンネルです。"
-            )),
-            tags=json.loads(row.get("tags_json") or "[]"),
-            privacy_status=privacy,
-            category_id=settings.youtube_category_id,
-            default_language=settings.youtube_default_language,
-            contains_synthetic_media=True,
-        )
-    except Exception as exc:
-        record_failure(
-            "youtube.manual_upload",
-            exc,
-            {"video_id": int(video_id)},
-        )
-        raise
+        row = video_by_id(video_id)
+        if not row:
+            raise ValueError(f"動画 #{video_id} が見つかりません")
 
-    uploaded_at = _now().isoformat(timespec="seconds")
-    mark_uploaded(int(video_id), youtube_id, uploaded_at)
-    mark_video_queue_uploaded(int(video_id), uploaded_at)
-    print(
-        f"[MANUAL-UPLOAD] #{video_id} -> {youtube_id} "
-        f"[{privacy}]"
-    )
-    return {
-        "status": "uploaded",
-        "video_id": int(video_id),
-        "youtube_video_id": youtube_id,
-        "privacy": privacy,
-    }
+        existing = str(row.get("youtube_video_id") or "").strip()
+        if existing and not force_reupload:
+            return {
+                "status": "already_uploaded",
+                "video_id": video_id,
+                "youtube_video_id": existing,
+                "privacy": None,
+            }
+
+        row = _ensure_video_output(row)
+        candidate = Path(str(row.get("output_path") or ""))
+        privacy = str(privacy_status or upload_privacy()).strip().lower()
+        if privacy not in {"private", "unlisted", "public"}:
+            raise ValueError("privacy must be private, unlisted, or public")
+
+        voice_status = voice_attribution_status()
+        required_credit = (
+            voice_status["credit"]
+            if voice_status["resolved"]
+            else "__UNRESOLVED_REQUIRED_VOICE_CREDIT__"
+        )
+        gate = publish_gate(
+            row,
+            required_credit=required_credit,
+        )
+        if not gate["allowed"]:
+            risks = ", ".join(
+                str(item)
+                for item in (gate.get("risks") or [])
+            )
+            raise RuntimeError(
+                "公開前確認待ちのため投稿を停止しました。"
+                + (f" {risks}" if risks else "")
+            )
+
+        title, description, tags = _safe_upload_metadata(row)
+        try:
+            youtube_id = upload_video(
+                video_path=candidate,
+                title=title,
+                description=description,
+                tags=tags,
+                privacy_status=privacy,
+                category_id=settings.youtube_category_id,
+                default_language=settings.youtube_default_language,
+                contains_synthetic_media=True,
+            )
+        except Exception as exc:
+            record_failure(
+                "youtube.manual_repost" if force_reupload else "youtube.manual_upload",
+                exc,
+                {"video_id": video_id, "previous_youtube_id": existing},
+            )
+            raise
+
+        uploaded_at = _now().isoformat(timespec="seconds")
+        source = "library_repost" if force_reupload else "library_manual"
+        mark_uploaded(
+            video_id,
+            youtube_id,
+            uploaded_at,
+            privacy_status=privacy,
+            source=source,
+            replaced_youtube_video_id=existing or None,
+        )
+        mark_video_queue_uploaded(video_id, uploaded_at)
+        set_channel_state("youtube_auth_attention", "false")
+        print(
+            f"[MANUAL-UPLOAD] #{video_id} -> {youtube_id} "
+            f"[{privacy}] source={source}"
+        )
+        return {
+            "status": "reuploaded" if force_reupload else "uploaded",
+            "video_id": video_id,
+            "youtube_video_id": youtube_id,
+            "previous_youtube_video_id": existing or None,
+            "privacy": privacy,
+        }
+    finally:
+        release_upload_lock(video_id)
+
+def _upload_runtime_block_reason() -> str:
+    if bool(getattr(settings, "dry_run", False)):
+        production_armed = get_channel_state(
+            "production_autonomy_armed",
+            "false",
+        ).strip().lower() == "true"
+        if not production_armed:
+            return (
+                "DRY_RUN=true かつ本番自動投稿が未承認です。"
+                " 管理画面で自動投稿を明示ONにしてください。"
+            )
+    return ""
 
 
 def run_due() -> None:
     init_db()
+    delivery_state = self_heal_delivery_controls()
+    if delivery_state.get("repairs"):
+        print(
+            "[DELIVERY-SUPERVISOR] "
+            + " / ".join(delivery_state["repairs"])
+        )
+
+    if runtime_cancel_requested():
+        print("[SCHEDULE] 安全停止中のためYouTube投稿を実行しません。")
+        return
+
+    first_episode = ensure_first_episode_delivery()
+    if first_episode.get("status") == "queued_priority":
+        print(
+            f"[EPISODE-1] #{first_episode['video_id']} を"
+            "最優先投稿キューへ復旧しました。"
+        )
 
     now = _now()
     full_test = _full_test_state()
@@ -826,19 +1094,69 @@ def run_due() -> None:
         _maybe_finish_full_test()
         return
 
-    if not auto_upload_enabled():
-        print(
-            f"[SCHEDULE] {len(rows)}本が投稿時刻を迎えていますが、"
-            "Web/設定上の自動投稿がOFFのため投稿しません。"
+    block_reason = _upload_runtime_block_reason()
+    if block_reason:
+        record_failure(
+            "youtube.runtime_block",
+            block_reason,
+            {
+                "due_count": len(rows),
+                "dry_run": bool(getattr(settings, "dry_run", False)),
+            },
         )
+        print(f"[SCHEDULE] 投稿停止: {block_reason}")
         _maybe_finish_full_test()
         return
 
+    if not auto_upload_enabled():
+        first_id = get_channel_state(
+            "mirai_first_episode_video_id",
+            "",
+        ).strip()
+        first_pending = (
+            get_channel_state(
+                "mirai_first_episode_uploaded",
+                "false",
+            ).strip().lower() != "true"
+        )
+        only_first_episode = (
+            automation_enabled()
+            and first_pending
+            and first_id.isdigit()
+            and rows
+            and all(
+                int(row["video_id"]) == int(first_id)
+                for row in rows
+            )
+        )
+        if not only_first_episode:
+            print(
+                f"[SCHEDULE] {len(rows)}本が投稿時刻を迎えていますが、"
+                "自動投稿がOFFのため投稿しません。"
+            )
+            _maybe_finish_full_test()
+            return
+        set_auto_upload_enabled(True)
+        print(
+            "[EPISODE-1] 自動運転ON / 自動投稿OFFの不整合を検出。"
+            "第1話配送のため自動投稿をONへ自己修復しました。"
+        )
+
     for row in rows:
+        video_id = int(row["video_id"])
+        if not acquire_upload_lock(
+            video_id,
+            owner=f"auto_queue:{row['queue_id']}",
+        ):
+            print(
+                f"[AUTO-UPLOAD] #{video_id} は別処理が投稿中のため"
+                "このtickではスキップします。"
+            )
+            continue
+
         try:
-            output_path = row.get("output_path")
-            if not output_path:
-                raise FileNotFoundError("動画ファイルのパスがありません")
+            row = _ensure_video_output(row)
+            output_path = str(row.get("output_path") or "")
 
             gate = publish_gate(
                 row,
@@ -850,33 +1168,40 @@ def run_due() -> None:
             )
             if not gate["allowed"]:
                 print(
-                    f"[LEGAL] #{row['video_id']} は公開前確認待ち。"
+                    f"[LEGAL] #{video_id} は公開前確認待ち。"
                     f" approval_id={gate.get('approval_id')} / "
                     f"{gate.get('risks')}"
                 )
                 continue
 
+            privacy = upload_privacy()
+            title, description, tags = _safe_upload_metadata(row)
             youtube_id = upload_video(
                 video_path=Path(output_path),
-                title=row["title"],
-                description=row.get("description") or (
-                    "AIが自分で企画・制作・分析しながら"
-                    "成長するチャンネルです。"
-                ),
-                tags=json.loads(row.get("tags_json") or "[]"),
-                privacy_status=upload_privacy(),
+                title=title,
+                description=description,
+                tags=tags,
+                privacy_status=privacy,
                 category_id=settings.youtube_category_id,
                 default_language=settings.youtube_default_language,
                 contains_synthetic_media=True,
             )
-            mark_uploaded(row["video_id"], youtube_id)
+            uploaded_at = _now().isoformat(timespec="seconds")
+            mark_uploaded(
+                video_id,
+                youtube_id,
+                uploaded_at,
+                privacy_status=privacy,
+                source="auto_schedule",
+            )
             mark_queue_uploaded(
                 row["queue_id"],
-                _now().isoformat(timespec="seconds"),
+                uploaded_at,
             )
+            set_channel_state("youtube_auth_attention", "false")
             print(
-                f"[AUTO-UPLOAD] #{row['video_id']} -> {youtube_id} "
-                f"[{upload_privacy()}]"
+                f"[AUTO-UPLOAD] #{video_id} -> {youtube_id} "
+                f"[{privacy}]"
             )
             active_test = _full_test_state()
             test_ids = {
@@ -885,14 +1210,14 @@ def run_due() -> None:
                 if str(value).isdigit()
             } if active_test.get("active") else set()
 
-            if int(row["video_id"]) in test_ids:
+            if video_id in test_ids:
                 print(
                     "[FULL-TEST] 確認用にローカル動画を残します。"
                 )
             else:
                 try:
                     cleanup_uploaded_media(
-                        row["video_id"],
+                        video_id,
                         output_path,
                     )
                 except Exception as cleanup_exc:
@@ -901,19 +1226,30 @@ def run_due() -> None:
                         f"{cleanup_exc}"
                     )
         except Exception as exc:
-            mark_queue_error(row["queue_id"], str(exc))
+            recovery = recover_upload_failure(
+                row,
+                exc,
+                now=_now(),
+            )
+            if not recovery.get("handled"):
+                mark_queue_error(row["queue_id"], str(exc))
             record_failure(
                 "youtube.upload",
                 exc,
                 {
-                    "video_id": row.get("video_id"),
+                    "video_id": video_id,
                     "queue_id": row.get("queue_id"),
+                    "recovery": recovery,
                 },
             )
             print(
-                f"[AUTO-UPLOAD] #{row['video_id']} 失敗 "
-                f"(試行 {row.get('attempts', 0) + 1}/5): {exc}"
+                f"[AUTO-UPLOAD] #{video_id} 失敗 / "
+                f"分類={recovery.get('code')} / "
+                f"自動処置={recovery.get('safe_action')} / "
+                f"{exc}"
             )
+        finally:
+            release_upload_lock(video_id)
 
     _maybe_finish_full_test()
 
@@ -938,21 +1274,49 @@ def show_queue() -> None:
         )
 
 def tick() -> None:
+    delivery_state = self_heal_delivery_controls()
+    if delivery_state.get("repairs"):
+        print(
+            "[DELIVERY-SUPERVISOR] "
+            + " / ".join(delivery_state["repairs"])
+        )
+
     full_test = _full_test_state()
     if full_test.get("active"):
-        # 完全テスト中は通常の補充を止める。
-        # 1本を最後まで完成させてキューへ入れ、
-        # その直後に投稿時刻判定をする。
         print("[FULL-TEST] テストセッション中: 1本ずつ直列運転")
         _advance_full_test_generation()
         run_due()
         _maybe_finish_full_test()
         return
 
-    # 通常運転。
-    # スリープ復帰直後は、まず期限到来済みの投稿を最優先する。
-    # 重い分析/生成を先に走らせると投稿猶予を超えるため順序を固定。
+    # 第1話が未生成なら、通常の成長分析より先に1本を完成させる。
+    first_before = ensure_first_episode_delivery()
+    if first_before.get("status") in {
+        "not_created",
+        "missing_record",
+    }:
+        print("[EPISODE-1] 第1話を最優先で生成します。")
+        prepare_upcoming()
+        run_due()
+        first_after_generation = ensure_first_episode_delivery()
+        if first_after_generation.get("status") != "uploaded":
+            print(
+                "[EPISODE-1] 第1話の投稿成功待ち。"
+                "2話以降は生成しません。"
+            )
+        return
+
+    # 生成済み第1話はYouTube動画ID取得まで最優先で配送する。
     run_due()
+    first_after = ensure_first_episode_delivery()
+    if first_after.get("status") != "uploaded":
+        print(
+            "[EPISODE-1] 第1話のYouTube投稿成功を最優先。"
+            "成長分析・2話以降の生成は次tickへ延期します。"
+        )
+        return
+
+    # 第1話投稿後だけ通常の成長ループへ進む。
     run_growth_cycle()
     try:
         maybe_run_improvement_review(min_hours=12)
@@ -1003,9 +1367,56 @@ def main() -> None:
         action="store_true",
         help="準備・繰り越し・期限到来投稿を1回実行",
     )
+    parser.add_argument(
+        "--upload-preflight",
+        action="store_true",
+        help="実投稿をせず自動投稿の阻害要因を診断",
+    )
     args = parser.parse_args()
 
-    if args.prepare:
+    if args.upload_preflight:
+        init_db()
+        blockers: list[str] = []
+        warnings: list[str] = []
+
+        if runtime_cancel_requested():
+            blockers.append("runtime_cancel_requested=true")
+
+        try:
+            get_credentials(interactive=False)
+        except Exception as exc:
+            blockers.append("YouTube OAuth: " + str(exc))
+
+        voice = voice_attribution_status()
+        if not voice["resolved"]:
+            blockers.append("voice credit unresolved")
+
+        if not automation_enabled():
+            warnings.append(
+                "automation_enabled=false: Web常駐サイクルは停止中"
+            )
+        if not auto_upload_enabled():
+            warnings.append(
+                "auto_upload_enabled=false: 第1話以外の通常自動投稿は停止中"
+            )
+
+        first = ensure_first_episode_delivery()
+        payload = {
+            "ok": not blockers,
+            "blockers": blockers,
+            "warnings": warnings,
+            "first_episode": first,
+            "privacy": upload_privacy(),
+            "post_times": post_times(),
+            "dry_run_note": (
+                "DRY_RUNはmain.py直接投稿用。"
+                "schedulerの自動投稿経路は別管理です。"
+            ),
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        if blockers:
+            raise SystemExit(3)
+    elif args.prepare:
         prepare_upcoming()
     elif args.run_due:
         run_due()

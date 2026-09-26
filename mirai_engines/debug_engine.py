@@ -56,13 +56,43 @@ def diagnose(
         confidence = 0.8
         evidence.append("FFmpeg/ffprobe関連")
         actions += ["入力ファイル存在確認", "メディア検査", "軽量レンダリングへフォールバック"]
-    elif any(x in text for x in ("youtube", "oauth", "token", "credential", "unauthorized")):
-        category = "youtube_auth_or_upload"
-        cause = "YouTube認証またはアップロードAPI側の失敗です。"
-        confidence = 0.83
-        evidence.append("YouTube/OAuth/token関連")
-        actions += ["token状態確認", "private投稿で再試行"]
+    elif any(x in text for x in ("invalid_grant", "oauth", "token", "credential", "unauthorized", "401")):
+        category = "youtube_auth"
+        cause = "YouTube OAuth認証の失効・破損・権限不足の可能性が高いです。"
+        confidence = 0.94
+        evidence.append("OAuth/token/401関連")
+        actions += ["保存tokenを検証", "対話再認証が必要ならユーザーへ通知"]
         approval = True
+    elif any(x in text for x in ("quotaexceeded", "dailylimitexceeded", "uploadlimitexceeded", "quota exceeded")):
+        category = "youtube_quota"
+        cause = "YouTube APIのクォータまたはアップロード上限に到達した可能性があります。"
+        confidence = 0.94
+        evidence.append("quota/limit関連")
+        actions += ["次の投稿枠へ自動延期", "クォータ回復後に再試行"]
+    elif any(x in text for x in ("429", "ratelimitexceeded", "rate limit")):
+        category = "youtube_rate_limit"
+        cause = "YouTube APIの一時的なレート制限です。"
+        confidence = 0.9
+        evidence.append("429/rate limit")
+        actions += ["時間を空けて自動再試行"]
+    elif any(x in text for x in ("500", "502", "503", "504", "backenderror", "service unavailable")):
+        category = "youtube_transient"
+        cause = "YouTube/Google API側の一時障害の可能性があります。"
+        confidence = 0.88
+        evidence.append("5xx/backend error")
+        actions += ["再開可能アップロードで再試行", "次回回復トリガーへ延期"]
+    elif any(x in text for x in ("connection reset", "timed out", "timeout", "dns", "network")) and "youtube" in text:
+        category = "youtube_network"
+        cause = "スリープ復帰後などにネットワークが安定する前に投稿した可能性があります。"
+        confidence = 0.86
+        evidence.append("network/timeout")
+        actions += ["ネット復帰待ち", "投稿を最優先で再試行"]
+    elif any(x in text for x in ("youtube", "upload", "投稿")):
+        category = "youtube_auth_or_upload"
+        cause = "YouTube投稿経路の失敗です。追加ログから分類します。"
+        confidence = 0.7
+        evidence.append("YouTube/upload関連")
+        actions += ["投稿失敗分類を確認", "安全な回復処置を実行"]
     elif "database is locked" in text or "sqlite" in text and "locked" in text:
         category = "database_contention"
         cause = "SQLiteへの同時書き込み競合です。"
