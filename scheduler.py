@@ -1119,8 +1119,13 @@ def run_due() -> None:
                 "false",
             ).strip().lower() != "true"
         )
+        production_armed = get_channel_state(
+            "production_autonomy_armed",
+            "false",
+        ).strip().lower() == "true"
         only_first_episode = (
-            automation_enabled()
+            production_armed
+            and automation_enabled()
             and first_pending
             and first_id.isdigit()
             and rows
