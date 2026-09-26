@@ -85,6 +85,7 @@ from storage import (
     init_db,
     queued_items,
     set_channel_state,
+    upload_history,
     video_by_id,
 )
 from voice.provider import voice_attribution_status, voice_provider_status
@@ -428,6 +429,7 @@ def _video_status() -> list[dict]:
                 "guest_name": row.get("guest_name"),
                 "views": row.get("views") or 0,
                 "error": row.get("queue_error"),
+                "upload_history": upload_history(int(row["id"]), 10),
                 "quality_score": (
                     quality_map.get(int(row["id"]), {}).get("score")
                 ),
@@ -1472,15 +1474,22 @@ async function refresh(){
       const youtube=x.youtube_video_id
         ? '<a class="linkbtn" target="_blank" rel="noopener" href="https://youtu.be/'+encodeURIComponent(x.youtube_video_id)+'">YouTubeで開く</a>'
         : '';
-      const postingNow=state.current_job===('YouTube投稿 #'+x.id);
-      const manualPost=(!x.youtube_video_id&&x.has_local_file)
+      const postingNow=state.current_job===('YouTube投稿 #'+x.id)||state.current_job===('YouTube再投稿 #'+x.id);
+      const manualPost=(!x.youtube_video_id)
         ? '<button class="primary" '+(postingNow?'disabled':'')+' onclick="postLibraryVideo('+x.id+')">'+(postingNow?'投稿中…':'YouTubeへ投稿')+'</button>'
+        : '';
+      const repost=x.youtube_video_id
+        ? '<button '+(postingNow?'disabled':'')+' onclick="repostLibraryVideo('+x.id+')">'+(postingNow?'再投稿中…':'再投稿')+'</button>'
+        : '';
+      const historyCount=(x.upload_history||[]).length;
+      const history=historyCount
+        ? '<span class="badge">投稿履歴 '+historyCount+'回</span>'
         : '';
       return '<div class="library-item">'
         +'<div class="library-head"><div><b>#'+x.id+' '+escapeHtml(x.title)+'</b>'
         +'<div class="small">'+escapeHtml(x.created_at||'')+' / '+escapeHtml(x.status||'')+' / '+Number(x.views||0)+' views</div></div>'
-        +'<div class="actions">'+manualPost+youtube+'</div></div>'
-        +'<div class="library-meta">'+local+yt+queue+guest+quality+'</div>'
+        +'<div class="actions">'+manualPost+repost+youtube+'</div></div>'
+        +'<div class="library-meta">'+local+yt+queue+guest+quality+history+'</div>'
         +err+preview+'</div>';
     }).join(''):'<div class="small">まだ動画履歴がありません。</div>';
     libraryImages.innerHTML=state.studio_assets.length?state.studio_assets.slice(0,40).map(x=>{
@@ -1545,6 +1554,28 @@ async function postLibraryVideo(id){
     setTimeout(refresh,1500);
   }catch(e){
     alert('投稿開始に失敗しました: '+e.message);
+    await refresh();
+  }
+}
+async function repostLibraryVideo(id){
+  const mode=(state&&state.privacy)||'private';
+  const labels={private:'非公開',unlisted:'限定公開',public:'公開'};
+  const label=labels[mode]||mode;
+  if(!confirm(
+    '動画 #'+id+' をYouTubeへ「'+label+'」で再投稿しますか？\n\n'+
+    '新しいYouTube動画としてアップロードします。旧動画は削除せず、旧IDも履歴に残します。'
+  )) return;
+  try{
+    const data=await api('/api/action',{
+      action:'repost_library_video',
+      video_id:id,
+      privacy_status:mode
+    });
+    alert(data.message);
+    await refresh();
+    setTimeout(refresh,1500);
+  }catch(e){
+    alert('再投稿開始に失敗しました: '+e.message);
     await refresh();
   }
 }
@@ -2075,7 +2106,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "message": message})
                     return
 
-                if action == "upload_library_video":
+                if action in {
+                    "upload_library_video",
+                    "repost_library_video",
+                }:
+                    force_reupload = action == "repost_library_video"
                     video_id = int(body.get("video_id") or 0)
                     if video_id <= 0:
                         self._json(
@@ -2109,11 +2144,16 @@ class Handler(BaseHTTPRequestHandler):
                             400,
                         )
                         return
-                    label = f"YouTube投稿 #{video_id}"
+                    label = (
+                        f"YouTube再投稿 #{video_id}"
+                        if force_reupload
+                        else f"YouTube投稿 #{video_id}"
+                    )
                     func = lambda: print(json.dumps(
                         upload_saved_video_now(
                             video_id,
                             privacy_status,
+                            force_reupload=force_reupload,
                         ),
                         ensure_ascii=False,
                         indent=2,
