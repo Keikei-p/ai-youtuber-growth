@@ -12,7 +12,6 @@ from gpu_manager import unload_ollama_model, release_torch_cuda_cache
 from production_pipeline import produce_media
 from metadata import build_metadata
 from runtime_control import (
-    clear_runtime_cancel,
     posts_per_day,
     runtime_cancel_requested,
 )
@@ -245,7 +244,6 @@ def run_generation(
     """
     ensure_runtime_dirs()
     init_db()
-    clear_runtime_cancel()
     character = load_character()
     recent = recent_videos(30)
     target = target_override or posts_per_day()
