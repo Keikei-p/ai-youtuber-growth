@@ -687,6 +687,10 @@ def prepare_upcoming() -> None:
     reschedule_missed()
 
     first_episode = ensure_first_episode_delivery()
+    first_episode_bootstrap = first_episode.get("status") in {
+        "not_created",
+        "missing_record",
+    }
     if first_episode.get("status") in {
         "queued_priority",
         "regeneration_failed",
@@ -708,7 +712,8 @@ def prepare_upcoming() -> None:
         if _parse_iso(item["scheduled_for"]) > now
     ]
 
-    target = posts_per_day()
+    # 初回は第1話だけ。投稿成功後に通常の日次本数へ戻す。
+    target = 1 if first_episode_bootstrap else posts_per_day()
     missing = max(target - len(future_queued), 0)
 
     if missing <= 0:
