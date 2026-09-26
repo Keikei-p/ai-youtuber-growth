@@ -53,6 +53,13 @@ try {
         exit 0
     }
 
+    # MIRAI_SAFE_SELF_UPDATE: mainの更新は別worktreeで検証後だけ反映。
+    if (Test-Path (Join-Path $RepoRoot "safe_self_update.py")) {
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check")
+        & $Python "safe_self_update.py" *>> $LogFile
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check end")
+    }
+
     # MIRAI_DUE_FIRST: スリープ復帰後は重いAIサービスより投稿を最優先。
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] due-first start")
     & $Python "scheduler.py" "--run-due" *>> $LogFile
