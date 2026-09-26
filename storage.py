@@ -605,6 +605,7 @@ def due_queue(now_iso: str, oldest_allowed_iso: str | None = None) -> list[dict[
                 FROM posting_queue q
                 JOIN videos v ON v.id = q.video_id
                 WHERE q.status = 'queued'
+                  AND v.youtube_video_id IS NULL
                   AND q.scheduled_for <= ?
                   AND q.scheduled_for >= ?
                   AND q.attempts < 5
@@ -622,6 +623,7 @@ def due_queue(now_iso: str, oldest_allowed_iso: str | None = None) -> list[dict[
                 FROM posting_queue q
                 JOIN videos v ON v.id = q.video_id
                 WHERE q.status = 'queued'
+                  AND v.youtube_video_id IS NULL
                   AND q.scheduled_for <= ?
                   AND q.attempts < 5
                 ORDER BY q.scheduled_for ASC
@@ -640,6 +642,23 @@ def mark_queue_uploaded(queue_id: int, uploaded_at: str) -> None:
             """,
             (uploaded_at, queue_id),
         )
+
+def mark_video_queue_uploaded(video_id: int, uploaded_at: str) -> None:
+    """
+    手動投稿などqueue_idを持たない経路でも、同じ動画の投稿キューを
+    uploadedへ同期して自動投稿の二重実行を防ぐ。
+    """
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE posting_queue
+            SET status = 'uploaded', uploaded_at = ?, error = NULL
+            WHERE video_id = ?
+              AND status IN ('queued', 'failed')
+            """,
+            (uploaded_at, video_id),
+        )
+
 
 def mark_queue_error(queue_id: int, error: str) -> None:
     with connect() as conn:
