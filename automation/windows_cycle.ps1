@@ -106,6 +106,16 @@ try {
 }
 catch {
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] ERROR: " + $_.Exception.Message)
+    try {
+        if ($Python -and (Test-Path (Join-Path $RepoRoot "safe_code_repair.py"))) {
+            Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check start")
+            & $Python "safe_code_repair.py" *>> $LogFile
+            Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check end")
+        }
+    }
+    catch {
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded repair failed: " + $_.Exception.Message)
+    }
     throw
 }
 finally {
