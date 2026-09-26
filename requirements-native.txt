@@ -1,0 +1,5 @@
+-r requirements.txt
+# Mirai Native Modelsの学習/推論に使うtensor計算ライブラリ。
+# 学習済み第三者モデルは含まない。
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.14.0+cu126

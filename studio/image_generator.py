@@ -14,6 +14,10 @@ import requests
 from PIL import Image, ImageOps
 
 from config import settings
+from native_models.image_v0 import (
+    generate as generate_native_image,
+    image_status as native_image_status,
+)
 from runtime_control import (
     visual_background_candidates,
     visual_candidate_count,
@@ -55,7 +59,7 @@ _PIPELINE_LOCK = threading.RLock()
 def _configured_backend() -> str:
     value = getattr(settings, "studio_image_backend", "auto")
     value = str(value or "auto").strip().lower()
-    return value if value in {"auto", "diffusers", "webui"} else "auto"
+    return value if value in {"auto", "diffusers", "webui", "native"} else "auto"
 
 
 def _diffusers_installed() -> bool:
@@ -79,6 +83,8 @@ def _webui_available(timeout: float = 1.5) -> bool:
 def studio_status() -> dict:
     configured = _configured_backend()
     diffusers_ok = _diffusers_installed()
+    native_state = native_image_status()
+    native_ok = bool(native_state.get("ready"))
     torch_version = None
     cuda_available = False
     cuda_version = None
@@ -110,6 +116,8 @@ def studio_status() -> dict:
         selected = "diffusers" if diffusers_ok else None
     elif configured == "webui":
         selected = "webui" if webui_ok else None
+    elif configured == "native":
+        selected = "native" if native_ok else None
     else:
         if diffusers_ok:
             selected = "diffusers"
@@ -122,6 +130,8 @@ def studio_status() -> dict:
         "available": bool(selected),
         "diffusers_installed": diffusers_ok,
         "webui_available": webui_ok,
+        "native_available": native_ok,
+        "native_status": native_state,
         "torch_version": torch_version,
         "cuda_available": cuda_available,
         "cuda_version": cuda_version,
@@ -147,6 +157,11 @@ def _resolve_backend() -> str:
         )
     if status["configured"] == "webui":
         raise RuntimeError("WebUI互換画像生成APIへ接続できません。")
+    if status["configured"] == "native":
+        raise RuntimeError(
+            "Mirai Native Image v0の学習済み重みがありません。"
+            " data/native_training/image を準備して自作モデルを学習してください。"
+        )
     raise RuntimeError(
         "画像生成エンジンが見つかりません。Diffusersを導入するか、"
         "WebUI互換APIを起動してください。"
@@ -423,6 +438,16 @@ def _generate(
     seed: int | None = None,
 ) -> tuple[Image.Image, str]:
     backend = _resolve_backend()
+    if backend == "native":
+        image = generate_native_image(
+            prompt,
+            seed=int(seed) if seed is not None else 42,
+        )
+        image = image.convert("RGB").resize(
+            (preset.width, preset.height),
+            Image.Resampling.LANCZOS,
+        )
+        return image, "mirai-native-image-v0"
     if backend == "diffusers":
         try:
             return _generate_diffusers(prompt, preset, seed=seed)
@@ -601,6 +626,10 @@ def _generate_mirai_reference(
     seed: int | None = None,
 ) -> tuple[Image.Image, str]:
     backend = _resolve_backend()
+    if backend == "native":
+        # v0はまだ参照画像conditioningを持たない。
+        # 外部img2imgへ黙って逃げず、Native本体だけを使う。
+        return _generate(prompt, preset, seed=seed)
     if backend == "diffusers":
         return _generate_reference_diffusers(
             prompt,
@@ -727,6 +756,9 @@ def _highres_refine_selection(
     seed: int | None = None,
 ) -> dict:
     if not visual_highres_enabled():
+        return selection
+    if str(selection.get("backend") or "").startswith("mirai-native"):
+        # Native選択時はStable Diffusion/WebUIによるrefineを混ぜない。
         return selection
     # 背景は本数が多く負荷増が大きいため、v2初期は人物系に集中。
     if asset_type not in {"mirai", "guest"}:
@@ -969,7 +1001,15 @@ def generate_mirai_image(expression: str = "normal") -> str:
     prompt = build_mirai_prompt(expression)
     identity_requested = mirai_identity_lock_enabled()
     reference = _mirai_reference_path()
-    identity_locked = bool(identity_requested and reference is not None)
+    try:
+        native_backend = _resolve_backend() == "native"
+    except Exception:
+        native_backend = False
+    identity_locked = bool(
+        identity_requested
+        and reference is not None
+        and not native_backend
+    )
 
     if identity_requested and reference is None:
         print(

@@ -26,6 +26,10 @@ class Settings:
 
     ollama_url: str = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+    # auto: Mirai Native Brainが学習済みなら自作モデルを優先。
+    # ollama: 移行用Qwen/Ollama固定。
+    # mirai_native: 自作モデルのみ。未学習時は明示エラー。
+    mirai_text_provider: str = os.getenv("MIRAI_TEXT_PROVIDER", "auto")
 
     voicevox_url: str = os.getenv("VOICEVOX_URL", "http://127.0.0.1:50021")
     voicevox_speaker: int = int(os.getenv("VOICEVOX_SPEAKER", "3"))

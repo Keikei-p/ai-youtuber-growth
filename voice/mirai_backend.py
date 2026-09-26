@@ -1,21 +1,29 @@
 from __future__ import annotations
 
 """
-Mirai Local TTS native backend placeholder.
+Mirai Native Voice v0 runtime.
 
-ここへ今後、ミライ専用の自作音声モデル推論を実装する。
-外部音声サービスへ自動送信しない。モデル未導入時は明示的に
-not readyを返し、VOICEVOX等へ黙ってフォールバックしない。
+外部TTSモデルの重みは使わず、data/voice_training の権利クリアWAVから
+自前学習した model.pt を読み込んでWAVを生成する。
 """
 
 
-RUNTIME_IMPLEMENTED = False
+RUNTIME_IMPLEMENTED = True
 
 
 def available() -> bool:
-    # モデル管理までは実装済み。実推論コードを入れるまでは
-    # 「利用可能」と誤表示しない。
-    return False
+    try:
+        from native_models.voice_v0 import weights_path
+        from voice.model_manager import model_status
+        state = model_status()
+        if not bool(state.get("ready")):
+            return False
+        if not weights_path().is_file():
+            return False
+        import torch  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 def describe() -> dict:
@@ -25,14 +33,19 @@ def describe() -> dict:
     dataset = state["dataset"]
     return {
         "name": "mirai-native-backend",
-        "ready": bool(model.get("ready")) and RUNTIME_IMPLEMENTED,
-        "detail": model.get("detail"),
+        "ready": available(),
+        "detail": (
+            "自作Voice v0推論可能"
+            if available()
+            else model.get("detail")
+        ),
         "model": model,
         "dataset": {
             "valid_count": dataset.get("valid_count", 0),
             "total_minutes": dataset.get("total_minutes", 0.0),
             "errors": len(dataset.get("errors") or []),
         },
+        "pretrained_dependency": False,
     }
 
 
@@ -40,7 +53,11 @@ def synthesize(
     text: str,
     voice_params: dict | None = None,
 ) -> bytes:
-    raise RuntimeError(
-        "Mirai native voice model is not installed yet. "
-        "Implement voice/mirai_backend.py with the self-owned model."
-    )
+    if not available():
+        raise RuntimeError(
+            "Mirai Native Voice v0はまだ学習済みではありません。"
+            " data/voice_training を準備して "
+            "python -m native_models.train_voice_v0 を実行してください。"
+        )
+    from native_models.voice_v0 import synthesize_wav_bytes
+    return synthesize_wav_bytes(text, voice_params)

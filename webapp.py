@@ -18,7 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from ai_client import OllamaClient
+from ai_client import OllamaClient, text_ai_status
+from native_models.lab import migration_summary
 from autonomy_policy import autonomy_state, resolve_approval
 from config import settings
 from growth_engine import show_growth_state
@@ -369,6 +370,7 @@ def _rights_status() -> dict:
         "ai_video_enabled": bool(ai_video_enabled()),
         "ai_video_license_ok": (
             (not ai_video_enabled())
+            or str(settings.ai_video_backend or "").strip().lower() == "native"
             or ai_video_license_confirmed()
         ),
     }
@@ -538,6 +540,8 @@ def _status_payload() -> dict:
             "selected": voice_provider_name(),
         },
         "native_voice": _cached_native_voice_status(),
+        "text_ai": text_ai_status(),
+        "native_models": migration_summary(),
         "engines": _engine_status(),
         "rights": _rights_status(),
         "system_ready": all(services.values()),
@@ -1119,6 +1123,24 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
     </section>
 
     <section class="card full">
+      <h2>Mirai Native Model Lab</h2>
+      <p class="small">
+        外部の学習済みAI重みを段階的に置き換える場所です。
+        「コード完成」と「学習済み完成」を分けて表示します。
+      </p>
+      <div id="nativeModels" class="studio-status small"></div>
+      <div class="small" style="margin-top:8px">
+        Brain: 自作byte tokenizer + Transformer /
+        Image: 自作pixel diffusion v0 /
+        Video: 自作frame predictor v0 /
+        Voice: 自作spectrogram TTS v0
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button onclick="runAction('native_status')">自作モデル状態を再確認</button>
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>AIスタジオ</h2>
       <div id="studioStatus" class="studio-status small"></div>
       <div class="actions" style="margin-bottom:12px">
@@ -1137,10 +1159,11 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         AI動画をONにするには、使用モデルの利用条件を確認して「確認済み」にチェックしてください。
       </div>
       <div class="small" style="margin:6px 0">
-        使用モデル:
+        移行用モデル:
         <a href="https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2" target="_blank" rel="noopener">AnimateDiff Motion Adapter</a>
         /
         <a href="https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5" target="_blank" rel="noopener">Stable Diffusion v1.5</a>
+        <br>Native backend選択時は上記の学習済み重みを使用しません。
       </div>
       <div id="aiVideoStatus" class="small" style="margin:8px 0 12px"></div>
       <div class="actions" style="margin-top:12px">
@@ -1283,7 +1306,7 @@ async function refresh(){
     lastCycle.textContent='最終サイクル: '+(state.last_cycle_at||'未実行')+' / '+state.last_cycle_result;
     document.title=(state.system_ready?'✓ ':'⚠ ')+'ミライ AI YouTuber 管理';
     services.innerHTML=[
-      ['Ollama',state.services.ollama],
+      ['文章AI',state.services.ollama],
       ['Voice '+escapeHtml((state.voice_provider||{}).name||''),state.services.voicevox],
       ['FFmpeg',state.services.ffmpeg],
       ['YouTube認証',state.services.youtube_token]
@@ -1292,6 +1315,24 @@ async function refresh(){
     engineStatus.innerHTML=Object.values(engines).map(x=>
       '<div class="row"><span><b>'+escapeHtml(x.name)+'</b><div class="small">'+escapeHtml(x.detail||'')+'</div></span>'+badge(Boolean(x.available))+'</div>'
     ).join('');
+    const native=state.native_models||{};
+    const nativeStatus=native.status||{};
+    nativeModels.innerHTML=['brain','image','video','voice'].map(name=>{
+      const row=nativeStatus[name]||{};
+      const ds=row.dataset||{};
+      const model=row.model||{};
+      const code=Boolean(row.code_ready);
+      const trained=Boolean(row.ready);
+      let detail='';
+      if(name==='brain') detail=(ds.bytes||0)+' bytes corpus';
+      if(name==='image') detail=(ds.valid_count||0)+' images';
+      if(name==='video') detail=(ds.valid_count||0)+' clips';
+      if(name==='voice') detail=(ds.valid_count||0)+' wav / '+Number(ds.total_minutes||0).toFixed(2)+' min';
+      return '<div class="row"><span><b>'+name.toUpperCase()+'</b><div class="small">'+
+        'code='+(code?'OK':'NG')+' / weights='+(trained?'READY':'未学習')+' / '+escapeHtml(detail)+
+        '</div></span>'+badge(trained)+'</div>';
+    }).join('');
+
     const rights=state.rights||{};
     const creditDetail=rights.voice_credit_resolved
       ? (rights.voice_credit||'不要')
@@ -1347,10 +1388,13 @@ async function refresh(){
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
     aiVideoBtn.textContent=state.ai_video_enabled?'ON':'OFF';
     aiVideoBtn.className=state.ai_video_enabled?'primary':'';
+    const nativeVideoBackend=(state.ai_video||{}).backend==='native';
+    aiVideoLicenseRow.style.display=nativeVideoBackend?'none':'flex';
+    aiVideoHint.style.display=nativeVideoBackend?'none':'block';
     if(document.activeElement!==aiVideoLicenseConfirmed){
       aiVideoLicenseConfirmed.checked=Boolean(state.ai_video_license_confirmed);
     }
-    aiVideoLicenseRow.style.outline=(!state.ai_video_enabled&&!state.ai_video_license_confirmed)?'1px solid #8b6b30':'none';
+    aiVideoLicenseRow.style.outline=(!nativeVideoBackend&&!state.ai_video_enabled&&!state.ai_video_license_confirmed)?'1px solid #8b6b30':'none';
     aiVideoHint.textContent=state.ai_video_enabled
       ? 'AI動画の自動生成はONです。'
       : (state.ai_video_license_confirmed
@@ -1491,7 +1535,8 @@ async function toggleAiVideoLicense(){
   }
 }
 async function toggleAiVideo(){
-  if(!state.ai_video_enabled && !state.ai_video_license_confirmed){
+  const nativeVideo=(state.ai_video||{}).backend==='native';
+  if(!nativeVideo && !state.ai_video_enabled && !state.ai_video_license_confirmed){
     aiVideoLicenseRow.scrollIntoView({behavior:'smooth',block:'center'});
     aiVideoLicenseRow.style.outline='2px solid #d6a23d';
     alert(
@@ -1861,7 +1906,17 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 if "ai_video_enabled" in body:
                     enabled = bool(body["ai_video_enabled"])
-                    if enabled and not ai_video_license_confirmed():
+                    native_backend = (
+                        str(settings.ai_video_backend or "")
+                        .strip()
+                        .lower()
+                        == "native"
+                    )
+                    if (
+                        enabled
+                        and not native_backend
+                        and not ai_video_license_confirmed()
+                    ):
                         raise ValueError(
                             "AI動画モデルの利用条件が未確認です。"
                             " 管理画面で利用条件を確認後、「確認済み」をチェックしてください。"
@@ -2007,6 +2062,14 @@ class Handler(BaseHTTPRequestHandler):
                         "自作音声の学習素材チェック",
                         lambda: print(json.dumps(
                             prepare_training_manifest(),
+                            ensure_ascii=False,
+                            indent=2,
+                        )),
+                    ),
+                    "native_status": (
+                        "自作モデル状態確認",
+                        lambda: print(json.dumps(
+                            migration_summary(),
                             ensure_ascii=False,
                             indent=2,
                         )),

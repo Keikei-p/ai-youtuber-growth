@@ -266,7 +266,10 @@ def _generate_ai_video_asset(item: dict) -> str | None:
 
     if not ai_video_enabled():
         return None
-    if not ai_video_license_confirmed():
+    if (
+        str(settings.ai_video_backend or "").strip().lower() != "native"
+        and not ai_video_license_confirmed()
+    ):
         print(
             "[LEGAL][AI-VIDEO] AI動画モデルの利用条件が未確認のため"
             "生成をスキップします。画像+軽量モーションで継続します。"

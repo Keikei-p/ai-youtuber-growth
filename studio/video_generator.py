@@ -7,7 +7,12 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
+
+from native_models.video_v0 import (
+    generate_frames as generate_native_video_frames,
+    video_status as native_video_status,
+)
 
 from config import settings
 from gpu_manager import (
@@ -20,25 +25,34 @@ from studio.models import NEGATIVE_PROMPT
 
 
 def ai_video_status() -> dict:
+    backend = str(settings.ai_video_backend or "animatediff").strip().lower()
     available = False
     cuda = False
     reason = ""
-    try:
-        import torch
-        from diffusers import AnimateDiffPipeline, MotionAdapter  # noqa: F401
+    native = native_video_status()
+    if backend == "native":
+        available = bool(native.get("ready"))
+        cuda = bool(native.get("cuda_available"))
+        if not available:
+            reason = "Mirai Native Video v0の学習済み重みがありません"
+    else:
+        try:
+            import torch
+            from diffusers import AnimateDiffPipeline, MotionAdapter  # noqa: F401
 
-        available = True
-        cuda = bool(torch.cuda.is_available())
-        if not cuda:
-            reason = "CUDA未検出"
-    except Exception as exc:
-        reason = str(exc)
+            available = True
+            cuda = bool(torch.cuda.is_available())
+            if not cuda:
+                reason = "CUDA未検出"
+        except Exception as exc:
+            reason = str(exc)
 
     return {
         "available": available,
         "cuda": cuda,
         "enabled": bool(settings.ai_video_enabled),
-        "backend": settings.ai_video_backend,
+        "backend": backend,
+        "native_status": native,
         "frames": max(4, min(int(settings.ai_video_frames), 16)),
         "steps": max(4, min(int(settings.ai_video_steps), 25)),
         "size": [
@@ -163,6 +177,48 @@ def generate_motion_clip(
     return str(output)
 
 
+
+def _generate_native_clip(prompt: str) -> str:
+    source = Path(settings.mirai_reference_image)
+    if not source.is_file():
+        source = Path(settings.character_image)
+    if not source.is_file():
+        raise FileNotFoundError(
+            "Native Video v0の開始画像がありません。"
+        )
+    with Image.open(source) as raw:
+        start = raw.convert("RGB")
+    frames = generate_native_video_frames(start, prompt)
+    if not frames:
+        raise RuntimeError("Mirai Native Video v0がframeを返しませんでした。")
+
+    width = max(256, min(int(settings.ai_video_width), 512))
+    height = max(256, min(int(settings.ai_video_height), 768))
+    fitted = [
+        ImageOps.fit(
+            frame.convert("RGB"),
+            (width, height),
+            method=Image.Resampling.LANCZOS,
+        )
+        for frame in frames
+    ]
+    output = _output_path("mirai_native_video")
+    _frames_to_mp4(fitted, output, fps=8)
+    record_asset(
+        "ai_video",
+        output,
+        prompt=prompt,
+        backend="mirai-native-video-v0",
+        meta={
+            "frames": len(fitted),
+            "width": width,
+            "height": height,
+            "pretrained_dependency": False,
+        },
+    )
+    return str(output)
+
+
 def generate_animatediff_clip(
     prompt: str,
     *,
@@ -172,7 +228,10 @@ def generate_animatediff_clip(
     短いAI動画素材を1本だけ生成。
     GTX 1070向けに低解像度・少フレーム・CPUオフロードを前提にする。
     """
-    if settings.ai_video_backend.strip().lower() != "animatediff":
+    backend = str(settings.ai_video_backend or "animatediff").strip().lower()
+    if backend == "native":
+        return _generate_native_clip(prompt)
+    if backend != "animatediff":
         raise RuntimeError(
             f"未対応のAI動画backend: {settings.ai_video_backend}"
         )
