@@ -253,6 +253,41 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
             "youtube-old",
         )
 
+    def test_runtime_cycle_lock_blocks_second_process(self) -> None:
+        self.assertTrue(
+            storage.acquire_runtime_lock(
+                "scheduler_tick",
+                owner="first",
+            )
+        )
+        self.assertFalse(
+            storage.acquire_runtime_lock(
+                "scheduler_tick",
+                owner="second",
+            )
+        )
+        storage.release_runtime_lock("scheduler_tick")
+        self.assertTrue(
+            storage.acquire_runtime_lock(
+                "scheduler_tick",
+                owner="third",
+            )
+        )
+        storage.release_runtime_lock("scheduler_tick")
+
+    def test_tick_skips_when_another_process_holds_cycle_lock(self) -> None:
+        storage.acquire_runtime_lock(
+            "scheduler_tick",
+            owner="other-process",
+        )
+        with patch.object(
+            scheduler,
+            "_tick_unlocked",
+        ) as unlocked:
+            scheduler.tick()
+        unlocked.assert_not_called()
+        storage.release_runtime_lock("scheduler_tick")
+
     def test_upload_lock_blocks_second_process(self) -> None:
         video_id, _ = self._video()
         self.assertTrue(
