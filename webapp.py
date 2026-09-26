@@ -2349,6 +2349,26 @@ def run(open_browser: bool = True) -> None:
 
     init_db()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 自動運転がONなのにWindowsタスクが消失/古い場合は、
+    # 管理画面起動時に毎回再登録して自己修復する。
+    if (
+        os.name == "nt"
+        and automation_enabled()
+        and auto_upload_enabled()
+    ):
+        try:
+            wake_result = _install_wake_task(60)
+            _append_log(
+                "[AUTO-POST] startup wake-task self-heal OK\n"
+                + wake_result
+            )
+        except Exception as exc:
+            _append_log(
+                "[AUTO-POST] startup wake-task self-heal failed: "
+                + str(exc)
+            )
+
     url = f"http://{HOST}:{PORT}"
 
     try:
