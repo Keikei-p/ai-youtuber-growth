@@ -332,6 +332,23 @@ def mark_uploaded(
             ),
         )
 
+        first_row = conn.execute(
+            "SELECT value FROM channel_state WHERE key = ?",
+            ("mirai_first_episode_video_id",),
+        ).fetchone()
+        if first_row and str(first_row["value"]).strip() == str(video_id):
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            conn.execute(
+                """
+                INSERT INTO channel_state (key, value, updated_at)
+                VALUES (?, 'true', ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = 'true',
+                    updated_at = excluded.updated_at
+                """,
+                ("mirai_first_episode_uploaded", now),
+            )
+
 
 def acquire_upload_lock(
     video_id: int,
@@ -656,6 +673,45 @@ def queue_for_day(day_prefix: str) -> list[dict[str, Any]]:
             (f"{day_prefix}%",),
         ).fetchall()
     return [dict(r) for r in rows]
+
+def queue_item_for_video(video_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                q.id AS queue_id, q.video_id, q.scheduled_for, q.status,
+                q.uploaded_at, q.error, q.attempts
+            FROM posting_queue q
+            WHERE q.video_id = ?
+            LIMIT 1
+            """,
+            (video_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def reset_queue_for_video(
+    video_id: int,
+    scheduled_for: str,
+    *,
+    error: str = "",
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO posting_queue (
+                video_id, scheduled_for, status, error, attempts
+            ) VALUES (?, ?, 'queued', ?, 0)
+            ON CONFLICT(video_id) DO UPDATE SET
+                scheduled_for = excluded.scheduled_for,
+                status = 'queued',
+                uploaded_at = NULL,
+                error = excluded.error,
+                attempts = 0
+            """,
+            (video_id, scheduled_for, str(error)[:1000]),
+        )
+
 
 def queued_items() -> list[dict[str, Any]]:
     with connect() as conn:
