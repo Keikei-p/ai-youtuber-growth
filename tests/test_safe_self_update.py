@@ -59,6 +59,27 @@ class SafeSelfUpdateTests(unittest.TestCase):
             )
         self.assertEqual(files, [])
 
+    def test_production_update_defers_while_cycle_lock_is_held(self) -> None:
+        with (
+            patch.object(
+                safe_self_update,
+                "acquire_runtime_lock",
+                return_value=False,
+            ),
+            patch.object(
+                safe_self_update,
+                "_save",
+                side_effect=lambda value: value,
+            ),
+        ):
+            result = safe_self_update.safe_self_update()
+
+        self.assertEqual(result["status"], "deferred")
+        self.assertEqual(
+            result["reason"],
+            "automation_cycle_active",
+        )
+
     def test_update_validation_includes_autonomy_invariants(self) -> None:
         source = open(
             "safe_self_update.py",
