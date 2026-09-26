@@ -994,6 +994,15 @@ def upload_saved_video_now(
     finally:
         release_upload_lock(video_id)
 
+def _upload_runtime_block_reason() -> str:
+    if settings.dry_run:
+        return (
+            "DRY_RUN=true のため実YouTube投稿を禁止しています。"
+            " .env の DRY_RUN=false が必要です。"
+        )
+    return ""
+
+
 def run_due() -> None:
     init_db()
 
@@ -1067,6 +1076,20 @@ def run_due() -> None:
         _maybe_finish_full_test()
         return
 
+    block_reason = _upload_runtime_block_reason()
+    if block_reason:
+        record_failure(
+            "youtube.runtime_block",
+            block_reason,
+            {
+                "due_count": len(rows),
+                "dry_run": settings.dry_run,
+            },
+        )
+        print(f"[SCHEDULE] 投稿停止: {block_reason}")
+        _maybe_finish_full_test()
+        return
+
     if not auto_upload_enabled():
         first_id = get_channel_state(
             "mirai_first_episode_video_id",
@@ -1079,7 +1102,8 @@ def run_due() -> None:
             ).strip().lower() != "true"
         )
         only_first_episode = (
-            first_pending
+            automation_enabled()
+            and first_pending
             and first_id.isdigit()
             and rows
             and all(
@@ -1090,13 +1114,14 @@ def run_due() -> None:
         if not only_first_episode:
             print(
                 f"[SCHEDULE] {len(rows)}本が投稿時刻を迎えていますが、"
-                "Web/設定上の自動投稿がOFFのため投稿しません。"
+                "自動投稿がOFFのため投稿しません。"
             )
             _maybe_finish_full_test()
             return
+        set_auto_upload_enabled(True)
         print(
-            "[EPISODE-1] 第1話の未投稿復旧を優先し、"
-            "この1本だけ自動投稿します。"
+            "[EPISODE-1] 自動運転ON / 自動投稿OFFの不整合を検出。"
+            "第1話配送のため自動投稿をONへ自己修復しました。"
         )
 
     for row in rows:
