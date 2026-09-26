@@ -26,6 +26,7 @@ from runtime_control import (
     set_automation_enabled,
     set_upload_privacy,
     upload_privacy,
+    runtime_cancel_requested,
 )
 from media_cleanup import cleanup_uploaded_media
 from storage import (
@@ -975,6 +976,10 @@ def upload_saved_video_now(
 
 def run_due() -> None:
     init_db()
+
+    if runtime_cancel_requested():
+        print("[SCHEDULE] 安全停止中のためYouTube投稿を実行しません。")
+        return
 
     first_episode = ensure_first_episode_delivery()
     if first_episode.get("status") == "queued_priority":
