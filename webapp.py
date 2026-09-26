@@ -686,6 +686,7 @@ def _remove_wake_task() -> str:
 
 def _night_test_mode() -> str:
     # 無料・安全なローカルテスト。YouTubeには自動投稿しない。
+    disarm_production_autonomy()
     set_automation_enabled(True)
     set_auto_upload_enabled(False)
     set_upload_privacy("private")
@@ -1928,6 +1929,7 @@ class Handler(BaseHTTPRequestHandler):
                 count = int(body.get("count") or 0)
                 if count == 0:
                     status = disable_daily_auto()
+                    disarm_production_autonomy()
                     _wake_event.set()
                     self._json({
                         "ok": True,
@@ -2102,6 +2104,7 @@ class Handler(BaseHTTPRequestHandler):
                     request_runtime_cancel()
                     set_automation_enabled(False)
                     set_auto_upload_enabled(False)
+                    disarm_production_autonomy()
                     set_ai_video_enabled(False)
                     cancelled = abort_full_test("安全停止")
                     _wake_event.set()
