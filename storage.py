@@ -178,6 +178,25 @@ def init_db() -> None:
             """
         )
 
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO youtube_upload_history (
+                video_id, youtube_video_id, uploaded_at,
+                privacy_status, source, replaced_youtube_video_id
+            )
+            SELECT
+                id,
+                youtube_video_id,
+                COALESCE(uploaded_at, created_at),
+                '',
+                'legacy_migration',
+                NULL
+            FROM videos
+            WHERE youtube_video_id IS NOT NULL
+              AND youtube_video_id != ''
+            """
+        )
+
 def dashboard_videos(limit: int = 30) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -865,12 +884,16 @@ def set_queue_recovery(
                 SET scheduled_for = ?,
                     status = 'queued',
                     error = ?,
-                    attempts = attempts + ?
+                    attempts = CASE
+                        WHEN ? = 1 THEN MIN(attempts + 1, 4)
+                        ELSE attempts
+                    END
                 WHERE id = ?
                 """,
                 (
                     scheduled_for,
                     str(error)[:1000],
+                    1 if increment_attempt else 0,
                     1 if increment_attempt else 0,
                     queue_id,
                 ),
