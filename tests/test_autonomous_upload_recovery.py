@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import main
+import runtime_control
 import scheduler
 import storage
 from upload_recovery import (
@@ -83,6 +85,7 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
 
     def test_first_episode_auto_posts_even_if_general_auto_upload_is_off(self) -> None:
         video_id, _ = self._video(first_episode=True)
+        storage.set_channel_state("production_autonomy_armed", "true")
         now = datetime(2026, 9, 27, 0, 30, tzinfo=JST)
 
         with (
@@ -133,6 +136,47 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
             ),
             "true",
         )
+
+    def test_unarmed_test_mode_does_not_force_first_episode_upload(self) -> None:
+        video_id, _ = self._video(first_episode=True)
+        storage.set_channel_state("production_autonomy_armed", "false")
+        storage.set_channel_state("automation_enabled", "true")
+        storage.set_channel_state("auto_upload_enabled", "false")
+        now = datetime(2026, 9, 27, 0, 30, tzinfo=JST)
+
+        with (
+            patch.object(scheduler, "_now", return_value=now),
+            patch.object(
+                scheduler,
+                "_upload_runtime_block_reason",
+                return_value="",
+            ),
+            patch.object(scheduler, "upload_video") as upload,
+        ):
+            scheduler.run_due()
+
+        upload.assert_not_called()
+        self.assertIsNone(
+            storage.video_by_id(video_id)["youtube_video_id"]
+        )
+        self.assertEqual(
+            storage.get_channel_state("auto_upload_enabled", ""),
+            "false",
+        )
+
+    def test_generation_never_clears_explicit_safe_stop(self) -> None:
+        runtime_control.request_runtime_cancel()
+        self.assertTrue(runtime_control.runtime_cancel_requested())
+
+        with patch.object(main, "load_character", return_value={}):
+            result = main.run_generation(
+                render=False,
+                upload=False,
+                target_override=1,
+            )
+
+        self.assertEqual(result, [])
+        self.assertTrue(runtime_control.runtime_cancel_requested())
 
     def test_reenabling_automation_clears_stale_safe_stop_latch(self) -> None:
         import runtime_control
@@ -328,8 +372,31 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
         self.assertIn("MIRAI_DUE_FIRST", cycle)
         self.assertIn('"--run-due"', cycle)
         self.assertIn("safe_self_update.py", cycle)
+        self.assertLess(
+            cycle.index("due-first start"),
+            cycle.index("safe self-update check"),
+        )
         self.assertIn("MIRAI_RECOVERY_TRIGGERS", install)
         self.assertIn("@(5, 15, 30, 60)", install)
+
+    def test_explicit_stop_paths_disarm_production(self) -> None:
+        source = Path("webapp.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "status = disable_daily_auto()\n                    disarm_production_autonomy()",
+            source,
+        )
+        self.assertIn(
+            'if action == "safe_stop":',
+            source,
+        )
+        self.assertIn(
+            "disarm_production_autonomy()",
+            source,
+        )
+        self.assertIn(
+            "# 無料・安全なローカルテスト。YouTubeには自動投稿しない。",
+            source,
+        )
 
     def test_library_ui_contains_repost_flow(self) -> None:
         source = Path("webapp.py").read_text(encoding="utf-8")
