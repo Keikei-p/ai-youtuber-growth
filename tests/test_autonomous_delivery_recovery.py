@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import delivery_supervisor
 import scheduler
@@ -87,6 +88,42 @@ class AutonomousDeliveryRecoveryTests(unittest.TestCase):
             storage.get_channel_state("auto_upload_enabled", ""),
             "true",
         )
+
+    def test_existing_auto_on_state_migrates_to_production_arming(self) -> None:
+        video_id, _ = self._video()
+        storage.set_channel_state("mirai_first_episode_video_id", str(video_id))
+        storage.set_channel_state("mirai_first_episode_uploaded", "false")
+        storage.set_channel_state("automation_enabled", "true")
+        storage.set_channel_state("auto_upload_enabled", "true")
+        storage.set_channel_state("production_autonomy_armed", "false")
+
+        with patch.object(
+            delivery_supervisor,
+            "get_credentials",
+            return_value=object(),
+        ):
+            result = delivery_supervisor.self_heal_delivery_controls()
+
+        self.assertEqual(
+            storage.get_channel_state("production_autonomy_armed", ""),
+            "true",
+        )
+        self.assertTrue(
+            any("arm" in item for item in result["repairs"])
+        )
+
+    def test_dry_run_default_allows_only_explicitly_armed_scheduler_uploads(self) -> None:
+        fake_settings = SimpleNamespace(dry_run=True)
+        storage.set_channel_state("production_autonomy_armed", "false")
+        with patch.object(scheduler, "settings", fake_settings):
+            self.assertTrue(scheduler._upload_runtime_block_reason())
+
+        storage.set_channel_state("production_autonomy_armed", "true")
+        with patch.object(scheduler, "settings", fake_settings):
+            self.assertEqual(
+                scheduler._upload_runtime_block_reason(),
+                "",
+            )
 
     def test_network_failure_is_requeued_instead_of_marked_dead(self) -> None:
         video_id, _ = self._video()
