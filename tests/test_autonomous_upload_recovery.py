@@ -94,6 +94,16 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
             ),
             patch.object(
                 scheduler,
+                "automation_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                scheduler.settings,
+                "dry_run",
+                False,
+            ),
+            patch.object(
+                scheduler,
                 "voice_attribution_status",
                 return_value={"resolved": True, "credit": ""},
             ),
@@ -284,6 +294,24 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
                 "動画ファイルが見つかりません"
             )["code"],
             "missing_file",
+        )
+
+    def test_dry_run_blocks_real_auto_upload(self) -> None:
+        video_id, _ = self._video(first_episode=True)
+        now = datetime(2026, 9, 27, 0, 30, tzinfo=JST)
+
+        with (
+            patch.object(scheduler, "_now", return_value=now),
+            patch.object(scheduler, "automation_enabled", return_value=True),
+            patch.object(scheduler, "auto_upload_enabled", return_value=True),
+            patch.object(scheduler.settings, "dry_run", True),
+            patch.object(scheduler, "upload_video") as upload,
+        ):
+            scheduler.run_due()
+
+        upload.assert_not_called()
+        self.assertIsNone(
+            storage.video_by_id(video_id)["youtube_video_id"]
         )
 
     def test_windows_wake_cycle_prioritizes_upload_and_self_update(self) -> None:
