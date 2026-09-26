@@ -291,9 +291,15 @@ def _generate_ai_video_asset(item: dict) -> str | None:
         item["ai_video_visual"] = report
         threshold = visual_video_min_score()
         accepted = bool(report.get("passed")) and int(report.get("score") or 0) >= threshold
+        ai_backend = str(settings.ai_video_backend or "").strip().lower()
+        learned_backend = (
+            "mirai-native-video-v0"
+            if ai_backend == "native"
+            else ai_backend
+        )
         VisualLearningMemory().record_result(
             asset_type="ai_video", path=path, prompt=prompt,
-            backend=str(settings.ai_video_backend), profile="animatediff",
+            backend=learned_backend, profile=learned_backend,
             score=int(report.get("score") or 0),
             passed=bool(report.get("passed")), accepted=accepted,
             metrics=report.get("metrics") or {},

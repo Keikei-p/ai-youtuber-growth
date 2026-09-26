@@ -82,7 +82,13 @@ def _emotion_for(text: str) -> str:
     return "neutral"
 
 
-def _parameters(emotion: str, text: str, index: int, total: int) -> VoiceSegment:
+def _parameters(
+    emotion: str,
+    text: str,
+    index: int,
+    total: int,
+    learned: dict | None = None,
+) -> VoiceSegment:
     speed = 1.04
     pitch = 0.0
     intonation = 1.05
@@ -116,6 +122,25 @@ def _parameters(emotion: str, text: str, index: int, total: int) -> VoiceSegment
     if index == total - 1:
         pause_ms = 120
 
+    learned = learned or {}
+    last_retention = float(
+        learned.get("last_retention") or 0.0
+    )
+    # YouTube維持率から学んだ安全な微調整だけを適用する。
+    # 1回で大きく変えず、±8%程度に制限する。
+    if last_retention > 0:
+        if last_retention < 55:
+            speed *= 1.04
+            pause_ms = int(pause_ms * 0.88)
+            intonation *= 1.03
+        elif last_retention >= 75:
+            speed *= 0.99
+            pause_ms = int(pause_ms * 0.96)
+
+    speed = max(0.88, min(speed, 1.18))
+    intonation = max(0.9, min(intonation, 1.35))
+    pause_ms = max(80, min(pause_ms, 320))
+
     return VoiceSegment(
         text=text,
         emotion=emotion,
@@ -143,14 +168,38 @@ class MiraiVoiceEngine:
         sentences = _split_sentences(script)
         total = len(sentences)
         guidance = get_channel_state("autonomous_script_guidance", "").strip()
+        voice_raw = get_channel_state(
+            "voice_evolution_strategy",
+            "",
+        ).strip()
+        try:
+            learned = json.loads(voice_raw) if voice_raw else {}
+            if not isinstance(learned, dict):
+                learned = {}
+        except Exception:
+            learned = {}
+        voice_guidance = str(
+            learned.get("guidance") or ""
+        ).strip()
+        combined_guidance = " / ".join(
+            value
+            for value in (guidance, voice_guidance)
+            if value
+        )
         segments = [
-            _parameters(_emotion_for(text), text, index, total)
+            _parameters(
+                _emotion_for(text),
+                text,
+                index,
+                total,
+                learned,
+            )
             for index, text in enumerate(sentences)
         ]
         return VoicePlan(
             segments=segments,
             provider=getattr(self.provider, "name", self.provider.__class__.__name__),
-            guidance=guidance,
+            guidance=combined_guidance,
         )
 
     @staticmethod

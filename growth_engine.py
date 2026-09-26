@@ -3,6 +3,10 @@ import json
 from datetime import datetime, timezone
 
 from learner import build_channel_strategy, build_learning_note
+from mirai_engines.evolution_controller import (
+    harvest_final_video,
+    harvest_pending_final_examples,
+)
 from learning_cleanup import (
     cleanup_after_final_learning,
     cleanup_status,
@@ -73,6 +77,22 @@ def run_growth_cycle() -> int:
                 captured += 1
                 if checkpoint_hours == 168:
                     finalized_video_ids.append(int(video["id"]))
+                    try:
+                        harvested = harvest_final_video(
+                            int(video["id"]),
+                            metrics=metrics,
+                            score=float(score or 0),
+                            note=note,
+                        )
+                        print(
+                            "[EVOLUTION] 7日教師化: "
+                            f"{json.dumps(harvested, ensure_ascii=False)}"
+                        )
+                    except Exception as evolution_exc:
+                        print(
+                            f"[EVOLUTION] #{video['id']} 教師化失敗。"
+                            f"次サイクルで再試行します: {evolution_exc}"
+                        )
                 print(
                     f"[GROWTH] #{video['id']} {checkpoint_hours}h "
                     f"views={metrics.get('views', 0)} "
@@ -98,6 +118,20 @@ def run_growth_cycle() -> int:
         )
     else:
         print("[GROWTH] 新しく分析するチェックポイントはありません。")
+
+    # 過去に7日分析済みだが教師化だけ失敗した動画も再試行する。
+    try:
+        pending = harvest_pending_final_examples(limit=300)
+        if pending:
+            print(
+                "[EVOLUTION] 過去データの教師化を再試行: "
+                f"{len(pending)}件"
+            )
+    except Exception as exc:
+        print(
+            "[EVOLUTION] 教師化再試行を次サイクルへ延期: "
+            f"{exc}"
+        )
 
     # 以前のサイクルで7日学習済みでも、削除だけ失敗した動画を再試行する。
     # cleanup_after_final_learning は冪等なので、成功済み動画は触らない。

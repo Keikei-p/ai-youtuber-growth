@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlparse
 
 from ai_client import OllamaClient, text_ai_status
 from native_models.lab import migration_summary
+from mirai_engines.evolution_controller import evolution_status
 from autonomy_policy import autonomy_state, resolve_approval
 from config import settings
 from growth_engine import show_growth_state
@@ -542,6 +543,7 @@ def _status_payload() -> dict:
         "native_voice": _cached_native_voice_status(),
         "text_ai": text_ai_status(),
         "native_models": migration_summary(),
+        "evolution": evolution_status(),
         "engines": _engine_status(),
         "rights": _rights_status(),
         "system_ready": all(services.values()),
@@ -1129,6 +1131,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         「コード完成」と「学習済み完成」を分けて表示します。
       </p>
       <div id="nativeModels" class="studio-status small"></div>
+      <div id="learningCoverage" class="small" style="margin-top:10px"></div>
       <div class="small" style="margin-top:8px">
         Brain: 自作byte tokenizer + Transformer /
         Image: 自作pixel diffusion v0 /
@@ -1332,6 +1335,16 @@ async function refresh(){
         'code='+(code?'OK':'NG')+' / weights='+(trained?'READY':'未学習')+' / '+escapeHtml(detail)+
         '</div></span>'+badge(trained)+'</div>';
     }).join('');
+
+    const evolution=state.evolution||{};
+    const coverage=evolution.learning_coverage||{};
+    const coverageEntries=Object.entries(coverage);
+    const covered=coverageEntries.filter(([_,value])=>Boolean(value)).length;
+    learningCoverage.innerHTML=
+      '<b>学習カバレッジ '+covered+'/'+coverageEntries.length+'</b><br>'+
+      coverageEntries.map(([name,value])=>
+        escapeHtml(name)+': '+escapeHtml(String(value))
+      ).join(' / ');
 
     const rights=state.rights||{};
     const creditDetail=rights.voice_credit_resolved
