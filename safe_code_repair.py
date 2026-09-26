@@ -260,3 +260,11 @@ def repair_known_code_invariants(root: Path = ROOT) -> dict[str, Any]:
         if root == ROOT:
             _record(result)
         return result
+
+def main() -> None:
+    result = repair_known_code_invariants()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
