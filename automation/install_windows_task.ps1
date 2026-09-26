@@ -1,7 +1,7 @@
 param(
     [int]$IntervalMinutes = 60,
     [int]$PrepareMinutes = 90,
-    [int]$RecoveryMinutes = 15,
+    [int[]]$RecoveryMinutes = @(5, 15, 30, 60),
     [switch]$DryRun
 )
 
@@ -13,8 +13,10 @@ if ($IntervalMinutes -lt 15) {
 if ($PrepareMinutes -lt 15) {
     throw "PrepareMinutes must be 15 or greater."
 }
-if ($RecoveryMinutes -lt 5) {
-    throw "RecoveryMinutes must be 5 or greater."
+foreach ($RecoveryMinute in $RecoveryMinutes) {
+    if ($RecoveryMinute -lt 5) {
+        throw "RecoveryMinutes entries must be 5 or greater."
+    }
 }
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -71,7 +73,10 @@ foreach ($Raw in ($PostTimesRaw -split ",")) {
         $PostAt = (Get-Date).Date.AddHours($Hour).AddMinutes($Minute)
         Add-DailyWakeTrigger $PostAt "post"
         Add-DailyWakeTrigger $PostAt.AddMinutes(-$PrepareMinutes) "prepare"
-        Add-DailyWakeTrigger $PostAt.AddMinutes($RecoveryMinutes) "recovery"
+        # MIRAI_RECOVERY_TRIGGERS: wake失敗/ネット復帰遅延に備え複数回復。
+        foreach ($RecoveryMinute in $RecoveryMinutes) {
+            Add-DailyWakeTrigger $PostAt.AddMinutes($RecoveryMinute) ("recovery-" + $RecoveryMinute)
+        }
     }
     catch {
         Write-Warning "Invalid POST_TIMES entry ignored: $Raw"
@@ -133,7 +138,7 @@ Write-Host "Task: $TaskName"
 Write-Host "Maintenance: every $IntervalMinutes minutes"
 Write-Host "Post times: $PostTimesRaw"
 Write-Host "Prepare wake: $PrepareMinutes minutes before"
-Write-Host "Recovery wake: $RecoveryMinutes minutes after"
+Write-Host "Recovery wake: $($RecoveryMinutes -join ',') minutes after"
 Write-Host "WakeToRun: enabled"
 Write-Host "StartWhenAvailable: enabled"
 Write-Host ""
