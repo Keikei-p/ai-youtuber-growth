@@ -1003,10 +1003,15 @@ def upload_saved_video_now(
 
 def _upload_runtime_block_reason() -> str:
     if bool(getattr(settings, "dry_run", False)):
-        return (
-            "DRY_RUN=true のため実YouTube投稿を禁止しています。"
-            " .env の DRY_RUN=false が必要です。"
-        )
+        production_armed = get_channel_state(
+            "production_autonomy_armed",
+            "false",
+        ).strip().lower() == "true"
+        if not production_armed:
+            return (
+                "DRY_RUN=true かつ本番自動投稿が未承認です。"
+                " 管理画面で自動投稿を明示ONにしてください。"
+            )
     return ""
 
 
