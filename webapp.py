@@ -131,6 +131,7 @@ _storage_cache_at = 0.0
 _storage_cache: dict = {}
 _native_voice_cache_at = 0.0
 _native_voice_cache: dict = {}
+_process_git_sha = ""
 
 
 def _cached_storage_snapshot() -> dict:
@@ -197,6 +198,60 @@ def _run_captured(label: str, func) -> dict:
         _job_lock.release()
 
 
+def _current_git_sha() -> str:
+    git = shutil.which("git")
+    if not git or not (ROOT / ".git").exists():
+        return ""
+    try:
+        completed = subprocess.run(
+            [git, "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=10,
+        )
+        if completed.returncode == 0:
+            return completed.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _restart_for_external_code_update() -> None:
+    global _http_server
+
+    helper = ROOT / "restart_helper.pyw"
+    if not helper.exists():
+        _append_log(
+            "[UPDATE] restart_helper.pyw がないため"
+            "外部更新後の自動再起動を実行できません。"
+        )
+        return
+
+    executable = Path(sys.executable)
+    if os.name == "nt":
+        pythonw = executable.with_name("pythonw.exe")
+        if pythonw.exists():
+            executable = pythonw
+
+    _stop_event.set()
+    subprocess.Popen(
+        [str(executable), str(helper)],
+        cwd=str(ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=(
+            subprocess.CREATE_NO_WINDOW
+            if os.name == "nt" else 0
+        ),
+    )
+    if _http_server is not None:
+        threading.Timer(0.5, _http_server.shutdown).start()
+
+
 def _candidate_voicevox_paths() -> list[Path]:
     candidates: list[Path] = []
     if settings.voicevox_exe:
@@ -259,6 +314,19 @@ def _cycle_worker() -> None:
     while not _stop_event.is_set():
         _wake_event.clear()
         try:
+            current_head = _current_git_sha()
+            if (
+                _process_git_sha
+                and current_head
+                and current_head != _process_git_sha
+            ):
+                _append_log(
+                    "[UPDATE] Git HEAD更新を検出。"
+                    "旧コードで次サイクルを実行せず自動再起動します。"
+                )
+                _restart_for_external_code_update()
+                return
+
             if automation_enabled():
                 # Web常駐中も期限投稿をAIサービス起動より先に処理する。
                 # VOICEVOX等の起動待ちで投稿時刻が遅れるのを防ぐ。
@@ -2377,10 +2445,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run(open_browser: bool = True) -> None:
-    global _http_server
+    global _http_server, _process_git_sha
 
     init_db()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _process_git_sha = _current_git_sha()
 
     # 自動運転がONなのにWindowsタスクが消失/古い場合は、
     # 管理画面起動時に毎回再登録して自己修復する。
