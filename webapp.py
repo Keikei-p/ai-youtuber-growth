@@ -2352,10 +2352,26 @@ def run(open_browser: bool = True) -> None:
 
     # 自動運転がONなのにWindowsタスクが消失/古い場合は、
     # 管理画面起動時に毎回再登録して自己修復する。
+    first_episode_pending = (
+        get_channel_state(
+            "mirai_first_episode_video_id",
+            "",
+        ).strip().isdigit()
+        and get_channel_state(
+            "mirai_first_episode_uploaded",
+            "false",
+        ).strip().lower() != "true"
+        and get_channel_state(
+            "runtime_cancel_requested",
+            "false",
+        ).strip().lower() != "true"
+    )
     if (
         os.name == "nt"
-        and automation_enabled()
-        and auto_upload_enabled()
+        and (
+            (automation_enabled() and auto_upload_enabled())
+            or first_episode_pending
+        )
     ):
         try:
             wake_result = _install_wake_task(60)
