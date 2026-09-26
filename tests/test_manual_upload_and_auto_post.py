@@ -176,11 +176,16 @@ class ManualUploadAndAutoPostTests(unittest.TestCase):
         video_id, output = self._rendered_video()
         output.unlink()
 
-        with self.assertRaises(FileNotFoundError):
-            scheduler.upload_saved_video_now(
-                video_id,
-                "private",
-            )
+        with patch.object(
+            scheduler,
+            "regenerate_saved_video",
+            side_effect=RuntimeError("regeneration failed"),
+        ):
+            with self.assertRaises(RuntimeError):
+                scheduler.upload_saved_video_now(
+                    video_id,
+                    "private",
+                )
 
         row = storage.video_by_id(video_id)
         self.assertFalse(row["youtube_video_id"])
