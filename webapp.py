@@ -524,6 +524,7 @@ def _status_payload() -> dict:
     return {
         "automation_enabled": automation_enabled(),
         "auto_upload_enabled": auto_upload_enabled(),
+        "dry_run": bool(settings.dry_run),
         "privacy": upload_privacy(),
         "interval_seconds": web_interval_seconds(),
         "posts_per_day": posts_per_day(),
@@ -1920,6 +1921,17 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/daily-auto":
                 count = int(body.get("count") or 0)
+                if count > 0 and settings.dry_run:
+                    self._json(
+                        {
+                            "message": (
+                                "DRY_RUN=true のため実YouTube自動投稿は開始できません。 "
+                                ".env の DRY_RUN=false を確認してください。"
+                            )
+                        },
+                        400,
+                    )
+                    return
                 if count == 0:
                     status = disable_daily_auto()
                     _wake_event.set()
@@ -1978,6 +1990,11 @@ class Handler(BaseHTTPRequestHandler):
                     set_automation_enabled(bool(body["automation_enabled"]))
                 if "auto_upload_enabled" in body:
                     enabled = bool(body["auto_upload_enabled"])
+                    if enabled and settings.dry_run:
+                        raise ValueError(
+                            "DRY_RUN=true のため実YouTube自動投稿をONにできません。 "
+                            ".env の DRY_RUN=false を確認してください。"
+                        )
                     if enabled:
                         try:
                             get_credentials(interactive=False)
