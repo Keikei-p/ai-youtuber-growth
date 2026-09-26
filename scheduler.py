@@ -1242,10 +1242,17 @@ def tick() -> None:
         _maybe_finish_full_test()
         return
 
-    # 通常運転。
-    # スリープ復帰直後は、まず期限到来済みの投稿を最優先する。
-    # 重い分析/生成を先に走らせると投稿猶予を超えるため順序を固定。
+    # 通常運転。第1話はYouTube投稿成功まで最優先。
+    ensure_first_episode_delivery()
     run_due()
+    first_episode_after = ensure_first_episode_delivery()
+    if first_episode_after.get("status") != "uploaded":
+        print(
+            "[EPISODE-1] 第1話のYouTube投稿成功を最優先。"
+            "成長分析・2話以降の生成は次tickへ延期します。"
+        )
+        return
+
     run_growth_cycle()
     try:
         maybe_run_improvement_review(min_hours=12)
@@ -1296,9 +1303,40 @@ def main() -> None:
         action="store_true",
         help="準備・繰り越し・期限到来投稿を1回実行",
     )
+    parser.add_argument(
+        "--upload-preflight",
+        action="store_true",
+        help="実投稿をせず自動投稿の阻害要因を診断",
+    )
     args = parser.parse_args()
 
-    if args.prepare:
+    if args.upload_preflight:
+        init_db()
+        problems: list[str] = []
+        if settings.dry_run:
+            problems.append("DRY_RUN=true")
+        if not automation_enabled():
+            problems.append("automation_enabled=false")
+        if not auto_upload_enabled():
+            problems.append("auto_upload_enabled=false")
+        token = Path(settings.youtube_token_file)
+        if not token.is_file():
+            problems.append(f"YouTube token missing: {token}")
+        voice = voice_attribution_status()
+        if not voice["resolved"]:
+            problems.append("voice credit unresolved")
+        first = ensure_first_episode_delivery()
+        payload = {
+            "ok": not problems,
+            "problems": problems,
+            "first_episode": first,
+            "privacy": upload_privacy(),
+            "post_times": post_times(),
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        if problems:
+            raise SystemExit(3)
+    elif args.prepare:
         prepare_upcoming()
     elif args.run_due:
         run_due()
