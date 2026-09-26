@@ -894,7 +894,6 @@ def set_queue_recovery(
                     scheduled_for,
                     str(error)[:1000],
                     1 if increment_attempt else 0,
-                    1 if increment_attempt else 0,
                     queue_id,
                 ),
             )
@@ -904,7 +903,10 @@ def set_queue_recovery(
                 UPDATE posting_queue
                 SET status = 'queued',
                     error = ?,
-                    attempts = attempts + ?
+                    attempts = CASE
+                        WHEN ? = 1 THEN MIN(attempts + 1, 4)
+                        ELSE attempts
+                    END
                 WHERE id = ?
                 """,
                 (
