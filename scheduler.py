@@ -11,6 +11,7 @@ from config import settings
 from growth_engine import run_growth_cycle
 from legal_guard import publish_gate
 from main import run_generation
+from native_models.auto_train import maybe_run_native_retraining
 from resource_governor import background_production_decision
 from self_improvement import (
     maybe_run_improvement_review,
@@ -867,6 +868,19 @@ def tick() -> None:
         record_failure("improvement.review", exc)
         print(f"[IMPROVEMENT] AI改善分析をスキップ: {exc}")
     prepare_upcoming()
+    try:
+        native_result = maybe_run_native_retraining()
+        if native_result.get("status") not in {"not_due", "disabled"}:
+            print(
+                "[NATIVE-TRAIN] "
+                + json.dumps(native_result, ensure_ascii=False)
+            )
+    except Exception as exc:
+        record_failure(
+            "native.auto_train",
+            exc,
+        )
+        print(f"[NATIVE-TRAIN] 自動再学習を次回へ延期: {exc}")
 
 def main() -> None:
     parser = argparse.ArgumentParser(

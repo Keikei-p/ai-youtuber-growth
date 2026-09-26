@@ -198,6 +198,7 @@ def train(
         "name": "Mirai Native Voice v0",
         "version": "0.1.0",
         "ready": True,
+        "production_approved": False,
         "runtime_implemented": True,
         "artifacts": ["model.pt"],
         "architecture": asdict(config),

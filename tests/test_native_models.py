@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import ai_client
+import native_models.brain as brain_module
 from native_models.brain import BrainConfig, ByteTokenizer
+from native_models import promotion
 from native_models.image_v0 import ImageConfig, image_status
 from native_models.lab import migration_summary
 from native_models.video_v0 import VideoConfig, video_status
@@ -46,7 +50,7 @@ class NativeModelTests(unittest.TestCase):
             patch.object(
                 ai_client,
                 "brain_status",
-                return_value={"ready": True},
+                return_value={"ready": True, "production_ready": True},
             ),
             patch.object(
                 ai_client,
@@ -66,6 +70,93 @@ class NativeModelTests(unittest.TestCase):
             self.assertEqual(client.generate("test"), "native-answer")
         native_generate.assert_called_once_with("test")
         http_post.assert_not_called()
+
+    def test_auto_mode_does_not_use_unapproved_native_model(self) -> None:
+        fake_settings = SimpleNamespace(
+            mirai_text_provider="auto",
+            ollama_url="http://127.0.0.1:11434",
+            ollama_model="migration-only",
+        )
+        with (
+            patch.object(ai_client, "settings", fake_settings),
+            patch.object(
+                ai_client,
+                "brain_status",
+                return_value={
+                    "ready": True,
+                    "production_ready": False,
+                },
+            ),
+            patch.object(
+                ai_client,
+                "_ollama_available",
+                return_value=True,
+            ),
+            patch.object(
+                ai_client._NATIVE,
+                "generate",
+            ) as native_generate,
+        ):
+            client = ai_client.OllamaClient()
+            self.assertEqual(client.provider_name(), "ollama")
+        native_generate.assert_not_called()
+
+    def test_brain_corpus_includes_auto_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            auto = root / "auto"
+            auto.mkdir(parents=True)
+            (auto / "youtube_1.txt").write_text(
+                "ミライの成功台本です。" * 300,
+                encoding="utf-8",
+            )
+            model_root = root / "model"
+            with (
+                patch.object(
+                    brain_module,
+                    "component_training_root",
+                    return_value=root,
+                ),
+                patch.object(
+                    brain_module,
+                    "component_model_root",
+                    return_value=model_root,
+                ),
+            ):
+                status = brain_module.corpus_status()
+        self.assertTrue(status["ready"])
+        self.assertEqual(status["files"], 1)
+
+    def test_failed_benchmark_rolls_back_new_model(self) -> None:
+        with (
+            patch.object(
+                promotion,
+                "model_meta",
+                return_value={
+                    "ready": True,
+                    "training": {"final_loss": 1.0},
+                },
+            ),
+            patch.object(
+                promotion,
+                "benchmark_component",
+                return_value={"passed": False, "score": 20},
+            ),
+            patch.object(
+                promotion,
+                "restore_model",
+            ) as restore,
+        ):
+            result = promotion.evaluate_and_promote(
+                "brain",
+                previous_meta={
+                    "training": {"final_loss": 0.9},
+                },
+                backup=Path("backup"),
+            )
+        self.assertFalse(result["promoted"])
+        self.assertTrue(result["rolled_back"])
+        restore.assert_called_once()
 
     def test_native_only_does_not_silently_fallback_to_ollama(self) -> None:
         fake_settings = SimpleNamespace(

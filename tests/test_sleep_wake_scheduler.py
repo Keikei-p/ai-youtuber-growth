@@ -158,12 +158,20 @@ class SleepWakeSchedulerTests(unittest.TestCase):
                 "prepare_upcoming",
                 side_effect=lambda: calls.append("prepare"),
             ),
+            patch.object(
+                scheduler,
+                "maybe_run_native_retraining",
+                side_effect=lambda: (
+                    calls.append("native")
+                    or {"status": "not_due"}
+                ),
+            ),
         ):
             scheduler.tick()
 
         self.assertEqual(
             calls,
-            ["due", "growth", "improvement", "prepare"],
+            ["due", "growth", "improvement", "prepare", "native"],
         )
 
     def test_windows_wake_task_has_post_prepare_and_recovery_triggers(self) -> None:

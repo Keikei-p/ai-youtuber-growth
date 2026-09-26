@@ -66,9 +66,14 @@ def model_package_status(name: str) -> dict[str, Any]:
         "name": str(meta.get("name") or name),
         "version": str(meta.get("version") or ""),
         "ready": ready,
+        "production_approved": bool(meta.get("production_approved")),
         "model_root": str(root),
         "missing_artifacts": missing,
         "architecture": meta.get("architecture") or {},
         "training": meta.get("training") or {},
-        "detail": "推論可能" if ready else "学習済み重みが未完成",
+        "detail": (
+            "本番承認済み"
+            if ready and bool(meta.get("production_approved"))
+            else ("推論可能・本番承認待ち" if ready else "学習済み重みが未完成")
+        ),
     }

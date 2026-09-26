@@ -40,7 +40,7 @@ def text_ai_status() -> dict:
     else:
         selected = (
             "mirai_native"
-            if native["ready"]
+            if native.get("production_ready")
             else ("ollama" if ollama_ok else None)
         )
     return {

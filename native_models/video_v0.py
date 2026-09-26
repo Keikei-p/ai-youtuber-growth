@@ -252,6 +252,7 @@ def train(
         "name": "Mirai Native Video v0",
         "version": "0.1.0",
         "ready": True,
+        "production_approved": False,
         "artifacts": ["model.pt"],
         "architecture": asdict(config),
         "training": {

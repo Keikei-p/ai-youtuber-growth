@@ -1326,13 +1326,15 @@ async function refresh(){
       const model=row.model||{};
       const code=Boolean(row.code_ready);
       const trained=Boolean(row.ready);
+      const prod=Boolean(model.production_approved);
       let detail='';
       if(name==='brain') detail=(ds.bytes||0)+' bytes corpus';
       if(name==='image') detail=(ds.valid_count||0)+' images';
       if(name==='video') detail=(ds.valid_count||0)+' clips';
       if(name==='voice') detail=(ds.valid_count||0)+' wav / '+Number(ds.total_minutes||0).toFixed(2)+' min';
       return '<div class="row"><span><b>'+name.toUpperCase()+'</b><div class="small">'+
-        'code='+(code?'OK':'NG')+' / weights='+(trained?'READY':'未学習')+' / '+escapeHtml(detail)+
+        'code='+(code?'OK':'NG')+' / weights='+(trained?'READY':'未学習')+
+        ' / production='+(prod?'APPROVED':'WAIT')+' / '+escapeHtml(detail)+
         '</div></span>'+badge(trained)+'</div>';
     }).join('');
 

@@ -154,6 +154,20 @@ class Settings:
         os.getenv("RESOURCE_URGENT_MINUTES", "60")
     )
 
+    # Nativeモデル自動再学習。投稿やPC操作を優先し、条件が良い時だけ1モデルずつ実行。
+    native_auto_train_enabled: bool = (
+        os.getenv("NATIVE_AUTO_TRAIN_ENABLED", "true").lower() == "true"
+    )
+    native_auto_train_cooldown_hours: int = int(
+        os.getenv("NATIVE_AUTO_TRAIN_COOLDOWN_HOURS", "168")
+    )
+    native_auto_train_post_gap_minutes: int = int(
+        os.getenv("NATIVE_AUTO_TRAIN_POST_GAP_MINUTES", "240")
+    )
+    native_auto_train_timeout_seconds: int = int(
+        os.getenv("NATIVE_AUTO_TRAIN_TIMEOUT_SECONDS", "1800")
+    )
+
     youtube_category_id: str = os.getenv("YOUTUBE_CATEGORY_ID", "22")
     youtube_default_language: str = os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "ja")
     youtube_contains_synthetic_media: bool = (

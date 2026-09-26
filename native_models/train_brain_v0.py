@@ -21,7 +21,7 @@ def _load_corpus() -> tuple[list[int], dict]:
     tokenizer = ByteTokenizer()
     chunks: list[list[int]] = []
     digest = hashlib.sha256()
-    files = sorted(paths["training"].glob("*.txt"))
+    files = sorted(paths["training"].rglob("*.txt"))
     for path in files:
         text = path.read_text(encoding="utf-8").strip()
         if not text:
@@ -111,6 +111,7 @@ def train(
         "name": "Mirai Native Brain v0",
         "version": "0.1.0",
         "ready": True,
+        "production_approved": False,
         "artifacts": ["model.pt"],
         "architecture": asdict(config),
         "training": {

@@ -224,7 +224,7 @@ def brain_paths() -> dict[str, Path]:
 
 def corpus_status() -> dict[str, Any]:
     root = brain_paths()["training"]
-    files = sorted(root.glob("*.txt"))
+    files = sorted(root.rglob("*.txt"))
     total_bytes = 0
     total_chars = 0
     for path in files:
@@ -267,6 +267,11 @@ def brain_status() -> dict[str, Any]:
         "dataset": corpus,
         "model": package,
         "ready": bool(package.get("ready")) and torch_available,
+        "production_ready": (
+            bool(package.get("ready"))
+            and bool(package.get("production_approved"))
+            and torch_available
+        ),
     }
 
 
