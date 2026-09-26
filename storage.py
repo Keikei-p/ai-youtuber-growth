@@ -129,6 +129,13 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_upload_history_video
         ON youtube_upload_history(video_id, id DESC);
+
+        CREATE TABLE IF NOT EXISTS youtube_upload_locks (
+            video_id INTEGER PRIMARY KEY,
+            acquired_at TEXT NOT NULL,
+            owner TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY(video_id) REFERENCES videos(id)
+        );
         """)
 
         video_columns = {
@@ -323,6 +330,55 @@ def mark_uploaded(
                 str(source or ""),
                 replaced,
             ),
+        )
+
+
+def acquire_upload_lock(
+    video_id: int,
+    *,
+    owner: str = "",
+    ttl_minutes: int = 120,
+) -> bool:
+    now = datetime.now(timezone.utc)
+    cutoff = now.timestamp() - max(5, int(ttl_minutes)) * 60
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT acquired_at FROM youtube_upload_locks WHERE video_id = ?",
+            (video_id,),
+        ).fetchone()
+        if row:
+            try:
+                acquired = datetime.fromisoformat(str(row["acquired_at"]))
+                if acquired.tzinfo is None:
+                    acquired = acquired.replace(tzinfo=timezone.utc)
+                if acquired.timestamp() >= cutoff:
+                    return False
+            except Exception:
+                pass
+            conn.execute(
+                "DELETE FROM youtube_upload_locks WHERE video_id = ?",
+                (video_id,),
+            )
+        conn.execute(
+            """
+            INSERT INTO youtube_upload_locks (
+                video_id, acquired_at, owner
+            ) VALUES (?, ?, ?)
+            """,
+            (
+                video_id,
+                now.isoformat(timespec="seconds"),
+                str(owner or "")[:200],
+            ),
+        )
+        return True
+
+
+def release_upload_lock(video_id: int) -> None:
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM youtube_upload_locks WHERE video_id = ?",
+            (video_id,),
         )
 
 
