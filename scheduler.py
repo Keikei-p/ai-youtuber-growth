@@ -680,9 +680,21 @@ def prepare_upcoming() -> None:
     """
     常に「次の投稿枠」を POSTS_PER_DAY 本ぶん先回りして準備する。
     夜に実行した場合は自動的に翌日の枠へ回る。
+    ただし第1話が生成済み未投稿なら、まず第1話の配送を完了させる。
     """
     init_db()
     reschedule_missed()
+
+    first_episode = ensure_first_episode_delivery()
+    if first_episode.get("status") in {
+        "queued_priority",
+        "regeneration_failed",
+    }:
+        print(
+            "[EPISODE-1] 第1話がYouTubeへ届くまで"
+            "2話以降の自動生成を保留します。"
+        )
+        return
 
     if not _generation_runtime_ready():
         return
