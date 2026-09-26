@@ -52,6 +52,7 @@ from storage import (
 )
 from voice.provider import voice_attribution_status, voice_provider_status
 from upload_recovery import recover_upload_failure
+from youtube.auth import get_credentials
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -1258,26 +1259,40 @@ def show_queue() -> None:
 def tick() -> None:
     full_test = _full_test_state()
     if full_test.get("active"):
-        # 完全テスト中は通常の補充を止める。
-        # 1本を最後まで完成させてキューへ入れ、
-        # その直後に投稿時刻判定をする。
         print("[FULL-TEST] テストセッション中: 1本ずつ直列運転")
         _advance_full_test_generation()
         run_due()
         _maybe_finish_full_test()
         return
 
-    # 通常運転。第1話はYouTube投稿成功まで最優先。
-    ensure_first_episode_delivery()
+    # 第1話が未生成なら、通常の成長分析より先に1本を完成させる。
+    first_before = ensure_first_episode_delivery()
+    if first_before.get("status") in {
+        "not_created",
+        "missing_record",
+    }:
+        print("[EPISODE-1] 第1話を最優先で生成します。")
+        prepare_upcoming()
+        run_due()
+        first_after_generation = ensure_first_episode_delivery()
+        if first_after_generation.get("status") != "uploaded":
+            print(
+                "[EPISODE-1] 第1話の投稿成功待ち。"
+                "2話以降は生成しません。"
+            )
+        return
+
+    # 生成済み第1話はYouTube動画ID取得まで最優先で配送する。
     run_due()
-    first_episode_after = ensure_first_episode_delivery()
-    if first_episode_after.get("status") != "uploaded":
+    first_after = ensure_first_episode_delivery()
+    if first_after.get("status") != "uploaded":
         print(
             "[EPISODE-1] 第1話のYouTube投稿成功を最優先。"
             "成長分析・2話以降の生成は次tickへ延期します。"
         )
         return
 
+    # 第1話投稿後だけ通常の成長ループへ進む。
     run_growth_cycle()
     try:
         maybe_run_improvement_review(min_hours=12)
@@ -1337,29 +1352,45 @@ def main() -> None:
 
     if args.upload_preflight:
         init_db()
-        problems: list[str] = []
-        if settings.dry_run:
-            problems.append("DRY_RUN=true")
-        if not automation_enabled():
-            problems.append("automation_enabled=false")
-        if not auto_upload_enabled():
-            problems.append("auto_upload_enabled=false")
-        token = Path(settings.youtube_token_file)
-        if not token.is_file():
-            problems.append(f"YouTube token missing: {token}")
+        blockers: list[str] = []
+        warnings: list[str] = []
+
+        if runtime_cancel_requested():
+            blockers.append("runtime_cancel_requested=true")
+
+        try:
+            get_credentials(interactive=False)
+        except Exception as exc:
+            blockers.append("YouTube OAuth: " + str(exc))
+
         voice = voice_attribution_status()
         if not voice["resolved"]:
-            problems.append("voice credit unresolved")
+            blockers.append("voice credit unresolved")
+
+        if not automation_enabled():
+            warnings.append(
+                "automation_enabled=false: Web常駐サイクルは停止中"
+            )
+        if not auto_upload_enabled():
+            warnings.append(
+                "auto_upload_enabled=false: 第1話以外の通常自動投稿は停止中"
+            )
+
         first = ensure_first_episode_delivery()
         payload = {
-            "ok": not problems,
-            "problems": problems,
+            "ok": not blockers,
+            "blockers": blockers,
+            "warnings": warnings,
             "first_episode": first,
             "privacy": upload_privacy(),
             "post_times": post_times(),
+            "dry_run_note": (
+                "DRY_RUNはmain.py直接投稿用。"
+                "schedulerの自動投稿経路は別管理です。"
+            ),
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
-        if problems:
+        if blockers:
             raise SystemExit(3)
     elif args.prepare:
         prepare_upcoming()
