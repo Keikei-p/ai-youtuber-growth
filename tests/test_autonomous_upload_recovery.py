@@ -81,6 +81,57 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
             "false",
         )
 
+    def test_first_episode_auto_posts_even_if_general_auto_upload_is_off(self) -> None:
+        video_id, _ = self._video(first_episode=True)
+        now = datetime(2026, 9, 27, 0, 30, tzinfo=JST)
+
+        with (
+            patch.object(scheduler, "_now", return_value=now),
+            patch.object(
+                scheduler,
+                "auto_upload_enabled",
+                return_value=False,
+            ),
+            patch.object(
+                scheduler,
+                "voice_attribution_status",
+                return_value={"resolved": True, "credit": ""},
+            ),
+            patch.object(
+                scheduler,
+                "publish_gate",
+                return_value={"allowed": True, "risks": []},
+            ),
+            patch.object(
+                scheduler,
+                "upload_video",
+                return_value="youtube-episode-auto",
+            ) as upload,
+            patch.object(scheduler, "cleanup_uploaded_media"),
+        ):
+            scheduler.run_due()
+
+        upload.assert_called_once()
+        self.assertEqual(
+            storage.video_by_id(video_id)["youtube_video_id"],
+            "youtube-episode-auto",
+        )
+        self.assertEqual(
+            storage.get_channel_state(
+                "mirai_first_episode_uploaded",
+                "",
+            ),
+            "true",
+        )
+
+    def test_reenabling_automation_clears_stale_safe_stop_latch(self) -> None:
+        import runtime_control
+
+        runtime_control.request_runtime_cancel()
+        self.assertTrue(runtime_control.runtime_cancel_requested())
+        runtime_control.set_automation_enabled(True)
+        self.assertFalse(runtime_control.runtime_cancel_requested())
+
     def test_first_episode_upload_marks_delivery_complete(self) -> None:
         video_id, _ = self._video(first_episode=True)
         storage.mark_uploaded(
