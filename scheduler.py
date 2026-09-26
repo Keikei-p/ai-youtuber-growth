@@ -39,9 +39,11 @@ from storage import (
     mark_uploaded,
     mark_video_queue_uploaded,
     occupied_schedule_times,
+    queue_item_for_video,
     queue_video,
     queued_items,
     release_upload_lock,
+    reset_queue_for_video,
     get_channel_state,
     set_channel_state,
     update_queue_schedule,
@@ -552,6 +554,101 @@ def reschedule_missed() -> int:
 
     return moved
 
+def ensure_first_episode_delivery() -> dict:
+    """
+    第1話は「生成完了」ではなく「YouTube投稿成功」まで未完了扱い。
+    既存の第1話IDがあれば、その動画を最優先で復旧・即時キューへ戻す。
+    """
+    raw_id = get_channel_state(
+        "mirai_first_episode_video_id",
+        "",
+    ).strip()
+    if not raw_id.isdigit():
+        return {"status": "not_created"}
+
+    video_id = int(raw_id)
+    row = video_by_id(video_id)
+    if not row:
+        set_channel_state(
+            "mirai_first_episode_video_id",
+            "",
+        )
+        set_channel_state(
+            "mirai_first_episode_completed",
+            "false",
+        )
+        set_channel_state(
+            "mirai_first_episode_uploaded",
+            "false",
+        )
+        return {"status": "missing_record"}
+
+    if str(row.get("youtube_video_id") or "").strip():
+        set_channel_state(
+            "mirai_first_episode_uploaded",
+            "true",
+        )
+        return {
+            "status": "uploaded",
+            "video_id": video_id,
+            "youtube_video_id": row.get("youtube_video_id"),
+        }
+
+    # レンダリング済みフラグは互換用として保持するが、
+    # 投稿成功までは first_episode_uploaded=false のまま。
+    set_channel_state(
+        "mirai_first_episode_uploaded",
+        "false",
+    )
+
+    output = str(row.get("output_path") or "").strip()
+    if not output or not Path(output).is_file():
+        try:
+            row = regenerate_saved_video(video_id)
+        except Exception as exc:
+            record_failure(
+                "episode1.regenerate",
+                exc,
+                {"video_id": video_id},
+            )
+            return {
+                "status": "regeneration_failed",
+                "video_id": video_id,
+                "error": str(exc),
+            }
+
+    now = _now()
+    queue = queue_item_for_video(video_id)
+    due_now = now.isoformat(timespec="minutes")
+    if (
+        not queue
+        or queue.get("status") != "queued"
+        or _parse_iso(str(queue.get("scheduled_for"))) > now
+    ):
+        reset_queue_for_video(
+            video_id,
+            due_now,
+            error="[EPISODE-1] delivery recovery",
+        )
+
+    set_channel_state(
+        "first_episode_delivery_last",
+        json.dumps(
+            {
+                "video_id": video_id,
+                "scheduled_for": due_now,
+                "status": "queued_priority",
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return {
+        "status": "queued_priority",
+        "video_id": video_id,
+        "scheduled_for": due_now,
+    }
+
+
 def _generation_runtime_ready() -> bool:
     problems: list[str] = []
     if not OllamaClient().available():
@@ -879,6 +976,13 @@ def upload_saved_video_now(
 def run_due() -> None:
     init_db()
 
+    first_episode = ensure_first_episode_delivery()
+    if first_episode.get("status") == "queued_priority":
+        print(
+            f"[EPISODE-1] #{first_episode['video_id']} を"
+            "最優先投稿キューへ復旧しました。"
+        )
+
     now = _now()
     full_test = _full_test_state()
     if full_test.get("active"):
@@ -939,12 +1043,36 @@ def run_due() -> None:
         return
 
     if not auto_upload_enabled():
-        print(
-            f"[SCHEDULE] {len(rows)}本が投稿時刻を迎えていますが、"
-            "Web/設定上の自動投稿がOFFのため投稿しません。"
+        first_id = get_channel_state(
+            "mirai_first_episode_video_id",
+            "",
+        ).strip()
+        first_pending = (
+            get_channel_state(
+                "mirai_first_episode_uploaded",
+                "false",
+            ).strip().lower() != "true"
         )
-        _maybe_finish_full_test()
-        return
+        only_first_episode = (
+            first_pending
+            and first_id.isdigit()
+            and rows
+            and all(
+                int(row["video_id"]) == int(first_id)
+                for row in rows
+            )
+        )
+        if not only_first_episode:
+            print(
+                f"[SCHEDULE] {len(rows)}本が投稿時刻を迎えていますが、"
+                "Web/設定上の自動投稿がOFFのため投稿しません。"
+            )
+            _maybe_finish_full_test()
+            return
+        print(
+            "[EPISODE-1] 第1話の未投稿復旧を優先し、"
+            "この1本だけ自動投稿します。"
+        )
 
     for row in rows:
         video_id = int(row["video_id"])
