@@ -82,6 +82,11 @@ jobs:
           if (-not $task.Settings.WakeToRun) {
             throw "WakeToRun was not preserved in the scheduled-task definition"
           }
+
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File automation/install_windows_task.ps1 -IntervalMinutes 60 -DryRun
+          if ($LASTEXITCODE -ne 0) {
+            throw "install_windows_task.ps1 DryRun failed"
+          }
       - name: Import dashboard and run dry-run state command
         shell: pwsh
         env:

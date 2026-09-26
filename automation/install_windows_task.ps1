@@ -1,7 +1,8 @@
 param(
     [int]$IntervalMinutes = 60,
     [int]$PrepareMinutes = 90,
-    [int]$RecoveryMinutes = 15
+    [int]$RecoveryMinutes = 15,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -98,6 +99,22 @@ $Principal = New-ScheduledTaskPrincipal `
     -RunLevel Limited
 
 $Task = New-ScheduledTask -Action $Action -Trigger $Triggers -Settings $Settings -Principal $Principal
+
+if ($DryRun) {
+    if (-not $Task.Settings.WakeToRun) {
+        throw "DryRun: WakeToRun was not preserved."
+    }
+    if (@($Task.Triggers).Count -lt 4) {
+        throw "DryRun: expected maintenance + daily wake triggers."
+    }
+    Write-Host (
+        "[DRY-RUN] task definition OK / triggers=" +
+        @($Task.Triggers).Count +
+        " / post_times=" + $PostTimesRaw
+    )
+    exit 0
+}
+
 Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
 
 # AC/DCともWake Timerを有効化。デスクトップではAC設定が主に効く。
