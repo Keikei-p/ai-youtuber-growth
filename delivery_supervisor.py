@@ -92,6 +92,20 @@ def self_heal_delivery_controls() -> dict[str, Any]:
     production_armed = get_channel_state(
         "production_autonomy_armed", "false"
     ).strip().lower() == "true"
+
+    # 旧バージョンですでに「自動運転ON + 自動投稿ON」だった環境は、
+    # 第1話未投稿時に限り明示設定済みとして本番arm状態へ移行する。
+    if (
+        first_pending
+        and not production_armed
+        and not runtime_cancel_requested()
+        and automation_enabled()
+        and auto_upload_enabled()
+    ):
+        set_channel_state("production_autonomy_armed", "true")
+        production_armed = True
+        repairs.append("既存の自動投稿ON設定を本番配送arm状態へ移行")
+
     if (
         first_pending
         and production_armed
