@@ -75,6 +75,7 @@ from scheduler import (
     run_due,
     start_today_full_test,
     tick,
+    upload_saved_video_now,
 )
 from storage import (
     active_guests,
@@ -1462,10 +1463,14 @@ async function refresh(){
       const youtube=x.youtube_video_id
         ? '<a class="linkbtn" target="_blank" rel="noopener" href="https://youtu.be/'+encodeURIComponent(x.youtube_video_id)+'">YouTubeで開く</a>'
         : '';
+      const postingNow=state.current_job===('YouTube投稿 #'+x.id);
+      const manualPost=(!x.youtube_video_id&&x.has_local_file)
+        ? '<button class="primary" '+(postingNow?'disabled':'')+' onclick="postLibraryVideo('+x.id+')">'+(postingNow?'投稿中…':'YouTubeへ投稿')+'</button>'
+        : '';
       return '<div class="library-item">'
         +'<div class="library-head"><div><b>#'+x.id+' '+escapeHtml(x.title)+'</b>'
         +'<div class="small">'+escapeHtml(x.created_at||'')+' / '+escapeHtml(x.status||'')+' / '+Number(x.views||0)+' views</div></div>'
-        +youtube+'</div>'
+        +'<div class="actions">'+manualPost+youtube+'</div></div>'
         +'<div class="library-meta">'+local+yt+queue+guest+quality+'</div>'
         +err+preview+'</div>';
     }).join(''):'<div class="small">まだ動画履歴がありません。</div>';
@@ -1514,6 +1519,25 @@ async function refresh(){
     analytics.innerHTML=state.growth.recent.map(x=>'<div class="row"><span>#'+x.video_id+' '+escapeHtml(x.title)+'</span><span class="small">'+x.checkpoint_hours+'h / score '+Number(x.score).toFixed(1)+' / '+x.views+' views</span></div>').join('');
     logs.textContent=state.log_tail;
   }catch(e){alert(e.message)}
+}
+async function postLibraryVideo(id){
+  const mode=(state&&state.privacy)||'private';
+  const labels={private:'非公開',unlisted:'限定公開',public:'公開'};
+  const label=labels[mode]||mode;
+  if(!confirm('動画 #'+id+' をYouTubeへ「'+label+'」で投稿しますか？\n\n投稿ボタンは自動投稿OFFでも動きます。')) return;
+  try{
+    const data=await api('/api/action',{
+      action:'upload_library_video',
+      video_id:id,
+      privacy_status:mode
+    });
+    alert(data.message);
+    await refresh();
+    setTimeout(refresh,1500);
+  }catch(e){
+    alert('投稿開始に失敗しました: '+e.message);
+    await refresh();
+  }
 }
 function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function toggleAutomation(){await api('/api/settings',{automation_enabled:!state.automation_enabled});refresh()}
@@ -1878,18 +1902,31 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     return
                 status = apply_daily_auto_preset(count)
+                wake_note = ""
+                if os.name == "nt":
+                    try:
+                        _install_wake_task(60)
+                        wake_note = " / Windows起床タスクも同期済み"
+                    except Exception as exc:
+                        wake_note = " / 起床タスク同期は要確認"
+                        _append_log(
+                            "[AUTO-POST] wake task sync failed: "
+                            + str(exc)
+                        )
                 _wake_event.set()
                 self._json({
                     "ok": True,
                     "message": (
                         f"毎日{count}本の自動投稿をONにしました。"
                         f" 時刻: {status['post_times']}"
+                        + wake_note
                     ),
                     "daily_auto": status,
                 })
                 return
 
             if path == "/api/settings":
+                sync_wake_task = False
                 if "automation_enabled" in body:
                     set_automation_enabled(bool(body["automation_enabled"]))
                 if "auto_upload_enabled" in body:
@@ -1897,6 +1934,8 @@ class Handler(BaseHTTPRequestHandler):
                     if enabled and not Path(settings.youtube_token_file).exists():
                         raise ValueError("YouTube認証が未完了のため自動投稿をONにできません")
                     set_auto_upload_enabled(enabled)
+                    if enabled:
+                        sync_wake_task = True
                 if "privacy" in body:
                     set_upload_privacy(str(body["privacy"]))
                 if "interval_seconds" in body:
@@ -1905,6 +1944,7 @@ class Handler(BaseHTTPRequestHandler):
                     set_posts_per_day(int(body["posts_per_day"]))
                 if "post_times" in body:
                     set_post_times(str(body["post_times"]))
+                    sync_wake_task = True
                 if "guest_every" in body:
                     set_guest_appearance_every(int(body["guest_every"]))
                 if "guest_new_every" in body:
@@ -1956,8 +1996,33 @@ class Handler(BaseHTTPRequestHandler):
                         bool(body["visual_highres_enabled"])
                     )
 
+                wake_note = ""
+                if (
+                    sync_wake_task
+                    and os.name == "nt"
+                    and automation_enabled()
+                    and auto_upload_enabled()
+                ):
+                    try:
+                        _install_wake_task(60)
+                        wake_note = " Windows起床タスクも最新時刻へ同期しました。"
+                    except Exception as exc:
+                        wake_note = (
+                            " 起床タスクの同期に失敗しました。"
+                            " ログを確認してください。"
+                        )
+                        _append_log(
+                            "[AUTO-POST] wake task sync failed: "
+                            + str(exc)
+                        )
                 _wake_event.set()
-                self._json({"ok": True, "message": "設定を保存しました。自動運転へ反映します。"})
+                self._json({
+                    "ok": True,
+                    "message": (
+                        "設定を保存しました。自動運転へ反映します。"
+                        + wake_note
+                    ),
+                })
                 return
 
             if path == "/api/action":
@@ -1987,7 +2052,43 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "message": message})
                     return
 
-                if action == "studio_mirai":
+                if action == "upload_library_video":
+                    video_id = int(body.get("video_id") or 0)
+                    if video_id <= 0:
+                        self._json(
+                            {"message": "動画IDが不正です"},
+                            400,
+                        )
+                        return
+                    if not Path(settings.youtube_token_file).exists():
+                        self._json(
+                            {"message": "YouTube認証が未完了です。"},
+                            400,
+                        )
+                        return
+                    privacy_status = str(
+                        body.get("privacy_status") or upload_privacy()
+                    ).strip().lower()
+                    if privacy_status not in {
+                        "private",
+                        "unlisted",
+                        "public",
+                    }:
+                        self._json(
+                            {"message": "公開設定が不正です"},
+                            400,
+                        )
+                        return
+                    label = f"YouTube投稿 #{video_id}"
+                    func = lambda: print(json.dumps(
+                        upload_saved_video_now(
+                            video_id,
+                            privacy_status,
+                        ),
+                        ensure_ascii=False,
+                        indent=2,
+                    ))
+                elif action == "studio_mirai":
                     expression = str(body.get("expression") or "normal")
                     label = f"ミライ画像生成({expression})"
                     func = lambda: print(generate_mirai_image(expression))

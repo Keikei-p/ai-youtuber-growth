@@ -35,6 +35,7 @@ from storage import (
     mark_queue_error,
     mark_queue_uploaded,
     mark_uploaded,
+    mark_video_queue_uploaded,
     occupied_schedule_times,
     queue_video,
     queued_items,
@@ -671,6 +672,97 @@ def prepare_upcoming() -> None:
         )
 
     print(f"[SCHEDULE] {queued_count}本を投稿キューへ追加しました。")
+
+def upload_saved_video_now(
+    video_id: int,
+    privacy_status: str | None = None,
+) -> dict:
+    """
+    生成ライブラリなど、ユーザーの明示操作から完成済み動画を即時投稿する。
+    自動投稿ON/OFFとは独立して動くが、公開前ガードと二重投稿防止は共通。
+    """
+    init_db()
+    row = video_by_id(int(video_id))
+    if not row:
+        raise ValueError(f"動画 #{video_id} が見つかりません")
+
+    existing = str(row.get("youtube_video_id") or "").strip()
+    if existing:
+        return {
+            "status": "already_uploaded",
+            "video_id": int(video_id),
+            "youtube_video_id": existing,
+            "privacy": None,
+        }
+
+    output_path = str(row.get("output_path") or "").strip()
+    if not output_path:
+        raise FileNotFoundError("完成動画ファイルのパスがありません")
+
+    candidate = Path(output_path)
+    if not candidate.is_file():
+        raise FileNotFoundError(f"完成動画ファイルが見つかりません: {candidate}")
+
+    privacy = str(privacy_status or upload_privacy()).strip().lower()
+    if privacy not in {"private", "unlisted", "public"}:
+        raise ValueError("privacy must be private, unlisted, or public")
+
+    voice_status = voice_attribution_status()
+    required_credit = (
+        voice_status["credit"]
+        if voice_status["resolved"]
+        else "__UNRESOLVED_REQUIRED_VOICE_CREDIT__"
+    )
+    gate = publish_gate(
+        row,
+        required_credit=required_credit,
+    )
+    if not gate["allowed"]:
+        risks = ", ".join(
+            str(item)
+            for item in (gate.get("risks") or [])
+        )
+        raise RuntimeError(
+            "公開前確認待ちのため投稿を停止しました。"
+            + (f" {risks}" if risks else "")
+        )
+
+    try:
+        youtube_id = upload_video(
+            video_path=candidate,
+            title=str(row.get("title") or ""),
+            description=str(row.get("description") or (
+                "AIが自分で企画・制作・分析しながら"
+                "成長するチャンネルです。"
+            )),
+            tags=json.loads(row.get("tags_json") or "[]"),
+            privacy_status=privacy,
+            category_id=settings.youtube_category_id,
+            default_language=settings.youtube_default_language,
+            contains_synthetic_media=True,
+        )
+    except Exception as exc:
+        record_failure(
+            "youtube.manual_upload",
+            exc,
+            {"video_id": int(video_id)},
+        )
+        raise
+
+    uploaded_at = _now().isoformat(timespec="seconds")
+    mark_uploaded(int(video_id), youtube_id, uploaded_at)
+    mark_video_queue_uploaded(int(video_id), uploaded_at)
+    print(
+        f"[MANUAL-UPLOAD] #{video_id} -> {youtube_id} "
+        f"[{privacy}]"
+    )
+    return {
+        "status": "uploaded",
+        "video_id": int(video_id),
+        "youtube_video_id": youtube_id,
+        "privacy": privacy,
+    }
+
 
 def run_due() -> None:
     init_db()
