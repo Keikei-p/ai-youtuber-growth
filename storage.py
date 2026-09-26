@@ -184,7 +184,7 @@ def video_by_id(video_id: int) -> dict[str, Any] | None:
                 v.id, v.created_at, v.title, v.status, v.output_path,
                 v.youtube_video_id, v.uploaded_at, v.views, v.likes,
                 v.comments, v.avg_view_percentage, v.description,
-                v.tags_json, g.name AS guest_name
+                v.tags_json, v.script, g.name AS guest_name
             FROM videos v
             LEFT JOIN guests g ON g.id = v.guest_id
             WHERE v.id = ?
