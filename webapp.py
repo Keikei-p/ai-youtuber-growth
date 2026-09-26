@@ -101,6 +101,7 @@ from studio.video_generator import (
     generate_animatediff_clip,
 )
 from self_improvement import improvement_state, run_improvement_review
+from youtube.auth import get_credentials
 from mirai_engines.quality_engine import MiraiQualityEngine
 from mirai_engines.debug_engine import MiraiDebugEngine
 from mirai_engines.visual_learning import VisualLearningMemory
@@ -272,6 +273,14 @@ def _read_log_tail(max_chars: int = 12000) -> str:
     return text[-max_chars:]
 
 
+def _youtube_auth_ready() -> bool:
+    try:
+        get_credentials(interactive=False)
+        return True
+    except Exception:
+        return False
+
+
 def _service_status() -> dict:
     voice_status = voice_provider_status()
     selected_voice = voice_provider_name()
@@ -284,7 +293,7 @@ def _service_status() -> dict:
             else True
         ),
         "ffmpeg": bool(shutil.which("ffmpeg")),
-        "youtube_token": Path(settings.youtube_token_file).exists(),
+        "youtube_token": _youtube_auth_ready(),
     }
 
 
@@ -1895,9 +1904,16 @@ class Handler(BaseHTTPRequestHandler):
                         400,
                     )
                     return
-                if not Path(settings.youtube_token_file).exists():
+                try:
+                    get_credentials(interactive=False)
+                except Exception as exc:
                     self._json(
-                        {"message": "YouTube認証が未完了です。"},
+                        {
+                            "message": (
+                                "YouTube認証を確認できません。 "
+                                + str(exc)
+                            )
+                        },
                         400,
                     )
                     return
@@ -1931,8 +1947,15 @@ class Handler(BaseHTTPRequestHandler):
                     set_automation_enabled(bool(body["automation_enabled"]))
                 if "auto_upload_enabled" in body:
                     enabled = bool(body["auto_upload_enabled"])
-                    if enabled and not Path(settings.youtube_token_file).exists():
-                        raise ValueError("YouTube認証が未完了のため自動投稿をONにできません")
+                    if enabled:
+                        try:
+                            get_credentials(interactive=False)
+                        except Exception as exc:
+                            raise ValueError(
+                                "YouTube認証を確認できないため"
+                                "自動投稿をONにできません。 "
+                                + str(exc)
+                            ) from exc
                     set_auto_upload_enabled(enabled)
                     if enabled:
                         sync_wake_task = True
@@ -2060,9 +2083,16 @@ class Handler(BaseHTTPRequestHandler):
                             400,
                         )
                         return
-                    if not Path(settings.youtube_token_file).exists():
+                    try:
+                        get_credentials(interactive=False)
+                    except Exception as exc:
                         self._json(
-                            {"message": "YouTube認証が未完了です。"},
+                            {
+                                "message": (
+                                    "YouTube認証を確認できません。 "
+                                    + str(exc)
+                                )
+                            },
                             400,
                         )
                         return
