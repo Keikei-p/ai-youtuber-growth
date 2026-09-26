@@ -140,6 +140,11 @@ class SleepWakeSchedulerTests(unittest.TestCase):
             patch.object(scheduler, "_full_test_state", return_value={}),
             patch.object(
                 scheduler,
+                "ensure_first_episode_delivery",
+                return_value={"status": "uploaded"},
+            ),
+            patch.object(
+                scheduler,
                 "run_due",
                 side_effect=lambda: calls.append("due"),
             ),
@@ -173,6 +178,39 @@ class SleepWakeSchedulerTests(unittest.TestCase):
             calls,
             ["due", "growth", "improvement", "prepare", "native"],
         )
+
+    def test_tick_generates_episode_one_before_growth_when_not_created(self) -> None:
+        calls: list[str] = []
+        states = iter([
+            {"status": "not_created"},
+            {"status": "queued_priority"},
+        ])
+        with (
+            patch.object(scheduler, "_full_test_state", return_value={}),
+            patch.object(
+                scheduler,
+                "ensure_first_episode_delivery",
+                side_effect=lambda: next(states),
+            ),
+            patch.object(
+                scheduler,
+                "prepare_upcoming",
+                side_effect=lambda: calls.append("prepare"),
+            ),
+            patch.object(
+                scheduler,
+                "run_due",
+                side_effect=lambda: calls.append("due"),
+            ),
+            patch.object(
+                scheduler,
+                "run_growth_cycle",
+                side_effect=lambda: calls.append("growth"),
+            ),
+        ):
+            scheduler.tick()
+
+        self.assertEqual(calls, ["prepare", "due"])
 
     def test_windows_wake_task_has_post_prepare_and_recovery_triggers(self) -> None:
         install = Path(
