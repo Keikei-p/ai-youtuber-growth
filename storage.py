@@ -388,6 +388,8 @@ def acquire_runtime_lock(
     now = datetime.now(timezone.utc)
     cutoff = now.timestamp() - max(5, int(ttl_minutes)) * 60
     with connect() as conn:
+        # SELECT→INSERTの競合窓を潰すため、先にwrite lockを取得する。
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT acquired_at FROM runtime_locks WHERE name = ?",
             (lock_name,),
@@ -406,9 +408,9 @@ def acquire_runtime_lock(
                 (lock_name,),
             )
 
-        conn.execute(
+        cur = conn.execute(
             """
-            INSERT INTO runtime_locks (
+            INSERT OR IGNORE INTO runtime_locks (
                 name, acquired_at, owner
             ) VALUES (?, ?, ?)
             """,
@@ -418,8 +420,7 @@ def acquire_runtime_lock(
                 str(owner or "")[:200],
             ),
         )
-        return True
-
+        return int(cur.rowcount or 0) == 1
 
 def release_runtime_lock(name: str) -> None:
     with connect() as conn:
@@ -438,6 +439,7 @@ def acquire_upload_lock(
     now = datetime.now(timezone.utc)
     cutoff = now.timestamp() - max(5, int(ttl_minutes)) * 60
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT acquired_at FROM youtube_upload_locks WHERE video_id = ?",
             (video_id,),
@@ -455,9 +457,10 @@ def acquire_upload_lock(
                 "DELETE FROM youtube_upload_locks WHERE video_id = ?",
                 (video_id,),
             )
-        conn.execute(
+
+        cur = conn.execute(
             """
-            INSERT INTO youtube_upload_locks (
+            INSERT OR IGNORE INTO youtube_upload_locks (
                 video_id, acquired_at, owner
             ) VALUES (?, ?, ?)
             """,
@@ -467,8 +470,7 @@ def acquire_upload_lock(
                 str(owner or "")[:200],
             ),
         )
-        return True
-
+        return int(cur.rowcount or 0) == 1
 
 def release_upload_lock(video_id: int) -> None:
     with connect() as conn:
