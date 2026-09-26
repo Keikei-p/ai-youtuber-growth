@@ -68,7 +68,11 @@ def _validate(root: Path) -> tuple[bool, str]:
             sys.executable,
             "-m",
             "unittest",
-            "tests.test_sleep_wake_scheduler",
+            "discover",
+            "-s",
+            "tests",
+            "-p",
+            "test_sleep_wake_scheduler.py",
             "-v",
         ],
     ]
