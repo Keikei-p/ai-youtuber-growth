@@ -23,6 +23,11 @@ from native_models.lab import migration_summary
 from mirai_engines.evolution_controller import evolution_status
 from autonomy_policy import autonomy_state, resolve_approval
 from config import settings
+from delivery_supervisor import (
+    arm_production_autonomy,
+    disarm_production_autonomy,
+    self_heal_delivery_controls,
+)
 from growth_engine import show_growth_state
 from gpu_manager import gpu_snapshot
 from guest_manager import create_guest_now
@@ -1987,7 +1992,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 sync_wake_task = False
                 if "automation_enabled" in body:
-                    set_automation_enabled(bool(body["automation_enabled"]))
+                    automation_value = bool(body["automation_enabled"])
+                    set_automation_enabled(automation_value)
+                    if not automation_value:
+                        disarm_production_autonomy()
                 if "auto_upload_enabled" in body:
                     enabled = bool(body["auto_upload_enabled"])
                     if enabled and settings.dry_run:
@@ -2006,7 +2014,11 @@ class Handler(BaseHTTPRequestHandler):
                             ) from exc
                     set_auto_upload_enabled(enabled)
                     if enabled:
+                        if automation_enabled():
+                            arm_production_autonomy()
                         sync_wake_task = True
+                    else:
+                        disarm_production_autonomy()
                 if "privacy" in body:
                     set_upload_privacy(str(body["privacy"]))
                 if "interval_seconds" in body:
