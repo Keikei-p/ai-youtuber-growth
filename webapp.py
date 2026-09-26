@@ -1390,9 +1390,11 @@ async function refresh(){
       '<div class="row"><span><b>'+escapeHtml(x[0])+'</b><div class="small">'+escapeHtml(x[2])+'</div></span>'+badge(x[1])+'</div>'
     ).join('');
     const da=state.daily_auto||{};
+    const privacyLabels={private:'非公開',unlisted:'限定公開',public:'公開'};
+    const privacyLabel=privacyLabels[state.privacy]||state.privacy||'不明';
     dailyAutoStatus.textContent=da.enabled
-      ? ('ON / 毎日'+da.posts_per_day+'本 / '+escapeHtml(da.post_times||''))
-      : 'OFF';
+      ? ('ON / 毎日'+da.posts_per_day+'本 / '+escapeHtml(da.post_times||'')+' / 公開設定: '+privacyLabel)
+      : ('OFF / 公開設定: '+privacyLabel);
     [1,2,3].forEach(n=>{
       const el=document.getElementById('dailyAuto'+n);
       if(el) el.className=(da.enabled&&Number(da.preset)===n)?'primary':'';
@@ -1714,7 +1716,9 @@ async function saveOperationSettings(){
 
 async function setDailyAuto(count){
   const label=count===0?'毎日自動投稿を停止':'毎日'+count+'本の自動投稿をON';
-  if(!confirm(label+'にします。公開設定は現在の設定を使います。よろしいですか？')) return;
+  const privacyLabels={private:'非公開',unlisted:'限定公開',public:'公開'};
+  const privacyLabel=privacyLabels[(state&&state.privacy)||'private']||((state&&state.privacy)||'private');
+  if(!confirm(label+'にします。\n現在の公開設定: '+privacyLabel+'\n\nこの設定でよろしいですか？')) return;
   try{
     const data=await api('/api/daily-auto',{count:Number(count)});
     alert(data.message);
