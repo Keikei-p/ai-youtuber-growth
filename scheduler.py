@@ -707,18 +707,26 @@ def run_due() -> None:
             if int(row["video_id"]) in test_ids
         ]
     elif len(rows) > 1:
-        # 長時間スリープ後に複数枠が溜まっても一気に連投しない。
-        # 現在時刻に最も近い1本だけを優先し、古い分はこのtick後の
-        # prepare_upcoming -> reschedule_missed で次の空き枠へ回す。
-        rows = sorted(
-            rows,
-            key=lambda row: _parse_iso(row["scheduled_for"]),
-            reverse=True,
-        )[:1]
-        print(
-            "[SCHEDULE] スリープ復帰catch-up: "
-            "直近1本だけ投稿し、古い未投稿分は次枠へ繰り越します。"
+        # 通常の数分差キューは従来どおり処理する。
+        # 20分以上前の古い枠が混ざった「スリープ復帰catch-up」の時だけ
+        # 一気に連投せず、現在時刻に最も近い1本を優先する。
+        grace_cutoff = now - timedelta(
+            minutes=max(settings.post_grace_minutes, 0)
         )
+        has_stale_row = any(
+            _parse_iso(row["scheduled_for"]) < grace_cutoff
+            for row in rows
+        )
+        if has_stale_row:
+            rows = sorted(
+                rows,
+                key=lambda row: _parse_iso(row["scheduled_for"]),
+                reverse=True,
+            )[:1]
+            print(
+                "[SCHEDULE] スリープ復帰catch-up: "
+                "直近1本だけ投稿し、古い未投稿分は次枠へ繰り越します。"
+            )
 
     if not rows:
         print("[SCHEDULE] 現在、投稿時刻を迎えた動画はありません。")
