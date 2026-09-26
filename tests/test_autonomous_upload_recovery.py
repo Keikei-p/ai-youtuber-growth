@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -252,6 +253,67 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
             history[0]["replaced_youtube_video_id"],
             "youtube-old",
         )
+
+    def test_runtime_lock_is_atomic_under_thread_race(self) -> None:
+        barrier = threading.Barrier(2)
+        results: list[bool] = []
+        errors: list[Exception] = []
+
+        def worker(owner: str) -> None:
+            try:
+                barrier.wait(timeout=5)
+                results.append(
+                    storage.acquire_runtime_lock(
+                        "race-lock",
+                        owner=owner,
+                    )
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=worker, args=("a",)),
+            threading.Thread(target=worker, args=("b",)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(results), [False, True])
+        storage.release_runtime_lock("race-lock")
+
+    def test_upload_lock_is_atomic_under_thread_race(self) -> None:
+        video_id, _ = self._video()
+        barrier = threading.Barrier(2)
+        results: list[bool] = []
+        errors: list[Exception] = []
+
+        def worker(owner: str) -> None:
+            try:
+                barrier.wait(timeout=5)
+                results.append(
+                    storage.acquire_upload_lock(
+                        video_id,
+                        owner=owner,
+                    )
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=worker, args=("a",)),
+            threading.Thread(target=worker, args=("b",)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(results), [False, True])
+        storage.release_upload_lock(video_id)
 
     def test_runtime_cycle_lock_blocks_second_process(self) -> None:
         self.assertTrue(
