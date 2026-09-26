@@ -1001,7 +1001,7 @@ def upload_saved_video_now(
         release_upload_lock(video_id)
 
 def _upload_runtime_block_reason() -> str:
-    if settings.dry_run:
+    if bool(getattr(settings, "dry_run", False)):
         return (
             "DRY_RUN=true のため実YouTube投稿を禁止しています。"
             " .env の DRY_RUN=false が必要です。"
@@ -1089,7 +1089,7 @@ def run_due() -> None:
             block_reason,
             {
                 "due_count": len(rows),
-                "dry_run": settings.dry_run,
+                "dry_run": bool(getattr(settings, "dry_run", False)),
             },
         )
         print(f"[SCHEDULE] 投稿停止: {block_reason}")
