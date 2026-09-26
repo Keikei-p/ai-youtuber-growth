@@ -13,10 +13,44 @@ if (-not $mutex.WaitOne(0)) {
     exit 0
 }
 
+# WakeToRunで起きた直後にWindowsが再スリープしないよう、
+# このサイクルの実行中だけ画面を点けずにシステム起動を維持する。
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class MiraiPowerState {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+}
+"@
+$ES_CONTINUOUS = [uint32]0x80000000
+$ES_SYSTEM_REQUIRED = [uint32]0x00000001
+[MiraiPowerState]::SetThreadExecutionState($ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED) | Out-Null
+
 try {
     $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
     if (-not (Test-Path $Python)) {
         throw "venv python not found: $Python"
+    }
+
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] wake/cycle start")
+
+    # スリープ復帰直後はNIC/DNSが戻るまで時間がかかることがある。
+    # 最大60秒待ち、戻らなければキューを消費せず次の回復トリガーへ回す。
+    $NetworkReady = $false
+    for ($i = 0; $i -lt 12; $i++) {
+        try {
+            if (Test-NetConnection -ComputerName "www.googleapis.com" -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue) {
+                $NetworkReady = $true
+                break
+            }
+        }
+        catch {}
+        Start-Sleep -Seconds 5
+    }
+    if (-not $NetworkReady) {
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] network not ready after wake; keep queue and retry later")
+        exit 0
     }
 
     try {
@@ -47,15 +81,19 @@ try {
         }
     }
 
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] cycle start")
     & $Python "scheduler.py" "--tick" *>> $LogFile
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] cycle end")
+    $ExitCode = $LASTEXITCODE
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] cycle end exit=" + $ExitCode)
+    if ($ExitCode -ne 0) {
+        throw "scheduler.py --tick failed with exit code $ExitCode"
+    }
 }
 catch {
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] ERROR: " + $_.Exception.Message)
     throw
 }
 finally {
+    [MiraiPowerState]::SetThreadExecutionState($ES_CONTINUOUS) | Out-Null
     $mutex.ReleaseMutex() | Out-Null
     $mutex.Dispose()
 }

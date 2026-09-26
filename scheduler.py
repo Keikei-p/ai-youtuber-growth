@@ -494,7 +494,12 @@ def reschedule_missed() -> int:
     """
     init_db()
     now = _now()
-    cutoff = now - timedelta(minutes=max(settings.post_grace_minutes, 0))
+    grace_cutoff = now - timedelta(
+        minutes=max(settings.post_grace_minutes, 0)
+    )
+    retry_cutoff = now - timedelta(
+        hours=max(int(settings.post_sleep_catchup_hours), 1)
+    )
     queued = queued_items()
 
     full_test = _full_test_state()
@@ -504,12 +509,19 @@ def reschedule_missed() -> int:
         if str(value).isdigit()
     } if full_test.get("active") else set()
 
-    overdue = [
-        item
-        for item in queued
-        if _parse_iso(item["scheduled_for"]) < cutoff
-        and int(item["video_id"]) not in test_ids
-    ]
+    overdue: list[dict] = []
+    for item in queued:
+        if int(item["video_id"]) in test_ids:
+            continue
+        scheduled = _parse_iso(item["scheduled_for"])
+        attempts = int(item.get("attempts") or 0)
+        # 未試行の単純な取りこぼしは従来どおり次枠へ。
+        # ただし一度でも投稿を試した動画は、スリープ復帰や一時的な
+        # ネット断から回復できるようcatch-up期間内はその場に残す。
+        if attempts <= 0 and scheduled < grace_cutoff:
+            overdue.append(item)
+        elif attempts > 0 and scheduled < retry_cutoff:
+            overdue.append(item)
 
     if not overdue:
         return 0
@@ -661,7 +673,6 @@ def prepare_upcoming() -> None:
 
 def run_due() -> None:
     init_db()
-    reschedule_missed()
 
     now = _now()
     full_test = _full_test_state()
@@ -673,8 +684,10 @@ def run_due() -> None:
         except Exception:
             oldest_allowed = now - timedelta(hours=12)
     else:
+        # PCがスリープして投稿時刻を過ぎても、復帰後一定時間は
+        # 「取りこぼし」ではなくcatch-up投稿として扱う。
         oldest_allowed = now - timedelta(
-            minutes=max(settings.post_grace_minutes, 0)
+            hours=max(int(settings.post_sleep_catchup_hours), 1)
         )
 
     rows = due_queue(
@@ -693,6 +706,19 @@ def run_due() -> None:
             for row in rows
             if int(row["video_id"]) in test_ids
         ]
+    elif len(rows) > 1:
+        # 長時間スリープ後に複数枠が溜まっても一気に連投しない。
+        # 現在時刻に最も近い1本だけを優先し、古い分はこのtick後の
+        # prepare_upcoming -> reschedule_missed で次の空き枠へ回す。
+        rows = sorted(
+            rows,
+            key=lambda row: _parse_iso(row["scheduled_for"]),
+            reverse=True,
+        )[:1]
+        print(
+            "[SCHEDULE] スリープ復帰catch-up: "
+            "直近1本だけ投稿し、古い未投稿分は次枠へ繰り越します。"
+        )
 
     if not rows:
         print("[SCHEDULE] 現在、投稿時刻を迎えた動画はありません。")
@@ -823,6 +849,9 @@ def tick() -> None:
         return
 
     # 通常運転。
+    # スリープ復帰直後は、まず期限到来済みの投稿を最優先する。
+    # 重い分析/生成を先に走らせると投稿猶予を超えるため順序を固定。
+    run_due()
     run_growth_cycle()
     try:
         maybe_run_improvement_review(min_hours=12)
@@ -830,7 +859,6 @@ def tick() -> None:
         record_failure("improvement.review", exc)
         print(f"[IMPROVEMENT] AI改善分析をスキップ: {exc}")
     prepare_upcoming()
-    run_due()
 
 def main() -> None:
     parser = argparse.ArgumentParser(
