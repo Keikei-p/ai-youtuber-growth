@@ -89,6 +89,23 @@ class VisualEvolutionTests(unittest.TestCase):
         self.assertGreaterEqual(selected["quality"]["score"], 60)
         self.assertIs(selected["image"], good)
 
+    def test_repo_mirai_reference_asset_is_valid_image(self) -> None:
+        path = Path("assets/character/mirai_reference.jpg")
+        self.assertTrue(path.is_file())
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            self.assertGreaterEqual(image.width, 512)
+            self.assertGreaterEqual(image.height, 512)
+        fake_settings = SimpleNamespace(
+            mirai_reference_image=str(path),
+        )
+        with patch.object(image_generator, "settings", fake_settings):
+            self.assertEqual(
+                image_generator._mirai_reference_path(),
+                path,
+            )
+
     def test_invalid_reference_asset_is_safely_ignored(self) -> None:
         invalid = Path(self.tmp.name) / "broken.jpg"
         invalid.write_bytes(b"not-a-valid-image")
