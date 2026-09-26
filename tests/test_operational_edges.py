@@ -19,11 +19,17 @@ class OperationalEdgeTests(unittest.TestCase):
             media_upload = object()
             service = MagicMock()
             request = MagicMock()
-            request.execute.return_value = {"id": "youtube-test-id"}
+            request.next_chunk.return_value = (
+                None,
+                {"id": "youtube-test-id"},
+            )
             service.videos.return_value.insert.return_value = request
 
             with (
-                patch("youtube.uploader.get_credentials", return_value=credentials),
+                patch(
+                    "youtube.uploader.get_credentials",
+                    return_value=credentials,
+                ) as auth_mock,
                 patch("youtube.uploader.build", return_value=service) as build_mock,
                 patch(
                     "youtube.uploader.MediaFileUpload",
@@ -47,9 +53,11 @@ class OperationalEdgeTests(unittest.TestCase):
                 "v3",
                 credentials=credentials,
             )
+            auth_mock.assert_called_once_with(interactive=False)
             media_mock.assert_called_once_with(
                 str(video_path),
                 mimetype="video/mp4",
+                chunksize=-1,
                 resumable=True,
             )
             insert_kwargs = service.videos.return_value.insert.call_args.kwargs
@@ -74,8 +82,54 @@ class OperationalEdgeTests(unittest.TestCase):
             self.assertTrue(
                 insert_kwargs["body"]["status"]["containsSyntheticMedia"]
             )
-            request.execute.assert_called_once_with()
+            request.next_chunk.assert_called_once_with(
+                num_retries=5,
+            )
 
+
+    def test_upload_video_rejects_missing_youtube_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = Path(tmp) / "sample.mp4"
+            video_path.write_bytes(b"fake-mp4")
+
+            service = MagicMock()
+            request = MagicMock()
+            request.next_chunk.return_value = (None, {})
+            service.videos.return_value.insert.return_value = request
+
+            with (
+                patch(
+                    "youtube.uploader.get_credentials",
+                    return_value=object(),
+                ),
+                patch("youtube.uploader.build", return_value=service),
+                patch("youtube.uploader.MediaFileUpload"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    upload_video(
+                        video_path=video_path,
+                        title="test",
+                        description="test",
+                    )
+
+    def test_noninteractive_auth_does_not_open_browser_when_token_missing(self) -> None:
+        import youtube.auth as youtube_auth
+
+        with tempfile.TemporaryDirectory() as tmp:
+            token = Path(tmp) / "missing-token.json"
+            secret = Path(tmp) / "client-secret.json"
+            secret.write_text("{}", encoding="utf-8")
+            with (
+                patch.object(youtube_auth, "TOKEN_FILE", token),
+                patch.object(youtube_auth, "CLIENT_SECRET_FILE", secret),
+                patch.object(
+                    youtube_auth.InstalledAppFlow,
+                    "from_client_secrets_file",
+                ) as flow_mock,
+            ):
+                with self.assertRaises(FileNotFoundError):
+                    youtube_auth.get_credentials(interactive=False)
+            flow_mock.assert_not_called()
 
     def test_ai_video_license_gate_persists_and_disabling_license_disables_video(self) -> None:
         import runtime_control

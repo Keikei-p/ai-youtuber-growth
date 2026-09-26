@@ -6,7 +6,7 @@ from googleapiclient.discovery import build
 from youtube.auth import get_credentials
 
 def _fetch_live_statistics(video_id: str) -> dict:
-    youtube = build("youtube", "v3", credentials=get_credentials())
+    youtube = build("youtube", "v3", credentials=get_credentials(interactive=False))
     response = youtube.videos().list(
         part="statistics",
         id=video_id,
@@ -31,7 +31,7 @@ def _fetch_retention(video_id: str, days: int = 28) -> dict:
     analytics = build(
         "youtubeAnalytics",
         "v2",
-        credentials=get_credentials(),
+        credentials=get_credentials(interactive=False),
     )
 
     end = date.today() - timedelta(days=1)
