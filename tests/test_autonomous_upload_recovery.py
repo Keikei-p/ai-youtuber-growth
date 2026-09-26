@@ -493,6 +493,18 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
             run_block.index("if not automation_enabled():"),
         )
 
+    def test_web_worker_restarts_before_running_stale_code(self) -> None:
+        source = Path("webapp.py").read_text(encoding="utf-8")
+        worker_start = source.index("def _cycle_worker")
+        worker_end = source.index("def _read_log_tail", worker_start)
+        worker = source[worker_start:worker_end]
+        self.assertIn("_process_git_sha", worker)
+        self.assertIn("_restart_for_external_code_update()", worker)
+        self.assertLess(
+            worker.index("_restart_for_external_code_update()"),
+            worker.index("if automation_enabled():"),
+        )
+
     def test_explicit_stop_paths_disarm_production(self) -> None:
         source = Path("webapp.py").read_text(encoding="utf-8")
         self.assertIn(
