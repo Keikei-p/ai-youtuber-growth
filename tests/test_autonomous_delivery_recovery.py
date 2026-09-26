@@ -43,10 +43,11 @@ class AutonomousDeliveryRecoveryTests(unittest.TestCase):
         storage.update_video_output(video_id, str(output), status="rendered")
         return video_id, output
 
-    def test_first_episode_auto_upload_off_is_self_healed(self) -> None:
+    def test_unarmed_auto_upload_off_is_respected(self) -> None:
         video_id, _ = self._video()
         storage.set_channel_state("mirai_first_episode_video_id", str(video_id))
         storage.set_channel_state("mirai_first_episode_uploaded", "false")
+        storage.set_channel_state("production_autonomy_armed", "false")
         storage.set_channel_state("automation_enabled", "true")
         storage.set_channel_state("auto_upload_enabled", "false")
 
@@ -57,13 +58,11 @@ class AutonomousDeliveryRecoveryTests(unittest.TestCase):
         ):
             result = delivery_supervisor.self_heal_delivery_controls()
 
-        self.assertTrue(
-            storage.get_channel_state(
-                "auto_upload_enabled",
-                "false",
-            ) == "true"
+        self.assertEqual(
+            storage.get_channel_state("auto_upload_enabled", ""),
+            "false",
         )
-        self.assertTrue(result["repairs"])
+        self.assertEqual(result["repairs"], [])
 
     def test_armed_production_recovers_both_switches_for_pending_episode(self) -> None:
         video_id, _ = self._video()
