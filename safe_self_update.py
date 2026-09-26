@@ -129,7 +129,7 @@ def safe_self_update(root: Path = ROOT) -> dict[str, Any]:
             "files": changed_files,
         })
 
-    worktree_root = root / ".mirai_update_check"
+    worktree_root = root.parent / (root.name + "_mirai_update_check")
     if worktree_root.exists():
         cleanup = _run(
             [git, "worktree", "remove", "--force", str(worktree_root)],
@@ -158,9 +158,9 @@ def safe_self_update(root: Path = ROOT) -> dict[str, Any]:
                 sys.executable,
                 "-m",
                 "unittest",
-                "tests.test_operational_edges",
-                "tests.test_manual_upload_and_auto_post",
-                "tests.test_sleep_wake_scheduler",
+                "discover",
+                "-s",
+                "tests",
                 "-v",
             ],
         ]
