@@ -212,6 +212,64 @@ class SleepWakeSchedulerTests(unittest.TestCase):
 
         self.assertEqual(calls, ["prepare", "due"])
 
+    def test_prepare_generates_only_one_video_before_episode_one_upload(self) -> None:
+        now = datetime(2026, 9, 27, 0, 30, tzinfo=JST)
+        slot = datetime(2026, 9, 27, 1, 0, tzinfo=JST)
+        decision = SimpleNamespace(
+            allowed=True,
+            mode="normal",
+            reason="test",
+            snapshot={},
+        )
+        generated = [{
+            "id": 1,
+            "title": "Episode one",
+            "output_path": "episode-one.mp4",
+            "quality_passed": True,
+        }]
+
+        with (
+            patch.object(scheduler, "reschedule_missed", return_value=0),
+            patch.object(
+                scheduler,
+                "ensure_first_episode_delivery",
+                return_value={"status": "not_created"},
+            ),
+            patch.object(
+                scheduler,
+                "_generation_runtime_ready",
+                return_value=True,
+            ),
+            patch.object(scheduler, "_now", return_value=now),
+            patch.object(scheduler, "queued_items", return_value=[]),
+            patch.object(scheduler, "posts_per_day", return_value=3),
+            patch.object(
+                scheduler,
+                "_next_free_slots",
+                return_value=[slot],
+            ) as slots_mock,
+            patch.object(
+                scheduler,
+                "background_production_decision",
+                return_value=decision,
+            ),
+            patch.object(
+                scheduler,
+                "run_generation",
+                return_value=generated,
+            ) as generation_mock,
+            patch.object(scheduler, "queue_video") as queue_mock,
+        ):
+            scheduler.prepare_upcoming()
+
+        slots_mock.assert_called_once_with(now, 1)
+        generation_mock.assert_called_once_with(
+            render=True,
+            upload=False,
+            target_override=1,
+        )
+        queue_mock.assert_called_once()
+
     def test_windows_wake_task_has_post_prepare_and_recovery_triggers(self) -> None:
         install = Path(
             "automation/install_windows_task.ps1"
