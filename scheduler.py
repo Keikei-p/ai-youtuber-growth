@@ -621,10 +621,18 @@ def ensure_first_episode_delivery() -> dict:
     now = _now()
     queue = queue_item_for_video(video_id)
     due_now = now.isoformat(timespec="minutes")
+    recovery_backoff = (
+        str((queue or {}).get("error") or "").startswith(
+            ("[AUTO-RECOVERY:", "[ACTION-REQUIRED:")
+        )
+    )
     if (
         not queue
         or queue.get("status") != "queued"
-        or _parse_iso(str(queue.get("scheduled_for"))) > now
+        or (
+            _parse_iso(str(queue.get("scheduled_for"))) > now
+            and not recovery_backoff
+        )
     ):
         reset_queue_for_video(
             video_id,
