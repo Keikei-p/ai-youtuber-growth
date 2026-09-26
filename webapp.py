@@ -260,6 +260,15 @@ def _cycle_worker() -> None:
         _wake_event.clear()
         try:
             if automation_enabled():
+                # Web常駐中も期限投稿をAIサービス起動より先に処理する。
+                # VOICEVOX等の起動待ちで投稿時刻が遅れるのを防ぐ。
+                due_result = _run_captured("期限投稿優先", run_due)
+                if not due_result.get("ok"):
+                    _append_log(
+                        "[AUTO-POST] due-first error: "
+                        + str(due_result.get("message") or "")
+                    )
+
                 _ensure_local_services()
                 result = _run_captured("自動サイクル", tick)
                 with _state_lock:
@@ -2414,15 +2423,19 @@ def run(open_browser: bool = True) -> None:
             webbrowser.open(url)
         return
 
-    _ensure_local_services()
-    _consume_full_test_request()
-
     worker = threading.Thread(
         target=_cycle_worker,
         name="mirai-cycle",
         daemon=True,
     )
     worker.start()
+
+    # 自動運転中はworkerが「投稿判定→サービス起動」の順で行う。
+    # 自動運転OFF時だけ、手動スタジオ利用のためここでサービスを準備する。
+    if not automation_enabled():
+        _ensure_local_services()
+
+    _consume_full_test_request()
 
     print(f"[WEB] ミライ管理画面: {url}")
     if open_browser:
