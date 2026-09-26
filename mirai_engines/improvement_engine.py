@@ -115,6 +115,35 @@ class MiraiImprovementEngine:
                 }
             )
 
+        upload_failures = sum(
+            debug_categories.get(name, 0)
+            for name in (
+                "youtube_auth_or_upload",
+                "youtube_auth",
+                "youtube_quota",
+                "youtube_rate_limit",
+                "youtube_transient",
+                "youtube_network",
+            )
+        )
+        if upload_failures >= 2:
+            recommendations.append(
+                {
+                    "area": "upload",
+                    "priority": "high",
+                    "action": "投稿経路の既知不変条件を再点検し、安全修復をテストする",
+                    "reason": f"YouTube投稿系診断が{upload_failures}件あります。",
+                }
+            )
+            actions.append(
+                {
+                    "action_type": "minor_code_change",
+                    "title": "投稿経路の既知安全修復",
+                    "value": {"repair_id": "known_invariants"},
+                    "reason": "投稿失敗が繰り返されたため、限定された修復をテスト後に適用する。",
+                }
+            )
+
         if quality:
             avg_score = sum(int(row.get("score") or 0) for row in quality) / len(quality)
             if avg_score < 80:
