@@ -136,6 +136,12 @@ def init_db() -> None:
             owner TEXT NOT NULL DEFAULT '',
             FOREIGN KEY(video_id) REFERENCES videos(id)
         );
+
+        CREATE TABLE IF NOT EXISTS runtime_locks (
+            name TEXT PRIMARY KEY,
+            acquired_at TEXT NOT NULL,
+            owner TEXT NOT NULL DEFAULT ''
+        );
         """)
 
         video_columns = {
@@ -367,6 +373,60 @@ def mark_uploaded(
                 """,
                 ("mirai_first_episode_uploaded", now),
             )
+
+
+def acquire_runtime_lock(
+    name: str,
+    *,
+    owner: str = "",
+    ttl_minutes: int = 180,
+) -> bool:
+    lock_name = str(name or "").strip()
+    if not lock_name:
+        raise ValueError("runtime lock name is required")
+
+    now = datetime.now(timezone.utc)
+    cutoff = now.timestamp() - max(5, int(ttl_minutes)) * 60
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT acquired_at FROM runtime_locks WHERE name = ?",
+            (lock_name,),
+        ).fetchone()
+        if row:
+            try:
+                acquired = datetime.fromisoformat(str(row["acquired_at"]))
+                if acquired.tzinfo is None:
+                    acquired = acquired.replace(tzinfo=timezone.utc)
+                if acquired.timestamp() >= cutoff:
+                    return False
+            except Exception:
+                pass
+            conn.execute(
+                "DELETE FROM runtime_locks WHERE name = ?",
+                (lock_name,),
+            )
+
+        conn.execute(
+            """
+            INSERT INTO runtime_locks (
+                name, acquired_at, owner
+            ) VALUES (?, ?, ?)
+            """,
+            (
+                lock_name,
+                now.isoformat(timespec="seconds"),
+                str(owner or "")[:200],
+            ),
+        )
+        return True
+
+
+def release_runtime_lock(name: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM runtime_locks WHERE name = ?",
+            (str(name or "").strip(),),
+        )
 
 
 def acquire_upload_lock(
