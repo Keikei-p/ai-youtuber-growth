@@ -184,7 +184,7 @@ class SleepWakeSchedulerTests(unittest.TestCase):
 
         self.assertIn("New-ScheduledTaskTrigger -Daily", install)
         self.assertIn("$PrepareMinutes = 90", install)
-        self.assertIn("$RecoveryMinutes = 15", install)
+        self.assertIn("$RecoveryMinutes = @(5, 15, 30, 60)", install)
         self.assertIn("WakeToRun", install)
         self.assertIn("/SETACVALUEINDEX", install)
         self.assertIn("/SETDCVALUEINDEX", install)
