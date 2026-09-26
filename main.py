@@ -29,6 +29,7 @@ from storage import (
     save_video,
     set_channel_state,
     update_video_output,
+    video_by_id,
 )
 from writer import fallback_script, rewrite_script, write_script
 from self_improvement import record_failure
@@ -102,7 +103,12 @@ def upload_results(
             )
             item["youtube_video_id"] = youtube_id
             item["status"] = "uploaded"
-            mark_uploaded(item["id"], youtube_id)
+            mark_uploaded(
+                item["id"],
+                youtube_id,
+                privacy_status=effective_privacy,
+                source="direct_upload",
+            )
             print(
                 f"[UPLOAD] #{item['id']} -> YouTube ID {youtube_id} "
                 f"[{effective_privacy}]"
@@ -244,8 +250,36 @@ def run_generation(
     recent = recent_videos(30)
     target = target_override or posts_per_day()
     results: list[dict] = []
+    first_episode_uploaded = (
+        get_channel_state(
+            "mirai_first_episode_uploaded",
+            "false",
+        ).strip().lower() == "true"
+    )
+    first_episode_video_id_raw = get_channel_state(
+        "mirai_first_episode_video_id",
+        "",
+    ).strip()
+    existing_first_episode = (
+        video_by_id(int(first_episode_video_id_raw))
+        if first_episode_video_id_raw.isdigit()
+        else None
+    )
+    if (
+        existing_first_episode
+        and existing_first_episode.get("youtube_video_id")
+    ):
+        first_episode_uploaded = True
+        set_channel_state(
+            "mirai_first_episode_uploaded",
+            "true",
+        )
+
+    # 既存の第1話レコードがある場合は新しい第1話を作らない。
+    # 投稿成功まではschedulerがその既存動画を復旧・最優先配送する。
     first_episode_pending = (
-        get_channel_state(FIRST_EPISODE_STATE_KEY, "").strip().lower() != "true"
+        not first_episode_uploaded
+        and existing_first_episode is None
     )
     first_episode_reserved = False
 
@@ -360,8 +394,8 @@ def run_generation(
                 set_channel_state(FIRST_EPISODE_STATE_KEY, "true")
                 set_channel_state("mirai_first_episode_video_id", str(item["id"]))
                 print(
-                    "[EPISODE-1] 第1話の完成を記録。"
-                    "次回から通常の完全学習型自動投稿へ移行します。"
+                    "[EPISODE-1] 第1話の動画完成を記録。"
+                    "YouTube投稿成功までは未完了として最優先配送します。"
                 )
     elif render or upload:
         print("[PIPELINE] 安全停止要求のためメディア工程をスキップします。")
