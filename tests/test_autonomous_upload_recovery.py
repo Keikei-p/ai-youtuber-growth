@@ -234,6 +234,26 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
         )
         self.assertEqual(int(queue["attempts"]), 1)
 
+    def test_repeated_network_recovery_stays_below_hard_failure_cutoff(self) -> None:
+        video_id, _ = self._video()
+        storage.queue_video(
+            video_id,
+            "2026-09-27T00:20+09:00",
+        )
+        now = datetime(2026, 9, 27, 0, 30, tzinfo=JST)
+
+        for _ in range(8):
+            row = storage.queue_item_for_video(video_id)
+            recover_upload_failure(
+                row,
+                "network timeout",
+                now=now,
+            )
+
+        queue = storage.queue_item_for_video(video_id)
+        self.assertEqual(queue["status"], "queued")
+        self.assertLess(int(queue["attempts"]), 5)
+
     def test_oauth_failure_waits_for_human_reauthentication(self) -> None:
         video_id, _ = self._video()
         storage.queue_video(
