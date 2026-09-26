@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,7 @@ from runtime_control import (
 )
 from media_cleanup import cleanup_uploaded_media
 from storage import (
+    acquire_runtime_lock,
     acquire_upload_lock,
     active_guests,
     cancel_queued_videos,
@@ -44,6 +46,7 @@ from storage import (
     queue_item_for_video,
     queue_video,
     queued_items,
+    release_runtime_lock,
     release_upload_lock,
     reset_queue_for_video,
     get_channel_state,
@@ -1278,7 +1281,7 @@ def show_queue() -> None:
             f"{relation} | {row['title']}"
         )
 
-def tick() -> None:
+def _tick_unlocked() -> None:
     delivery_state = self_heal_delivery_controls()
     if delivery_state.get("repairs"):
         print(
@@ -1342,6 +1345,26 @@ def tick() -> None:
             exc,
         )
         print(f"[NATIVE-TRAIN] 自動再学習を次回へ延期: {exc}")
+
+
+def tick() -> None:
+    init_db()
+    owner = f"pid={os.getpid()} / {_now().isoformat(timespec='seconds')}"
+    if not acquire_runtime_lock(
+        "scheduler_tick",
+        owner=owner,
+        ttl_minutes=180,
+    ):
+        print(
+            "[SCHEDULE] 別プロセスの自動サイクルが実行中のため"
+            "このtickはスキップします。"
+        )
+        return
+
+    try:
+        _tick_unlocked()
+    finally:
+        release_runtime_lock("scheduler_tick")
 
 def main() -> None:
     parser = argparse.ArgumentParser(
