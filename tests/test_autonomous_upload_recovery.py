@@ -98,9 +98,9 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
                 return_value=True,
             ),
             patch.object(
-                scheduler.settings,
-                "dry_run",
-                False,
+                scheduler,
+                "_upload_runtime_block_reason",
+                return_value="",
             ),
             patch.object(
                 scheduler,
@@ -304,7 +304,11 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
             patch.object(scheduler, "_now", return_value=now),
             patch.object(scheduler, "automation_enabled", return_value=True),
             patch.object(scheduler, "auto_upload_enabled", return_value=True),
-            patch.object(scheduler.settings, "dry_run", True),
+            patch.object(
+                scheduler,
+                "_upload_runtime_block_reason",
+                return_value="DRY_RUN=true",
+            ),
             patch.object(scheduler, "upload_video") as upload,
         ):
             scheduler.run_due()
