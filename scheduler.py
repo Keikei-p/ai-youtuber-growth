@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
+from delivery_supervisor import self_heal_delivery_controls
 from legal_guard import publish_gate
 from main import load_character, render_results, run_generation
 from native_models.auto_train import maybe_run_native_retraining
@@ -1011,6 +1012,12 @@ def _upload_runtime_block_reason() -> str:
 
 def run_due() -> None:
     init_db()
+    delivery_state = self_heal_delivery_controls()
+    if delivery_state.get("repairs"):
+        print(
+            "[DELIVERY-SUPERVISOR] "
+            + " / ".join(delivery_state["repairs"])
+        )
 
     if runtime_cancel_requested():
         print("[SCHEDULE] 安全停止中のためYouTube投稿を実行しません。")
@@ -1262,6 +1269,13 @@ def show_queue() -> None:
         )
 
 def tick() -> None:
+    delivery_state = self_heal_delivery_controls()
+    if delivery_state.get("repairs"):
+        print(
+            "[DELIVERY-SUPERVISOR] "
+            + " / ".join(delivery_state["repairs"])
+        )
+
     full_test = _full_test_state()
     if full_test.get("active"):
         print("[FULL-TEST] テストセッション中: 1本ずつ直列運転")
