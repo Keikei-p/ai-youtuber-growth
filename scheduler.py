@@ -10,7 +10,7 @@ from ai_client import OllamaClient
 from config import settings
 from growth_engine import run_growth_cycle
 from legal_guard import publish_gate
-from main import run_generation
+from main import load_character, render_results, run_generation
 from native_models.auto_train import maybe_run_native_retraining
 from resource_governor import background_production_decision
 from self_improvement import (
@@ -29,6 +29,8 @@ from runtime_control import (
 )
 from media_cleanup import cleanup_uploaded_media
 from storage import (
+    acquire_upload_lock,
+    active_guests,
     cancel_queued_videos,
     due_queue,
     init_db,
@@ -39,12 +41,14 @@ from storage import (
     occupied_schedule_times,
     queue_video,
     queued_items,
+    release_upload_lock,
     get_channel_state,
     set_channel_state,
     update_queue_schedule,
     video_by_id,
 )
 from voice.provider import voice_attribution_status, voice_provider_status
+from upload_recovery import recover_upload_failure
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -673,96 +677,204 @@ def prepare_upcoming() -> None:
 
     print(f"[SCHEDULE] {queued_count}本を投稿キューへ追加しました。")
 
-def upload_saved_video_now(
-    video_id: int,
-    privacy_status: str | None = None,
-) -> dict:
+def _safe_upload_metadata(row: dict) -> tuple[str, str, list[str]]:
+    title = " ".join(str(row.get("title") or "").split())[:100]
+    if not title:
+        title = "ミライ AI YouTuber"
+
+    description = str(row.get("description") or (
+        "AIが自分で企画・制作・分析しながら成長するチャンネルです。"
+    ))[:5000]
+
+    try:
+        raw_tags = json.loads(row.get("tags_json") or "[]")
+    except Exception:
+        raw_tags = []
+    if not isinstance(raw_tags, list):
+        raw_tags = []
+
+    tags: list[str] = []
+    total = 0
+    for raw in raw_tags:
+        tag = " ".join(str(raw or "").split()).strip("#, ")
+        if not tag or tag in tags:
+            continue
+        tag = tag[:60]
+        projected = total + len(tag) + (1 if tags else 0)
+        if projected > 450 or len(tags) >= 30:
+            break
+        tags.append(tag)
+        total = projected
+
+    return title, description, tags
+
+
+def regenerate_saved_video(video_id: int) -> dict:
     """
-    生成ライブラリなど、ユーザーの明示操作から完成済み動画を即時投稿する。
-    自動投稿ON/OFFとは独立して動くが、公開前ガードと二重投稿防止は共通。
+    投稿予定のMP4が欠損している場合、保存済み台本とメタデータから
+    同じ動画レコードを再レンダリングする。新しい企画IDは作らない。
     """
-    init_db()
     row = video_by_id(int(video_id))
     if not row:
         raise ValueError(f"動画 #{video_id} が見つかりません")
 
-    existing = str(row.get("youtube_video_id") or "").strip()
-    if existing:
-        return {
-            "status": "already_uploaded",
-            "video_id": int(video_id),
-            "youtube_video_id": existing,
-            "privacy": None,
-        }
+    item = {
+        "id": int(video_id),
+        "idea": {
+            "idea": str(row.get("idea") or row.get("title") or ""),
+            "angle": str(row.get("angle") or ""),
+        },
+        "angle": str(row.get("angle") or ""),
+        "title": str(row.get("title") or ""),
+        "script": str(row.get("script") or ""),
+        "description": str(row.get("description") or ""),
+        "tags": json.loads(row.get("tags_json") or "[]"),
+        "status": "rendering",
+    }
 
-    output_path = str(row.get("output_path") or "").strip()
-    if not output_path:
-        raise FileNotFoundError("完成動画ファイルのパスがありません")
-
-    candidate = Path(output_path)
-    if not candidate.is_file():
-        raise FileNotFoundError(f"完成動画ファイルが見つかりません: {candidate}")
-
-    privacy = str(privacy_status or upload_privacy()).strip().lower()
-    if privacy not in {"private", "unlisted", "public"}:
-        raise ValueError("privacy must be private, unlisted, or public")
-
-    voice_status = voice_attribution_status()
-    required_credit = (
-        voice_status["credit"]
-        if voice_status["resolved"]
-        else "__UNRESOLVED_REQUIRED_VOICE_CREDIT__"
-    )
-    gate = publish_gate(
-        row,
-        required_credit=required_credit,
-    )
-    if not gate["allowed"]:
-        risks = ", ".join(
-            str(item)
-            for item in (gate.get("risks") or [])
+    guest_id = row.get("guest_id")
+    if guest_id:
+        guest = next(
+            (
+                candidate
+                for candidate in active_guests(100)
+                if int(candidate["id"]) == int(guest_id)
+            ),
+            None,
         )
+        if guest:
+            item["guest"] = guest
+
+    print(f"[AUTO-RECOVERY] #{video_id} 欠損動画を保存済み台本から再生成")
+    render_results([item], load_character())
+
+    refreshed = video_by_id(int(video_id))
+    output = str((refreshed or {}).get("output_path") or "").strip()
+    if not output or not Path(output).is_file():
         raise RuntimeError(
-            "公開前確認待ちのため投稿を停止しました。"
-            + (f" {risks}" if risks else "")
+            f"動画 #{video_id} の自動再生成後もMP4を確認できません"
+        )
+    set_channel_state(
+        f"video_regeneration_requested_{video_id}",
+        "false",
+    )
+    return refreshed or row
+
+
+def _ensure_video_output(row: dict) -> dict:
+    output = str(row.get("output_path") or "").strip()
+    if output and Path(output).is_file():
+        return row
+    return regenerate_saved_video(
+        int(row.get("video_id") or row.get("id") or 0)
+    )
+
+
+def upload_saved_video_now(
+    video_id: int,
+    privacy_status: str | None = None,
+    *,
+    force_reupload: bool = False,
+) -> dict:
+    """
+    生成ライブラリから完成済み動画を即時投稿/再投稿する。
+    再投稿は新しいYouTube動画として作成し、旧IDは履歴へ保持する。
+    """
+    init_db()
+    video_id = int(video_id)
+    if not acquire_upload_lock(
+        video_id,
+        owner="library_repost" if force_reupload else "library_manual",
+    ):
+        raise RuntimeError(
+            f"動画 #{video_id} は別の投稿処理が実行中です。"
         )
 
     try:
-        youtube_id = upload_video(
-            video_path=candidate,
-            title=str(row.get("title") or ""),
-            description=str(row.get("description") or (
-                "AIが自分で企画・制作・分析しながら"
-                "成長するチャンネルです。"
-            )),
-            tags=json.loads(row.get("tags_json") or "[]"),
+        row = video_by_id(video_id)
+        if not row:
+            raise ValueError(f"動画 #{video_id} が見つかりません")
+
+        existing = str(row.get("youtube_video_id") or "").strip()
+        if existing and not force_reupload:
+            return {
+                "status": "already_uploaded",
+                "video_id": video_id,
+                "youtube_video_id": existing,
+                "privacy": None,
+            }
+
+        row = _ensure_video_output(row)
+        candidate = Path(str(row.get("output_path") or ""))
+        privacy = str(privacy_status or upload_privacy()).strip().lower()
+        if privacy not in {"private", "unlisted", "public"}:
+            raise ValueError("privacy must be private, unlisted, or public")
+
+        voice_status = voice_attribution_status()
+        required_credit = (
+            voice_status["credit"]
+            if voice_status["resolved"]
+            else "__UNRESOLVED_REQUIRED_VOICE_CREDIT__"
+        )
+        gate = publish_gate(
+            row,
+            required_credit=required_credit,
+        )
+        if not gate["allowed"]:
+            risks = ", ".join(
+                str(item)
+                for item in (gate.get("risks") or [])
+            )
+            raise RuntimeError(
+                "公開前確認待ちのため投稿を停止しました。"
+                + (f" {risks}" if risks else "")
+            )
+
+        title, description, tags = _safe_upload_metadata(row)
+        try:
+            youtube_id = upload_video(
+                video_path=candidate,
+                title=title,
+                description=description,
+                tags=tags,
+                privacy_status=privacy,
+                category_id=settings.youtube_category_id,
+                default_language=settings.youtube_default_language,
+                contains_synthetic_media=True,
+            )
+        except Exception as exc:
+            record_failure(
+                "youtube.manual_repost" if force_reupload else "youtube.manual_upload",
+                exc,
+                {"video_id": video_id, "previous_youtube_id": existing},
+            )
+            raise
+
+        uploaded_at = _now().isoformat(timespec="seconds")
+        source = "library_repost" if force_reupload else "library_manual"
+        mark_uploaded(
+            video_id,
+            youtube_id,
+            uploaded_at,
             privacy_status=privacy,
-            category_id=settings.youtube_category_id,
-            default_language=settings.youtube_default_language,
-            contains_synthetic_media=True,
+            source=source,
+            replaced_youtube_video_id=existing or None,
         )
-    except Exception as exc:
-        record_failure(
-            "youtube.manual_upload",
-            exc,
-            {"video_id": int(video_id)},
+        mark_video_queue_uploaded(video_id, uploaded_at)
+        set_channel_state("youtube_auth_attention", "false")
+        print(
+            f"[MANUAL-UPLOAD] #{video_id} -> {youtube_id} "
+            f"[{privacy}] source={source}"
         )
-        raise
-
-    uploaded_at = _now().isoformat(timespec="seconds")
-    mark_uploaded(int(video_id), youtube_id, uploaded_at)
-    mark_video_queue_uploaded(int(video_id), uploaded_at)
-    print(
-        f"[MANUAL-UPLOAD] #{video_id} -> {youtube_id} "
-        f"[{privacy}]"
-    )
-    return {
-        "status": "uploaded",
-        "video_id": int(video_id),
-        "youtube_video_id": youtube_id,
-        "privacy": privacy,
-    }
-
+        return {
+            "status": "reuploaded" if force_reupload else "uploaded",
+            "video_id": video_id,
+            "youtube_video_id": youtube_id,
+            "previous_youtube_video_id": existing or None,
+            "privacy": privacy,
+        }
+    finally:
+        release_upload_lock(video_id)
 
 def run_due() -> None:
     init_db()
@@ -835,10 +947,20 @@ def run_due() -> None:
         return
 
     for row in rows:
+        video_id = int(row["video_id"])
+        if not acquire_upload_lock(
+            video_id,
+            owner=f"auto_queue:{row['queue_id']}",
+        ):
+            print(
+                f"[AUTO-UPLOAD] #{video_id} は別処理が投稿中のため"
+                "このtickではスキップします。"
+            )
+            continue
+
         try:
-            output_path = row.get("output_path")
-            if not output_path:
-                raise FileNotFoundError("動画ファイルのパスがありません")
+            row = _ensure_video_output(row)
+            output_path = str(row.get("output_path") or "")
 
             gate = publish_gate(
                 row,
@@ -850,33 +972,40 @@ def run_due() -> None:
             )
             if not gate["allowed"]:
                 print(
-                    f"[LEGAL] #{row['video_id']} は公開前確認待ち。"
+                    f"[LEGAL] #{video_id} は公開前確認待ち。"
                     f" approval_id={gate.get('approval_id')} / "
                     f"{gate.get('risks')}"
                 )
                 continue
 
+            privacy = upload_privacy()
+            title, description, tags = _safe_upload_metadata(row)
             youtube_id = upload_video(
                 video_path=Path(output_path),
-                title=row["title"],
-                description=row.get("description") or (
-                    "AIが自分で企画・制作・分析しながら"
-                    "成長するチャンネルです。"
-                ),
-                tags=json.loads(row.get("tags_json") or "[]"),
-                privacy_status=upload_privacy(),
+                title=title,
+                description=description,
+                tags=tags,
+                privacy_status=privacy,
                 category_id=settings.youtube_category_id,
                 default_language=settings.youtube_default_language,
                 contains_synthetic_media=True,
             )
-            mark_uploaded(row["video_id"], youtube_id)
+            uploaded_at = _now().isoformat(timespec="seconds")
+            mark_uploaded(
+                video_id,
+                youtube_id,
+                uploaded_at,
+                privacy_status=privacy,
+                source="auto_schedule",
+            )
             mark_queue_uploaded(
                 row["queue_id"],
-                _now().isoformat(timespec="seconds"),
+                uploaded_at,
             )
+            set_channel_state("youtube_auth_attention", "false")
             print(
-                f"[AUTO-UPLOAD] #{row['video_id']} -> {youtube_id} "
-                f"[{upload_privacy()}]"
+                f"[AUTO-UPLOAD] #{video_id} -> {youtube_id} "
+                f"[{privacy}]"
             )
             active_test = _full_test_state()
             test_ids = {
@@ -885,14 +1014,14 @@ def run_due() -> None:
                 if str(value).isdigit()
             } if active_test.get("active") else set()
 
-            if int(row["video_id"]) in test_ids:
+            if video_id in test_ids:
                 print(
                     "[FULL-TEST] 確認用にローカル動画を残します。"
                 )
             else:
                 try:
                     cleanup_uploaded_media(
-                        row["video_id"],
+                        video_id,
                         output_path,
                     )
                 except Exception as cleanup_exc:
@@ -901,19 +1030,30 @@ def run_due() -> None:
                         f"{cleanup_exc}"
                     )
         except Exception as exc:
-            mark_queue_error(row["queue_id"], str(exc))
+            recovery = recover_upload_failure(
+                row,
+                exc,
+                now=_now(),
+            )
+            if not recovery.get("handled"):
+                mark_queue_error(row["queue_id"], str(exc))
             record_failure(
                 "youtube.upload",
                 exc,
                 {
-                    "video_id": row.get("video_id"),
+                    "video_id": video_id,
                     "queue_id": row.get("queue_id"),
+                    "recovery": recovery,
                 },
             )
             print(
-                f"[AUTO-UPLOAD] #{row['video_id']} 失敗 "
-                f"(試行 {row.get('attempts', 0) + 1}/5): {exc}"
+                f"[AUTO-UPLOAD] #{video_id} 失敗 / "
+                f"分類={recovery.get('code')} / "
+                f"自動処置={recovery.get('safe_action')} / "
+                f"{exc}"
             )
+        finally:
+            release_upload_lock(video_id)
 
     _maybe_finish_full_test()
 
