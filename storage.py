@@ -1190,6 +1190,23 @@ def mark_queue_error(queue_id: int, error: str) -> None:
             (error[:1000], queue_id),
         )
 
+def set_queue_failed(
+    queue_id: int,
+    error: str,
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE posting_queue
+            SET status = 'failed',
+                error = ?,
+                attempts = MAX(attempts, 5)
+            WHERE id = ?
+            """,
+            (str(error)[:1000], int(queue_id)),
+        )
+
+
 def set_queue_recovery(
     queue_id: int,
     *,
