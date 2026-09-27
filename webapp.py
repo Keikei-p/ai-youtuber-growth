@@ -1724,7 +1724,30 @@ async function refresh(){
     const nextHome=aphHome.next_queue||{};
     const lastHome=aphHome.last_post_event||{};
     const resilience=((state.improvement||{}).resilience)||{};
-    homeAutoState.textContent=(state.automation_enabled&&state.auto_upload_enabled)?'稼働中':'確認必要';
+    const ap=state.autopilot||{};
+    const apRunning=Boolean(
+      ap.armed &&
+      state.automation_enabled &&
+      state.auto_upload_enabled &&
+      !ap.runtime_cancel_requested
+    );
+    const apRepairing=Boolean(ap.armed&&!apRunning&&!ap.runtime_cancel_requested);
+    const privacyLabelsHome={private:'非公開',unlisted:'限定公開',public:'公開'};
+    const privacyHome=privacyLabelsHome[state.privacy]||state.privacy||'不明';
+    autopilotTitle.textContent=ap.human_action_required
+      ? '🟠 1つだけ確認が必要'
+      : (apRunning?'🟢 完全自動運用中':(apRepairing?'🟡 自動復旧中':'完全自動運用は停止中'));
+    autopilotDetail.textContent=ap.armed
+      ? ('毎日'+Number(ap.posts_per_day||state.posts_per_day||0)+'本 / '+String(ap.post_times||state.post_times||'')+' / '+privacyHome+' / 再起動後も自動復帰')
+      : '開始後は企画・制作・品質確認・投稿・分析・改善までミライが自動で続けます。';
+    const firstProblem=((aphHome.problems||[])[0]||{}).detail||'';
+    autopilotAttention.textContent=ap.human_action_required
+      ? String(ap.human_action||'確認が必要です。')
+      : (ap.armed&&firstProblem?String(firstProblem):'');
+    autopilotMainBtn.textContent=ap.armed?'■ 完全自動運用を停止':'▶ 完全自動運用開始';
+    autopilotMainBtn.className=(ap.armed?'danger':'primary')+' autopilot-main';
+
+    homeAutoState.textContent=apRunning?'完全自動運用中':(apRepairing?'自動復旧中':'停止中');
     const exHome=state.execution||{};
     homeAutoDetail.textContent='自動運転 '+(state.automation_enabled?'ON':'OFF')+' / 投稿 '+(state.auto_upload_enabled?'ON':'OFF')+' / 制作 '+(exHome.mode==='cloud'?'Cloud':'PC');
     homeNextPost.textContent=nextHome.scheduled_for?String(nextHome.scheduled_for).replace('T',' ').slice(5,16):'予定なし';
@@ -2086,6 +2109,43 @@ async function repostLibraryVideo(id){
   }
 }
 function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+async function toggleFullAutopilot(){
+  const ap=(state&&state.autopilot)||{};
+  const privacyLabels={private:'非公開',unlisted:'限定公開',public:'公開'};
+  const privacyLabel=privacyLabels[(state&&state.privacy)||'private']||((state&&state.privacy)||'private');
+
+  if(ap.armed){
+    if(!confirm('完全自動運用を停止しますか？\n\n自動生成と自動投稿を停止します。')) return;
+    try{
+      const data=await api('/api/autopilot',{action:'stop'});
+      await refresh();
+      alert(data.message);
+    }catch(e){
+      alert('停止に失敗しました: '+e.message);
+      await refresh();
+    }
+    return;
+  }
+
+  const ok=confirm(
+    '完全自動運用を開始します。\n\n'+
+    '・企画 → 制作 → 品質確認 → YouTube投稿 → 分析 → 改善を自動実行\n'+
+    '・投稿設定: 毎日'+Number((state&&state.posts_per_day)||0)+'本 / '+String((state&&state.post_times)||'')+'\n'+
+    '・公開設定: '+privacyLabel+'\n'+
+    '・PC再起動後も自動復帰\n\n'+
+    'この設定で開始しますか？'
+  );
+  if(!ok) return;
+
+  try{
+    const data=await api('/api/autopilot',{action:'start'});
+    await refresh();
+    alert(data.message);
+  }catch(e){
+    alert(e.message);
+    await refresh();
+  }
+}
 async function toggleAutomation(){await api('/api/settings',{automation_enabled:!state.automation_enabled});refresh()}
 async function toggleGuestImageAuto(){
   await api('/api/settings',{guest_image_auto_enabled:!state.guest_image_auto_enabled});
