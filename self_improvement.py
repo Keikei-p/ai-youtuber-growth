@@ -12,6 +12,10 @@ from config import settings
 from mirai_engines.debug_engine import MiraiDebugEngine
 from mirai_engines.improvement_engine import MiraiImprovementEngine
 from mirai_engines.quality_engine import MiraiQualityEngine
+from resilience_learning import (
+    record_failure_pattern,
+    resilience_snapshot,
+)
 from safe_code_repair import repair_known_code_invariants
 from storage import (
     analytics_history,
@@ -165,6 +169,31 @@ def record_failure(
             "likely_cause": str(exc),
         }
 
+    playbook = record_failure_pattern(
+        fingerprint=fingerprint,
+        stage=stage,
+        category=str(
+            diagnosis.get("category")
+            or category
+        ),
+        context={
+            **(context or {}),
+            "occurrences": occurrences,
+            "diagnosis": diagnosis,
+        },
+        attempted_actions=[
+            *adaptations,
+            *[
+                str(value)
+                for value in diagnosis.get("safe_actions") or []
+                if str(value).strip()
+            ],
+        ],
+        prevention_note=str(
+            diagnosis.get("likely_cause") or ""
+        ),
+    )
+
     return {
         "fingerprint": fingerprint,
         "occurrences": occurrences,
@@ -172,6 +201,11 @@ def record_failure(
         "adaptations": adaptations,
         "diagnosis": diagnosis,
         "code_repair": code_repair,
+        "playbook": playbook,
+        "preferred_next_action": playbook.get(
+            "preferred_next_action",
+            "",
+        ),
     }
 
 
@@ -585,6 +619,7 @@ def improvement_state() -> dict:
             "safe_code_repair_last",
             "",
         ),
+        "resilience": resilience_snapshot(12),
     }
 
 
