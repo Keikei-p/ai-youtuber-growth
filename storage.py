@@ -91,6 +91,15 @@ def init_db() -> None:
             likes INTEGER NOT NULL DEFAULT 0,
             comments INTEGER NOT NULL DEFAULT 0,
             avg_view_percentage REAL NOT NULL DEFAULT 0,
+            average_view_duration REAL NOT NULL DEFAULT 0,
+            estimated_minutes_watched REAL NOT NULL DEFAULT 0,
+            shares INTEGER NOT NULL DEFAULT 0,
+            subscribers_gained INTEGER NOT NULL DEFAULT 0,
+            subscribers_lost INTEGER NOT NULL DEFAULT 0,
+            engaged_views INTEGER NOT NULL DEFAULT 0,
+            impressions INTEGER NOT NULL DEFAULT 0,
+            ctr REAL NOT NULL DEFAULT 0,
+            traffic_json TEXT NOT NULL DEFAULT '[]',
             score REAL NOT NULL DEFAULT 0,
             note TEXT NOT NULL DEFAULT '',
             UNIQUE(video_id, checkpoint_hours),
@@ -178,6 +187,23 @@ def init_db() -> None:
         if "post_verified_at" not in video_columns:
             conn.execute("ALTER TABLE videos ADD COLUMN post_verified_at TEXT")
 
+        if "average_view_duration" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN average_view_duration REAL")
+        if "estimated_minutes_watched" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN estimated_minutes_watched REAL")
+        if "shares" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN shares INTEGER")
+        if "subscribers_gained" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN subscribers_gained INTEGER")
+        if "subscribers_lost" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN subscribers_lost INTEGER")
+        if "engaged_views" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN engaged_views INTEGER")
+        if "impressions" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN impressions INTEGER")
+        if "traffic_json" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN traffic_json TEXT NOT NULL DEFAULT '[]'")
+
         queue_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(posting_queue)").fetchall()
@@ -186,6 +212,27 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE posting_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
             )
+
+        analytics_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(analytics_snapshots)").fetchall()
+        }
+        analytics_additions = {
+            "average_view_duration": "REAL NOT NULL DEFAULT 0",
+            "estimated_minutes_watched": "REAL NOT NULL DEFAULT 0",
+            "shares": "INTEGER NOT NULL DEFAULT 0",
+            "subscribers_gained": "INTEGER NOT NULL DEFAULT 0",
+            "subscribers_lost": "INTEGER NOT NULL DEFAULT 0",
+            "engaged_views": "INTEGER NOT NULL DEFAULT 0",
+            "impressions": "INTEGER NOT NULL DEFAULT 0",
+            "ctr": "REAL NOT NULL DEFAULT 0",
+            "traffic_json": "TEXT NOT NULL DEFAULT '[]'",
+        }
+        for column, definition in analytics_additions.items():
+            if column not in analytics_columns:
+                conn.execute(
+                    f"ALTER TABLE analytics_snapshots ADD COLUMN {column} {definition}"
+                )
 
         conn.execute(
             """
@@ -667,7 +714,12 @@ def update_metrics(video_id: int, metrics: dict) -> None:
         conn.execute(
             """
             UPDATE videos
-            SET views = ?, likes = ?, comments = ?, avg_view_percentage = ?
+            SET views = ?, likes = ?, comments = ?,
+                avg_view_percentage = ?, average_view_duration = ?,
+                estimated_minutes_watched = ?, shares = ?,
+                subscribers_gained = ?, subscribers_lost = ?,
+                engaged_views = ?, impressions = ?, ctr = ?,
+                traffic_json = ?
             WHERE id = ?
             """,
             (
@@ -675,7 +727,19 @@ def update_metrics(video_id: int, metrics: dict) -> None:
                 int(metrics.get("likes") or 0),
                 int(metrics.get("comments") or 0),
                 float(metrics.get("averageViewPercentage") or 0),
-                video_id,
+                float(metrics.get("averageViewDuration") or 0),
+                float(metrics.get("estimatedMinutesWatched") or 0),
+                int(metrics.get("shares") or 0),
+                int(metrics.get("subscribersGained") or 0),
+                int(metrics.get("subscribersLost") or 0),
+                int(metrics.get("engagedViews") or 0),
+                int(metrics.get("impressions") or 0),
+                float(metrics.get("ctr") or 0),
+                json.dumps(
+                    metrics.get("trafficSources") or [],
+                    ensure_ascii=False,
+                ),
+                int(video_id),
             ),
         )
 
@@ -738,18 +802,34 @@ def save_analytics_snapshot(
             """
             INSERT OR REPLACE INTO analytics_snapshots (
                 video_id, checkpoint_hours, captured_at,
-                views, likes, comments, avg_view_percentage, score, note
+                views, likes, comments, avg_view_percentage,
+                average_view_duration, estimated_minutes_watched,
+                shares, subscribers_gained, subscribers_lost,
+                engaged_views, impressions, ctr, traffic_json,
+                score, note
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                video_id,
-                checkpoint_hours,
+                int(video_id),
+                int(checkpoint_hours),
                 captured_at,
                 int(metrics.get("views") or 0),
                 int(metrics.get("likes") or 0),
                 int(metrics.get("comments") or 0),
                 float(metrics.get("averageViewPercentage") or 0),
+                float(metrics.get("averageViewDuration") or 0),
+                float(metrics.get("estimatedMinutesWatched") or 0),
+                int(metrics.get("shares") or 0),
+                int(metrics.get("subscribersGained") or 0),
+                int(metrics.get("subscribersLost") or 0),
+                int(metrics.get("engagedViews") or 0),
+                int(metrics.get("impressions") or 0),
+                float(metrics.get("ctr") or 0),
+                json.dumps(
+                    metrics.get("trafficSources") or [],
+                    ensure_ascii=False,
+                ),
                 float(score),
                 note,
             ),
@@ -762,6 +842,9 @@ def analytics_history(limit: int = 60) -> list[dict[str, Any]]:
             SELECT
                 s.video_id, s.checkpoint_hours, s.captured_at,
                 s.views, s.likes, s.comments, s.avg_view_percentage,
+                s.average_view_duration, s.estimated_minutes_watched,
+                s.shares, s.subscribers_gained, s.subscribers_lost,
+                s.engaged_views, s.impressions, s.ctr, s.traffic_json,
                 s.score, s.note,
                 v.idea, v.angle, v.title
             FROM analytics_snapshots s
