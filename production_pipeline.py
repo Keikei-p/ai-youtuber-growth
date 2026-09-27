@@ -7,6 +7,7 @@ import wave
 from config import settings
 from gpu_manager import release_torch_cuda_cache, unload_ollama_model
 from runtime_control import (
+    ai_video_backend_name,
     ai_video_enabled,
     ai_video_license_confirmed,
     guest_image_auto_enabled,
@@ -199,7 +200,7 @@ def _ai_video_prompt(item: dict) -> str:
 
 
 def _generate_ai_video_asset(item: dict) -> str | None:
-    backend = str(settings.ai_video_backend or "google").strip().lower()
+    backend = ai_video_backend_name()
     identity_source = str(
         item.get("character_image_path") or ""
     ).strip()
@@ -595,8 +596,7 @@ def prepare_visuals(results: list[dict]) -> None:
         min(int(settings.google_video_max_per_batch), 10),
     )
     google_backend = (
-        str(settings.ai_video_backend or "").strip().lower()
-        == "google"
+        ai_video_backend_name() == "google"
     )
 
     for index, item in enumerate(results, start=1):
