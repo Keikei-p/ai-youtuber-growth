@@ -131,7 +131,7 @@ if (-not $RegisteredTask.Settings.WakeToRun) {
 if (-not $RegisteredTask.Settings.StartWhenAvailable) {
     throw "Registered task verification failed: StartWhenAvailable=false"
 }
-if (-not $RegisteredTask.Settings.Enabled) {
+if ([string]$RegisteredTask.State -eq "Disabled") {
     throw "Registered task verification failed: task disabled"
 }
 if (@($RegisteredTask.Triggers).Count -lt 4) {
