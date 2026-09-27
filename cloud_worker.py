@@ -6,7 +6,9 @@ import mimetypes
 import os
 import shutil
 import threading
+import time
 import traceback
+from datetime import datetime
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,12 +18,17 @@ from urllib.parse import unquote, urlparse
 from config import settings
 from paths import DATA_DIR, OUTPUT_DIR, ensure_runtime_dirs
 from production_pipeline import produce_media
-from storage import init_db
+from storage import get_channel_state, init_db, set_channel_state
 
 
 JOB_ROOT = DATA_DIR / "cloud_execution_jobs"
 ARTIFACT_ROOT = OUTPUT_DIR / "cloud_worker_artifacts"
 _STORE_LOCK = threading.Lock()
+_AUTONOMY_STOP_EVENT = threading.Event()
+_AUTONOMY_WAKE_EVENT = threading.Event()
+_AUTONOMY_FORCE_FULL_EVENT = threading.Event()
+_AUTONOMY_LOCK = threading.Lock()
+_AUTONOMY_THREAD: threading.Thread | None = None
 
 
 def _job_file(job_id: str) -> Path:
@@ -96,6 +103,252 @@ def _recover_stale_jobs() -> int:
         recovered += 1
     return recovered
 
+
+
+
+def _autonomy_last_event() -> dict:
+    raw = get_channel_state(
+        "cloud_autonomy_last_event",
+        "",
+    ).strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_autonomy_event(
+    status: str,
+    *,
+    detail: str = "",
+    extra: dict | None = None,
+) -> dict:
+    payload = {
+        "status": str(status),
+        "checked_at": datetime.now().astimezone().isoformat(
+            timespec="seconds"
+        ),
+        "detail": str(detail or "")[:2000],
+    }
+    if extra:
+        payload.update(extra)
+    set_channel_state(
+        "cloud_autonomy_last_event",
+        json.dumps(payload, ensure_ascii=False),
+    )
+    return payload
+
+
+def autonomy_status() -> dict:
+    init_db()
+    from runtime_control import (
+        automation_enabled,
+        auto_upload_enabled,
+        runtime_cancel_requested,
+        web_interval_seconds,
+    )
+
+    thread = _AUTONOMY_THREAD
+    return {
+        "runner_enabled": bool(
+            getattr(settings, "cloud_autonomy_runner", False)
+        ),
+        "thread_alive": bool(thread and thread.is_alive()),
+        "automation_enabled": automation_enabled(),
+        "auto_upload_enabled": auto_upload_enabled(),
+        "runtime_cancel_requested": runtime_cancel_requested(),
+        "production_armed": (
+            get_channel_state(
+                "production_autonomy_armed",
+                "false",
+            ).strip().lower()
+            == "true"
+        ),
+        "full_cycle_seconds": web_interval_seconds(),
+        "poll_seconds": max(
+            30,
+            min(
+                int(
+                    getattr(
+                        settings,
+                        "cloud_autonomy_poll_seconds",
+                        60,
+                    )
+                ),
+                300,
+            ),
+        ),
+        "last_event": _autonomy_last_event(),
+    }
+
+
+def _run_autonomy_cycle(
+    *,
+    full_cycle: bool = True,
+) -> dict:
+    from delivery_supervisor import self_heal_delivery_controls
+    from runtime_control import (
+        automation_enabled,
+        runtime_cancel_requested,
+    )
+
+    init_db()
+    delivery = self_heal_delivery_controls()
+    repairs = list(delivery.get("repairs") or [])
+
+    if runtime_cancel_requested():
+        return _save_autonomy_event(
+            "blocked",
+            detail="安全停止が有効なためCloud自動サイクルを実行しません。",
+            extra={
+                "repairs": repairs,
+                "cycle": "full" if full_cycle else "due",
+            },
+        )
+
+    if not automation_enabled():
+        return _save_autonomy_event(
+            "idle",
+            detail="自動運転がOFFのためCloudランナーは待機中です。",
+            extra={
+                "repairs": repairs,
+                "cycle": "full" if full_cycle else "due",
+            },
+        )
+
+    if full_cycle:
+        from scheduler import tick
+
+        tick()
+        return _save_autonomy_event(
+            "succeeded",
+            detail="Cloud側で生成・投稿・分析の自動サイクルを完了しました。",
+            extra={
+                "repairs": repairs,
+                "cycle": "full",
+            },
+        )
+
+    from scheduler import run_due
+
+    run_due()
+    return _save_autonomy_event(
+        "due_checked",
+        detail="Cloud側で投稿時刻を確認しました。",
+        extra={
+            "repairs": repairs,
+            "cycle": "due",
+        },
+    )
+
+
+def _autonomy_loop() -> None:
+    _save_autonomy_event(
+        "started",
+        detail="Cloud常駐ランナーを開始しました。",
+    )
+    next_full_at = 0.0
+
+    while not _AUTONOMY_STOP_EVENT.is_set():
+        _AUTONOMY_WAKE_EVENT.clear()
+        force_full = _AUTONOMY_FORCE_FULL_EVENT.is_set()
+        if force_full:
+            _AUTONOMY_FORCE_FULL_EVENT.clear()
+
+        full_cycle = force_full or time.monotonic() >= next_full_at
+        event: dict | None = None
+        try:
+            event = _run_autonomy_cycle(
+                full_cycle=full_cycle,
+            )
+        except Exception as exc:
+            _save_autonomy_event(
+                "failed",
+                detail=str(exc),
+                extra={
+                    "cycle": "full" if full_cycle else "due",
+                },
+            )
+
+        if (
+            full_cycle
+            and event
+            and event.get("status") == "succeeded"
+        ):
+            try:
+                from runtime_control import web_interval_seconds
+
+                full_wait = web_interval_seconds()
+            except Exception:
+                full_wait = 600
+            next_full_at = (
+                time.monotonic()
+                + max(60, int(full_wait))
+            )
+
+        if _AUTONOMY_STOP_EVENT.is_set():
+            break
+
+        poll_seconds = max(
+            30,
+            min(
+                int(
+                    getattr(
+                        settings,
+                        "cloud_autonomy_poll_seconds",
+                        60,
+                    )
+                ),
+                300,
+            ),
+        )
+        _AUTONOMY_WAKE_EVENT.wait(poll_seconds)
+
+    _save_autonomy_event(
+        "stopped",
+        detail="Cloud常駐ランナーを停止しました。",
+    )
+
+
+def _start_autonomy_runner() -> threading.Thread | None:
+    global _AUTONOMY_THREAD
+
+    if not bool(
+        getattr(settings, "cloud_autonomy_runner", False)
+    ):
+        return None
+
+    with _AUTONOMY_LOCK:
+        if (
+            _AUTONOMY_THREAD is not None
+            and _AUTONOMY_THREAD.is_alive()
+        ):
+            return _AUTONOMY_THREAD
+
+        _AUTONOMY_STOP_EVENT.clear()
+        _AUTONOMY_WAKE_EVENT.clear()
+        _AUTONOMY_FORCE_FULL_EVENT.set()
+        _AUTONOMY_THREAD = threading.Thread(
+            target=_autonomy_loop,
+            name="mirai-cloud-autonomy",
+            daemon=True,
+        )
+        _AUTONOMY_THREAD.start()
+        return _AUTONOMY_THREAD
+
+
+def _stop_autonomy_runner() -> None:
+    global _AUTONOMY_THREAD
+
+    _AUTONOMY_STOP_EVENT.set()
+    _AUTONOMY_WAKE_EVENT.set()
+    thread = _AUTONOMY_THREAD
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=10)
+    _AUTONOMY_THREAD = None
 
 def _artifact_copy(
     job_id: str,
@@ -263,6 +516,66 @@ class CloudWorkerHandler(BaseHTTPRequestHandler):
             )
             return
         path = urlparse(self.path).path
+        if path == "/v1/runtime/control":
+            try:
+                body = self._body()
+                action = str(
+                    body.get("action") or ""
+                ).strip().lower()
+                if action == "arm":
+                    from delivery_supervisor import (
+                        arm_production_autonomy,
+                    )
+
+                    delivery = arm_production_autonomy()
+                    _AUTONOMY_FORCE_FULL_EVENT.set()
+                    _AUTONOMY_WAKE_EVENT.set()
+                    self._json(
+                        {
+                            "ok": True,
+                            "action": "arm",
+                            "runtime": autonomy_status(),
+                            "delivery": delivery,
+                        }
+                    )
+                    return
+                if action == "disarm":
+                    from delivery_supervisor import (
+                        disarm_production_autonomy,
+                    )
+                    from runtime_control import (
+                        set_auto_upload_enabled,
+                        set_automation_enabled,
+                    )
+
+                    disarm_production_autonomy()
+                    set_auto_upload_enabled(False)
+                    set_automation_enabled(False)
+                    _AUTONOMY_WAKE_EVENT.set()
+                    self._json(
+                        {
+                            "ok": True,
+                            "action": "disarm",
+                            "runtime": autonomy_status(),
+                        }
+                    )
+                    return
+                self._json(
+                    {
+                        "message": (
+                            "action must be arm or disarm"
+                        )
+                    },
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            except Exception as exc:
+                self._json(
+                    {"message": str(exc)},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+
         if path != "/v1/jobs":
             self._json(
                 {"message": "not found"},
@@ -321,6 +634,16 @@ class CloudWorkerHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "provider": "mirai-cloud-worker",
                     "schema_version": 1,
+                    "autonomy": autonomy_status(),
+                }
+            )
+            return
+
+        if path == "/v1/runtime/status":
+            self._json(
+                {
+                    "ok": True,
+                    "runtime": autonomy_status(),
                 }
             )
             return
@@ -448,6 +771,7 @@ def run(
             "CLOUD_EXECUTION_TOKENが必須です。"
         )
     ensure_runtime_dirs()
+    init_db()
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
     ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
     recovered = _recover_stale_jobs()
@@ -459,11 +783,17 @@ def run(
         (host, int(port)),
         CloudWorkerHandler,
     )
+    runner = _start_autonomy_runner()
     print(
         f"[CLOUD-WORKER] http://{host}:{int(port)} / "
-        f"token={'configured' if token else 'local-only'}"
+        f"token={'configured' if token else 'local-only'} / "
+        f"autonomy={'enabled' if runner else 'disabled'}"
     )
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        _stop_autonomy_runner()
+        server.server_close()
 
 
 if __name__ == "__main__":

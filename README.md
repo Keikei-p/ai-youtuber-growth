@@ -85,9 +85,29 @@ CLOUD_EXECUTION_FALLBACK_LOCAL=true
 
 外部サーバーへ公開する場合、`CLOUD_EXECUTION_TOKEN` 未設定ではWorkerを外部bindできない安全設計です。
 
+### PCが停止しても動くCloud常駐運転
+
+制作サーバー側で `CLOUD_AUTONOMY_RUNNER=true` を設定すると、Cloud Worker自身が既存の `scheduler.tick()` を定期実行します。これにより、管理PCがスリープ・休止・電源OFFでも、サーバー側だけで **企画 → 台本 → 制作 → 品質検査 → 投稿 → 分析/改善** を継続できる土台になります。
+
+```env
+CLOUD_AUTONOMY_RUNNER=true
+EXECUTION_MODE=local
+CLOUD_EXECUTION_TOKEN=十分に長いランダム文字列
+```
+
+- `CLOUD_AUTONOMY_RUNNER=false` が初期値なので、既存PC運用は勝手に変わりません。
+- サーバー常駐時も既存のscheduler runtime lock / upload lock / safety stopをそのまま使います。
+- 自動運転OFFならランナーは待機し、明示的にarmされた時だけ自動処理を進めます。
+- 投稿時刻の確認は `CLOUD_AUTONOMY_POLL_SECONDS`（初期60秒）で軽量に回し、生成・分析など重いフルサイクルは既存の自動運転間隔で実行します。
+- `GET /v1/runtime/status` で常駐状態を確認できます。
+- 認証済み `POST /v1/runtime/control` に `{"action":"arm"}` / `{"action":"disarm"}` を送るとサーバー側の本番自動運転を切り替えられます。
+- 同じサーバーでメディア制作も行う場合は `EXECUTION_MODE=local`。制御サーバーとGPU制作サーバーを分離する場合だけ `EXECUTION_MODE=cloud` を使います。
+- サーバー側にはYouTube OAuthファイル、OllamaまたはMirai Native Brain、音声/画像/FFmpeg等の実行依存が必要です。
+- インターネットへ公開する場合はWorkerを直接平文HTTPで晒さず、HTTPSリバースプロキシ/VPN等の保護された経路を使います。
+
 ### 現段階のCloud境界
 
-現在Cloudへ移したのは、**企画・台本完成後の画像生成 → 音声生成 → 動画編集 → 品質検査**です。企画/台本のOllama、スケジューラ、YouTube投稿・分析はまだ管理側PCで動きます。次段階でこれらもクラウドへ移せるよう、ジョブ境界を先に分離しています。
+メディア制作だけをCloudへ送る従来モードに加え、常時稼働サーバーではスケジューラ・YouTube投稿・分析/改善までサーバー側で継続できるようになりました。ローカルPCは引き続き従来運用が可能で、Cloud常駐は明示設定時だけ有効です。
 
 ## 通常制作フロー
 
