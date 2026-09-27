@@ -831,7 +831,8 @@ def _platform_autonomy_repair(*, force: bool = False) -> list[str]:
 
 def _start_full_autopilot() -> dict:
     """一度押せば、以後はarm状態を正本にして自動復帰する。"""
-    _ensure_local_services()
+    # 起動処理は即返し、Ollama/VOICEVOX等はwake後のworkerが
+    # バックグラウンドで準備する。ボタン押下を重くしない。
     status = start_autopilot()
     notes: list[str] = []
 
