@@ -166,7 +166,6 @@ def upload_video(
         "youtube",
         "v3",
         credentials=credentials,
-        cache_discovery=False,
     )
 
     snippet = {
@@ -188,8 +187,8 @@ def upload_video(
     }
 
     # YouTube/Google公式の再開可能アップロード経路。
-    # chunksize=-1でも resumable session を使うため、通信断時は
-    # next_chunk(num_retries=...) 側で指数バックオフ付き再試行が可能。
+    # 小分けchunkで送るため、一時的な通信断から復旧した時に
+    # 大きなファイル全体を送り直すリスクを抑える。
     media = MediaFileUpload(
         str(video_path),
         mimetype="video/mp4",
