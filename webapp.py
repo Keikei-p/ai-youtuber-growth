@@ -2931,40 +2931,38 @@ def run(open_browser: bool = True) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     _process_git_sha = _current_git_sha()
 
-    # 自動運転がONなのにWindowsタスクが消失/古い場合は、
-    # 管理画面起動時に毎回再登録して自己修復する。
-    first_episode_pending = (
-        get_channel_state(
-            "mirai_first_episode_video_id",
-            "",
-        ).strip().isdigit()
-        and get_channel_state(
-            "mirai_first_episode_uploaded",
-            "false",
-        ).strip().lower() != "true"
-        and get_channel_state(
-            "runtime_cancel_requested",
-            "false",
-        ).strip().lower() != "true"
-    )
-    if (
-        os.name == "nt"
-        and (
-            (automation_enabled() and auto_upload_enabled())
-            or first_episode_pending
+    # 起動直後にproduction armを先に復旧する。
+    # これにより「前回は完全自動運用中だったが、DBの個別スイッチだけ
+    # OFFへ崩れた」ケースでもユーザー操作なしで再開できる。
+    try:
+        migrated = self_heal_delivery_controls()
+        if migrated.get("repairs"):
+            _append_log(
+                "[AUTOPILOT] startup delivery repair: "
+                + " / ".join(migrated["repairs"])
+            )
+        if production_autonomy_armed():
+            healed = heal_autopilot()
+            _append_log(
+                "[AUTOPILOT] startup resume: "
+                + str(
+                    (healed.get("last_event") or {}).get(
+                        "detail"
+                    )
+                    or "完全自動運用を再開"
+                )
+            )
+            repairs = _platform_autonomy_repair(force=True)
+            if repairs:
+                _append_log(
+                    "[AUTOPILOT] startup platform repair:\n"
+                    + "\n".join(repairs)
+                )
+    except Exception as exc:
+        _append_log(
+            "[AUTOPILOT] startup self-heal failed: "
+            + str(exc)
         )
-    ):
-        try:
-            wake_result = _install_wake_task(60)
-            _append_log(
-                "[AUTO-POST] startup wake-task self-heal OK\n"
-                + wake_result
-            )
-        except Exception as exc:
-            _append_log(
-                "[AUTO-POST] startup wake-task self-heal failed: "
-                + str(exc)
-            )
 
     url = f"http://{HOST}:{PORT}"
 
