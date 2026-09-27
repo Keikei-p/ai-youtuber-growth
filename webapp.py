@@ -659,6 +659,7 @@ def _status_payload() -> dict:
         "posts_per_day": posts_per_day(),
         "post_times": post_times(),
         "daily_auto": daily_auto_status(),
+        "autopilot": autopilot_status(),
         "execution": execution,
         "guest_every": guest_appearance_every(),
         "guest_new_every": guest_new_every(),
@@ -739,7 +740,9 @@ def _install_windows_autostart() -> str:
     import winreg
 
     pythonw = Path(sys.executable).with_name("pythonw.exe")
-    launcher = ROOT / "web_launcher.pyw"
+    launcher = ROOT / "web_background.pyw"
+    if not launcher.is_file():
+        launcher = ROOT / "web_launcher.pyw"
     command = f'"{pythonw}" "{launcher}"'
 
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -758,6 +761,91 @@ def _install_windows_autostart() -> str:
         )
 
     return "PC起動時のWebアプリ自動起動を登録しました。"
+
+
+
+def _platform_autonomy_repair(*, force: bool = False) -> list[str]:
+    """完全自動運用中のWindows常駐/Wake設定だけ自己修復する。"""
+    global _last_platform_autonomy_heal_at
+
+    if not production_autonomy_armed() or os.name != "nt":
+        return []
+
+    now = time.time()
+    if (
+        not force
+        and _last_platform_autonomy_heal_at
+        and now - _last_platform_autonomy_heal_at < 1800
+    ):
+        return []
+    _last_platform_autonomy_heal_at = now
+
+    repairs: list[str] = []
+    if not _windows_autostart_enabled():
+        try:
+            repairs.append(_install_windows_autostart())
+        except Exception as exc:
+            _append_log(
+                "[AUTOPILOT] Windows自動起動の自己修復失敗: "
+                + str(exc)
+            )
+
+    try:
+        task = windows_task_status(ROOT)
+        task_ok = bool(
+            task.get("registered")
+            and task.get("wake_to_run")
+            and task.get("start_when_available")
+            and task.get("enabled", True)
+        )
+        if not task_ok:
+            repairs.append(_install_wake_task(60))
+    except Exception as exc:
+        _append_log(
+            "[AUTOPILOT] Wakeタスクの自己修復失敗: "
+            + str(exc)
+        )
+
+    if repairs:
+        set_channel_state(
+            "autopilot_platform_last_repair",
+            datetime.now().astimezone().isoformat(
+                timespec="seconds"
+            ),
+        )
+    return repairs
+
+
+def _start_full_autopilot() -> dict:
+    """一度押せば、以後はarm状態を正本にして自動復帰する。"""
+    _ensure_local_services()
+    status = start_autopilot()
+    notes: list[str] = []
+
+    if os.name == "nt":
+        try:
+            notes.append(_install_windows_autostart())
+        except Exception as exc:
+            notes.append(
+                "PC自動起動の登録は要確認: " + str(exc)
+            )
+        try:
+            notes.append(_install_wake_task(60))
+        except Exception as exc:
+            notes.append(
+                "スリープ復帰タスクは要確認: " + str(exc)
+            )
+
+    _wake_event.set()
+    _cached_auto_post_health(force=True)
+    return {"status": status, "notes": notes}
+
+
+def _stop_full_autopilot() -> dict:
+    status = stop_autopilot()
+    _wake_event.set()
+    _cached_auto_post_health(force=True)
+    return {"status": status}
 
 
 def _run_automation_script(
