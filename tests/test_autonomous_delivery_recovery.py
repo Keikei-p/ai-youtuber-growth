@@ -179,6 +179,23 @@ class AutonomousDeliveryRecoveryTests(unittest.TestCase):
                 "upload_video",
                 return_value="youtube-new",
             ),
+            patch.object(
+                scheduler,
+                "verify_uploaded_video",
+                return_value={
+                    "verified": True,
+                    "exists": True,
+                    "processing_status": "succeeded",
+                    "upload_status": "processed",
+                    "privacy_status": "private",
+                    "title_match": True,
+                    "description_match": True,
+                    "privacy_match": True,
+                    "duration_present": True,
+                    "thumbnail_present": True,
+                    "playback_ready": True,
+                },
+            ),
         ):
             result = scheduler.upload_saved_video_now(
                 video_id,
