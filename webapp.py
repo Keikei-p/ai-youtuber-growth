@@ -361,6 +361,19 @@ def _cycle_worker() -> None:
                 _restart_for_external_code_update()
                 return
 
+            # production armが残っている限り、automation/uploadの
+            # 設定ずれを先に直す。automation_enabled()を先に判定すると
+            # OFFへ崩れた時に自己修復へ到達できないため順序が重要。
+            if production_autonomy_armed():
+                healed = heal_autopilot()
+                last = healed.get("last_event") or {}
+                if str(last.get("status") or "") == "repaired":
+                    _append_log(
+                        "[AUTOPILOT] "
+                        + str(last.get("detail") or "設定ずれを修復")
+                    )
+                _platform_autonomy_repair()
+
             if automation_enabled():
                 # Web常駐中も期限投稿をAIサービス起動より先に処理する。
                 # VOICEVOX等の起動待ちで投稿時刻が遅れるのを防ぐ。
