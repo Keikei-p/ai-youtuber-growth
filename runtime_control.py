@@ -182,6 +182,37 @@ def set_guest_image_auto_enabled(enabled: bool) -> None:
     )
 
 
+def execution_mode() -> str:
+    value = get_channel_state("execution_mode", "").strip().lower()
+    if value in {"local", "cloud"}:
+        return value
+    configured = str(
+        getattr(settings, "execution_mode", "local") or "local"
+    ).strip().lower()
+    return configured if configured in {"local", "cloud"} else "local"
+
+
+def set_execution_mode(value: str) -> None:
+    selected = str(value or "").strip().lower()
+    if selected not in {"local", "cloud"}:
+        raise ValueError("execution mode must be local or cloud")
+    set_channel_state("execution_mode", selected)
+
+
+def cloud_execution_fallback_local() -> bool:
+    return _bool_state(
+        "cloud_execution_fallback_local",
+        bool(getattr(settings, "cloud_execution_fallback_local", True)),
+    )
+
+
+def set_cloud_execution_fallback_local(enabled: bool) -> None:
+    set_channel_state(
+        "cloud_execution_fallback_local",
+        "true" if enabled else "false",
+    )
+
+
 def voice_provider_name() -> str:
     value = get_channel_state("mirai_voice_provider", "").strip().lower()
     if value in {"voicevox", "mirai_local"}:
