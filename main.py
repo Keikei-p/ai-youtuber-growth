@@ -211,6 +211,62 @@ def upload_results(
             )
             print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
 
+def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict | None:
+    try:
+        written = write_script(character, idea, recent)
+    except Exception as exc:
+        print(f"[WRITE] 初回生成失敗: {exc}")
+        written = fallback_script(character, idea)
+
+    for retry in range(settings.max_script_retries + 1):
+        ok, issues = review_script(written["title"], written["script"], recent)
+        if ok:
+            if retry:
+                print(f"[REPAIR] {retry}回の修正で品質チェックOK")
+            return written
+
+        print(f"[REPAIR] 品質チェックNG: {issues} / 修正 {retry + 1}/{settings.max_script_retries}")
+
+        if retry >= settings.max_script_retries:
+            break
+
+        try:
+            written = rewrite_script(
+                character=character,
+                idea=idea,
+                recent=recent,
+                previous=written,
+                issues=issues,
+            )
+        except Exception as exc:
+            print(f"[REPAIR] AI修正失敗: {exc}")
+            written = fallback_script(character, idea)
+
+    fallback = fallback_script(character, idea)
+    ok, issues = review_script(fallback["title"], fallback["script"], recent)
+    if ok:
+        print("[REPAIR] 安全テンプレートへ切り替えて品質チェックOK")
+        return fallback
+
+    print(f"[SKIP] 安全テンプレートも品質チェックNG: {issues}")
+    try:
+        record_failure(
+            "text.script_quality",
+            ",".join(issues) or "script_quality_failed",
+            {
+                "idea": str(idea.get("idea") or ""),
+                "angle": str(idea.get("angle") or ""),
+                "title": str(fallback.get("title") or ""),
+            },
+        )
+    except Exception as exc:
+        print(f"[IMPROVEMENT] 台本失敗記録をスキップ: {exc}")
+    return None
+
+FIRST_EPISODE_STATE_KEY = "mirai_first_episode_completed"
+
+
+
 def _first_episode_package() -> dict:
     """初回だけ使う固定の自己紹介。2本目以降は通常の学習型企画へ戻す。"""
     script = (
