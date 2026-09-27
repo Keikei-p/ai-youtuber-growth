@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import cloud_worker
 import execution_provider
 import runtime_control
+import scheduler
 import storage
 
 
@@ -348,6 +349,64 @@ class LocalCloudExecutionTests(unittest.TestCase):
         self.assertEqual(event["status"], "succeeded")
         self.assertFalse(event["fallback"])
 
+    def test_scheduler_cloud_mode_does_not_require_local_voice_or_ffmpeg(self) -> None:
+        runtime_control.set_execution_mode("cloud")
+        fake_ollama = MagicMock()
+        fake_ollama.available.return_value = True
+
+        with (
+            patch.object(
+                scheduler,
+                "OllamaClient",
+                return_value=fake_ollama,
+            ),
+            patch.object(
+                scheduler,
+                "voice_provider_status",
+                return_value={
+                    "available": False,
+                    "name": "voicevox",
+                },
+            ),
+            patch.object(
+                scheduler.shutil,
+                "which",
+                return_value=None,
+            ),
+        ):
+            self.assertTrue(
+                scheduler._generation_runtime_ready()
+            )
+
+    def test_scheduler_local_mode_still_requires_media_dependencies(self) -> None:
+        runtime_control.set_execution_mode("local")
+        fake_ollama = MagicMock()
+        fake_ollama.available.return_value = True
+
+        with (
+            patch.object(
+                scheduler,
+                "OllamaClient",
+                return_value=fake_ollama,
+            ),
+            patch.object(
+                scheduler,
+                "voice_provider_status",
+                return_value={
+                    "available": False,
+                    "name": "voicevox",
+                },
+            ),
+            patch.object(
+                scheduler.shutil,
+                "which",
+                return_value=None,
+            ),
+        ):
+            self.assertFalse(
+                scheduler._generation_runtime_ready()
+            )
+
     def test_execution_status_never_exposes_cloud_token(self) -> None:
         fake_settings = SimpleNamespace(
             cloud_execution_url="https://worker.example.com",
@@ -382,6 +441,32 @@ class CloudWorkerStaticTests(unittest.TestCase):
             "外部公開するCloud Worker",
             source,
         )
+
+    def test_stale_cloud_jobs_are_failed_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stale = root / "deadbeefdeadbeefdeadbeefdeadbeef.json"
+            stale.write_text(
+                json.dumps(
+                    {
+                        "job_id": "deadbeefdeadbeefdeadbeefdeadbeef",
+                        "status": "running",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(
+                cloud_worker,
+                "JOB_ROOT",
+                root,
+            ):
+                recovered = cloud_worker._recover_stale_jobs()
+                row = json.loads(
+                    stale.read_text(encoding="utf-8")
+                )
+        self.assertEqual(recovered, 1)
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("再起動", row["error"])
 
     def test_main_routes_rendering_through_execution_provider(self) -> None:
         source = Path("main.py").read_text(
