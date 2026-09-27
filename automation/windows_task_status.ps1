@@ -52,18 +52,18 @@ if ($task) {
         $resultObject.start_when_available = [bool]$task.Settings.StartWhenAvailable
         $resultObject.triggers_count = @($task.Triggers).Count
         $resultObject.trigger_times = $triggerTimes
-        $resultObject.last_run_time = (
-            if ($info.LastRunTime -and $info.LastRunTime.Year -gt 1900) {
-                $info.LastRunTime.ToString("o")
-            }
-            else { $null }
-        )
-        $resultObject.next_run_time = (
-            if ($info.NextRunTime -and $info.NextRunTime.Year -gt 1900) {
-                $info.NextRunTime.ToString("o")
-            }
-            else { $null }
-        )
+        if ($info.LastRunTime -and $info.LastRunTime.Year -gt 1900) {
+            $resultObject.last_run_time = $info.LastRunTime.ToString("o")
+        }
+        else {
+            $resultObject.last_run_time = $null
+        }
+        if ($info.NextRunTime -and $info.NextRunTime.Year -gt 1900) {
+            $resultObject.next_run_time = $info.NextRunTime.ToString("o")
+        }
+        else {
+            $resultObject.next_run_time = $null
+        }
         $resultObject.last_task_result = [int64]$info.LastTaskResult
         $resultObject.missed_runs = [int]$info.NumberOfMissedRuns
     }
