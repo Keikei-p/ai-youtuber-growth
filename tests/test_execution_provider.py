@@ -428,6 +428,90 @@ class LocalCloudExecutionTests(unittest.TestCase):
         )
 
 
+class CloudWorkerAutonomyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.old_db = storage.DB_PATH
+        storage.DB_PATH = self.root / "cloud-autonomy.db"
+        storage.init_db()
+
+    def tearDown(self) -> None:
+        storage.DB_PATH = self.old_db
+        self.tmp.cleanup()
+
+    def test_cloud_cycle_waits_when_automation_is_off(self) -> None:
+        with (
+            patch(
+                "delivery_supervisor.self_heal_delivery_controls",
+                return_value={"repairs": []},
+            ),
+            patch(
+                "runtime_control.runtime_cancel_requested",
+                return_value=False,
+            ),
+            patch(
+                "runtime_control.automation_enabled",
+                return_value=False,
+            ),
+            patch("scheduler.tick") as scheduler_tick,
+        ):
+            event = cloud_worker._run_autonomy_cycle()
+
+        scheduler_tick.assert_not_called()
+        self.assertEqual(event["status"], "idle")
+        saved = json.loads(
+            storage.get_channel_state(
+                "cloud_autonomy_last_event",
+                "{}",
+            )
+        )
+        self.assertEqual(saved["status"], "idle")
+
+    def test_cloud_cycle_runs_scheduler_when_automation_is_on(self) -> None:
+        with (
+            patch(
+                "delivery_supervisor.self_heal_delivery_controls",
+                return_value={"repairs": ["repaired"]},
+            ),
+            patch(
+                "runtime_control.runtime_cancel_requested",
+                return_value=False,
+            ),
+            patch(
+                "runtime_control.automation_enabled",
+                return_value=True,
+            ),
+            patch("scheduler.tick") as scheduler_tick,
+        ):
+            event = cloud_worker._run_autonomy_cycle()
+
+        scheduler_tick.assert_called_once_with()
+        self.assertEqual(event["status"], "succeeded")
+        self.assertEqual(event["repairs"], ["repaired"])
+
+    def test_cloud_cycle_respects_safety_stop(self) -> None:
+        with (
+            patch(
+                "delivery_supervisor.self_heal_delivery_controls",
+                return_value={"repairs": []},
+            ),
+            patch(
+                "runtime_control.runtime_cancel_requested",
+                return_value=True,
+            ),
+            patch(
+                "runtime_control.automation_enabled",
+                return_value=True,
+            ),
+            patch("scheduler.tick") as scheduler_tick,
+        ):
+            event = cloud_worker._run_autonomy_cycle()
+
+        scheduler_tick.assert_not_called()
+        self.assertEqual(event["status"], "blocked")
+
+
 class CloudWorkerStaticTests(unittest.TestCase):
     def test_cloud_worker_has_job_health_and_artifact_endpoints(self) -> None:
         source = Path("cloud_worker.py").read_text(
@@ -435,7 +519,11 @@ class CloudWorkerStaticTests(unittest.TestCase):
         )
         self.assertIn('"/health"', source)
         self.assertIn('"/v1/jobs"', source)
+        self.assertIn('"/v1/runtime/status"', source)
+        self.assertIn('"/v1/runtime/control"', source)
         self.assertIn('"/artifacts/"', source)
+        self.assertIn("_start_autonomy_runner", source)
+        self.assertIn("cloud_autonomy_runner", source)
         self.assertIn("CLOUD_EXECUTION_TOKEN", source)
         self.assertIn(
             "外部公開するCloud Worker",
