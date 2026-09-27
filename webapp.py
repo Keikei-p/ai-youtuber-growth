@@ -131,6 +131,7 @@ _storage_cache_at = 0.0
 _storage_cache: dict = {}
 _native_voice_cache_at = 0.0
 _native_voice_cache: dict = {}
+_process_git_sha = ""
 
 
 def _cached_storage_snapshot() -> dict:
@@ -197,6 +198,60 @@ def _run_captured(label: str, func) -> dict:
         _job_lock.release()
 
 
+def _current_git_sha() -> str:
+    git = shutil.which("git")
+    if not git or not (ROOT / ".git").exists():
+        return ""
+    try:
+        completed = subprocess.run(
+            [git, "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=10,
+        )
+        if completed.returncode == 0:
+            return completed.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _restart_for_external_code_update() -> None:
+    global _http_server
+
+    helper = ROOT / "restart_helper.pyw"
+    if not helper.exists():
+        _append_log(
+            "[UPDATE] restart_helper.pyw がないため"
+            "外部更新後の自動再起動を実行できません。"
+        )
+        return
+
+    executable = Path(sys.executable)
+    if os.name == "nt":
+        pythonw = executable.with_name("pythonw.exe")
+        if pythonw.exists():
+            executable = pythonw
+
+    _stop_event.set()
+    subprocess.Popen(
+        [str(executable), str(helper)],
+        cwd=str(ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=(
+            subprocess.CREATE_NO_WINDOW
+            if os.name == "nt" else 0
+        ),
+    )
+    if _http_server is not None:
+        threading.Timer(0.5, _http_server.shutdown).start()
+
+
 def _candidate_voicevox_paths() -> list[Path]:
     candidates: list[Path] = []
     if settings.voicevox_exe:
@@ -259,7 +314,29 @@ def _cycle_worker() -> None:
     while not _stop_event.is_set():
         _wake_event.clear()
         try:
+            current_head = _current_git_sha()
+            if (
+                _process_git_sha
+                and current_head
+                and current_head != _process_git_sha
+            ):
+                _append_log(
+                    "[UPDATE] Git HEAD更新を検出。"
+                    "旧コードで次サイクルを実行せず自動再起動します。"
+                )
+                _restart_for_external_code_update()
+                return
+
             if automation_enabled():
+                # Web常駐中も期限投稿をAIサービス起動より先に処理する。
+                # VOICEVOX等の起動待ちで投稿時刻が遅れるのを防ぐ。
+                due_result = _run_captured("期限投稿優先", run_due)
+                if not due_result.get("ok"):
+                    _append_log(
+                        "[AUTO-POST] due-first error: "
+                        + str(due_result.get("message") or "")
+                    )
+
                 _ensure_local_services()
                 result = _run_captured("自動サイクル", tick)
                 with _state_lock:
@@ -686,6 +763,7 @@ def _remove_wake_task() -> str:
 
 def _night_test_mode() -> str:
     # 無料・安全なローカルテスト。YouTubeには自動投稿しない。
+    disarm_production_autonomy()
     set_automation_enabled(True)
     set_auto_upload_enabled(False)
     set_upload_privacy("private")
@@ -1380,9 +1458,11 @@ async function refresh(){
       '<div class="row"><span><b>'+escapeHtml(x[0])+'</b><div class="small">'+escapeHtml(x[2])+'</div></span>'+badge(x[1])+'</div>'
     ).join('');
     const da=state.daily_auto||{};
+    const privacyLabels={private:'非公開',unlisted:'限定公開',public:'公開'};
+    const privacyLabel=privacyLabels[state.privacy]||state.privacy||'不明';
     dailyAutoStatus.textContent=da.enabled
-      ? ('ON / 毎日'+da.posts_per_day+'本 / '+escapeHtml(da.post_times||''))
-      : 'OFF';
+      ? ('ON / 毎日'+da.posts_per_day+'本 / '+escapeHtml(da.post_times||'')+' / 公開設定: '+privacyLabel)
+      : ('OFF / 公開設定: '+privacyLabel);
     [1,2,3].forEach(n=>{
       const el=document.getElementById('dailyAuto'+n);
       if(el) el.className=(da.enabled&&Number(da.preset)===n)?'primary':'';
@@ -1704,7 +1784,9 @@ async function saveOperationSettings(){
 
 async function setDailyAuto(count){
   const label=count===0?'毎日自動投稿を停止':'毎日'+count+'本の自動投稿をON';
-  if(!confirm(label+'にします。公開設定は現在の設定を使います。よろしいですか？')) return;
+  const privacyLabels={private:'非公開',unlisted:'限定公開',public:'公開'};
+  const privacyLabel=privacyLabels[(state&&state.privacy)||'private']||((state&&state.privacy)||'private');
+  if(!confirm(label+'にします。\n現在の公開設定: '+privacyLabel+'\n\nこの設定でよろしいですか？')) return;
   try{
     const data=await api('/api/daily-auto',{count:Number(count)});
     alert(data.message);
@@ -1928,6 +2010,7 @@ class Handler(BaseHTTPRequestHandler):
                 count = int(body.get("count") or 0)
                 if count == 0:
                     status = disable_daily_auto()
+                    disarm_production_autonomy()
                     _wake_event.set()
                     self._json({
                         "ok": True,
@@ -2102,6 +2185,7 @@ class Handler(BaseHTTPRequestHandler):
                     request_runtime_cancel()
                     set_automation_enabled(False)
                     set_auto_upload_enabled(False)
+                    disarm_production_autonomy()
                     set_ai_video_enabled(False)
                     cancelled = abort_full_test("安全停止")
                     _wake_event.set()
@@ -2361,10 +2445,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run(open_browser: bool = True) -> None:
-    global _http_server
+    global _http_server, _process_git_sha
 
     init_db()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _process_git_sha = _current_git_sha()
 
     # 自動運転がONなのにWindowsタスクが消失/古い場合は、
     # 管理画面起動時に毎回再登録して自己修復する。
@@ -2411,15 +2496,19 @@ def run(open_browser: bool = True) -> None:
             webbrowser.open(url)
         return
 
-    _ensure_local_services()
-    _consume_full_test_request()
-
     worker = threading.Thread(
         target=_cycle_worker,
         name="mirai-cycle",
         daemon=True,
     )
     worker.start()
+
+    # 自動運転中はworkerが「投稿判定→サービス起動」の順で行う。
+    # 自動運転OFF時だけ、手動スタジオ利用のためここでサービスを準備する。
+    if not automation_enabled():
+        _ensure_local_services()
+
+    _consume_full_test_request()
 
     print(f"[WEB] ミライ管理画面: {url}")
     if open_browser:

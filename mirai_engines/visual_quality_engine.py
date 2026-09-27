@@ -62,11 +62,40 @@ def analyze_image(image: Image.Image, *, asset_type: str = "image") -> VisualRep
     if width <= 0 or height <= 0:
         issues.append(VisualIssue("invalid_dimensions", "critical", "画像サイズが不正です。"))
         score -= 100
+    elif asset_type == "thumbnail":
+        if width <= height:
+            issues.append(
+                VisualIssue(
+                    "thumbnail_not_landscape",
+                    "warning",
+                    "YouTubeサムネイル向けの横長構図になっていません。",
+                )
+            )
+            score -= 16
     elif height <= width:
         issues.append(VisualIssue("not_vertical", "warning", "Shorts向けの縦構図になっていません。"))
         score -= 16
 
-    if width < 384 or height < 576:
+    if asset_type == "thumbnail":
+        if width < 640 or height < 360:
+            issues.append(
+                VisualIssue(
+                    "thumbnail_low_resolution",
+                    "warning",
+                    "YouTubeサムネイルの解像度が低すぎます。",
+                )
+            )
+            score -= 22
+        elif width < 1280 or height < 720:
+            issues.append(
+                VisualIssue(
+                    "thumbnail_resolution_below_target",
+                    "warning",
+                    "YouTubeサムネイルが1280x720推奨値未満です。",
+                )
+            )
+            score -= 7
+    elif width < 384 or height < 576:
         issues.append(VisualIssue("low_resolution", "warning", "生成画像の解像度が低すぎます。"))
         score -= 22
     elif width < 512 or height < 768:

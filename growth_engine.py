@@ -2,7 +2,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from learner import build_channel_strategy, build_learning_note
+from learner import (
+    build_channel_strategy,
+    build_learning_note,
+    build_success_pattern_memory,
+)
 from mirai_engines.evolution_controller import (
     harvest_final_video,
     harvest_pending_final_examples,
@@ -109,6 +113,11 @@ def run_growth_cycle() -> int:
         history = analytics_history(limit=60)
         strategy = build_channel_strategy(history)
         set_channel_state("growth_strategy", strategy)
+        success_memory = build_success_pattern_memory(history)
+        set_channel_state(
+            "success_pattern_memory",
+            json.dumps(success_memory, ensure_ascii=False),
+        )
         visual_strategy = VisualLearningMemory().build_strategy()
         print("[GROWTH] チャンネル成長戦略を更新しました。")
         print(f"         {strategy}")

@@ -155,6 +155,14 @@ def plan_ideas(character: dict, recent: list[dict], count: int | None = None) ->
         "autonomous_planner_guidance",
         "",
     )
+    market_guidance = get_channel_state(
+        "market_research_guidance",
+        "",
+    )
+    success_patterns = get_channel_state(
+        "success_pattern_memory",
+        "",
+    )
 
     if not client.available():
         return fallback_ideas(recent, count)
@@ -174,6 +182,12 @@ AI改善センターの最新提案:
 
 自動学習した企画ガイダンス:
 {autonomous_guidance or "まだなし"}
+
+現在の市場調査から抽出した成功パターン:
+{market_guidance or "まだなし"}
+
+自分の過去動画から記憶した成功・改善パターン:
+{success_patterns or "まだなし"}
 
 直近動画:
 {json.dumps(recent, ensure_ascii=False)}

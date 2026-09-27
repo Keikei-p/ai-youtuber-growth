@@ -12,7 +12,6 @@ from gpu_manager import unload_ollama_model, release_torch_cuda_cache
 from production_pipeline import produce_media
 from metadata import build_metadata
 from runtime_control import (
-    clear_runtime_cancel,
     posts_per_day,
     runtime_cancel_requested,
 )
@@ -25,9 +24,13 @@ from storage import (
     init_db,
     get_channel_state,
     mark_uploaded,
+    pending_upload_receipt,
+    record_upload_receipt,
     recent_videos,
     save_video,
     set_channel_state,
+    set_upload_receipt_thumbnail,
+    update_upload_receipt_verification,
     update_video_output,
     video_by_id,
 )
@@ -57,6 +60,8 @@ def upload_results(
         print("[UPLOAD] DRY_RUN=true のためYouTube投稿は実行しません。")
         return
 
+    from youtube.post_verifier import verify_uploaded_video
+    from youtube.thumbnail import set_custom_thumbnail
     from youtube.uploader import upload_video
 
     effective_privacy = privacy_status or settings.youtube_privacy_status
@@ -90,19 +95,86 @@ def upload_results(
                 )
                 continue
 
-            youtube_id = upload_video(
-                video_path=Path(item["output_path"]),
-                title=item["title"],
-                description=item.get("description", ""),
-                tags=item.get("tags", []),
-                privacy_status=effective_privacy,
-                category_id=settings.youtube_category_id,
-                default_language=settings.youtube_default_language,
-                # ミライはAI音声・AI画像/映像を用いるため安全側で常時開示。
-                contains_synthetic_media=True,
+            receipt = pending_upload_receipt(int(item["id"]))
+            if receipt:
+                youtube_id = str(receipt["youtube_video_id"])
+                title = str(receipt.get("expected_title") or item["title"])
+                description = str(
+                    receipt.get("expected_description")
+                    or item.get("description", "")
+                )
+            else:
+                title = str(item["title"])
+                description = str(item.get("description", ""))
+                youtube_id = upload_video(
+                    video_path=Path(item["output_path"]),
+                    title=title,
+                    description=description,
+                    tags=item.get("tags", []),
+                    privacy_status=effective_privacy,
+                    category_id=settings.youtube_category_id,
+                    default_language=settings.youtube_default_language,
+                    contains_synthetic_media=True,
+                )
+                record_upload_receipt(
+                    int(item["id"]),
+                    youtube_id,
+                    source="direct_upload",
+                    expected_title=title,
+                    expected_description=description,
+                    expected_privacy=effective_privacy,
+                    thumbnail_path=str(
+                        item.get("thumbnail_path") or ""
+                    ) or None,
+                )
+                receipt = pending_upload_receipt(int(item["id"]))
+                if not receipt:
+                    raise RuntimeError(
+                        "YouTube ID取得後の投稿レシート保存に失敗しました。"
+                    )
+
+            verification = verify_uploaded_video(
+                youtube_id,
+                expected_title=title,
+                expected_description=description,
+                expected_privacy=effective_privacy,
             )
+            update_upload_receipt_verification(
+                int(item["id"]),
+                status="verified",
+                detail=verification,
+            )
+
+            thumbnail_path = str(
+                receipt.get("thumbnail_path")
+                or item.get("thumbnail_path")
+                or ""
+            ).strip()
+            if thumbnail_path and not bool(receipt.get("thumbnail_set")):
+                try:
+                    thumb_result = set_custom_thumbnail(
+                        youtube_id,
+                        thumbnail_path,
+                    )
+                    if thumb_result.get("ok"):
+                        set_upload_receipt_thumbnail(
+                            int(item["id"]),
+                            thumbnail_set=True,
+                        )
+                except Exception as thumb_exc:
+                    record_failure(
+                        "youtube.thumbnail",
+                        thumb_exc,
+                        {
+                            "video_id": item.get("id"),
+                            "youtube_video_id": youtube_id,
+                        },
+                    )
+
+
             item["youtube_video_id"] = youtube_id
             item["status"] = "uploaded"
+            item["post_verification"] = verification
             mark_uploaded(
                 item["id"],
                 youtube_id,
@@ -111,7 +183,7 @@ def upload_results(
             )
             print(
                 f"[UPLOAD] #{item['id']} -> YouTube ID {youtube_id} "
-                f"[{effective_privacy}]"
+                f"[{effective_privacy}] verified"
             )
             if cleanup_local:
                 try:
@@ -127,11 +199,17 @@ def upload_results(
                     ):
                         item["output_path"] = None
                 except Exception as cleanup_exc:
-                    print(f"[CLEANUP] 投稿は成功済みですが削除処理でエラー: {cleanup_exc}")
-            else:
-                print("[TEST-UPLOAD] 確認用にローカル動画を残します。")
+                    print(
+                        "[CLEANUP] 投稿は確認済みですが削除処理でエラー: "
+                        f"{cleanup_exc}"
+                    )
         except Exception as exc:
             item["upload_error"] = str(exc)
+            record_failure(
+                "youtube.direct_upload",
+                exc,
+                {"video_id": item.get("id")},
+            )
             print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
 
 def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict | None:
@@ -189,6 +267,7 @@ def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict 
 FIRST_EPISODE_STATE_KEY = "mirai_first_episode_completed"
 
 
+
 def _first_episode_package() -> dict:
     """初回だけ使う固定の自己紹介。2本目以降は通常の学習型企画へ戻す。"""
     script = (
@@ -211,6 +290,33 @@ def _first_episode_package() -> dict:
         },
         "metadata": {
             "title": "今日から、完全AIユーチューバーになります。【第1話】",
+            "title_candidates": [
+                {
+                    "title": "今日から、完全AIユーチューバーになります。【第1話】",
+                    "score": 96,
+                    "reasons": ["content_match", "series_start"],
+                },
+                {
+                    "title": "AIが自分でYouTubeを運営したらどうなる？【第1話】",
+                    "score": 92,
+                    "reasons": ["curiosity", "content_match"],
+                },
+                {
+                    "title": "企画から投稿改善まで、AIだけで始めます",
+                    "score": 88,
+                    "reasons": ["direct", "content_match"],
+                },
+                {
+                    "title": "成長するAI YouTuber「ミライ」始動",
+                    "score": 86,
+                    "reasons": ["brand", "series_start"],
+                },
+                {
+                    "title": "AIが自分の再生数を見て成長するチャンネル、始めます",
+                    "score": 84,
+                    "reasons": ["growth_story", "content_match"],
+                },
+            ],
             "description": (
                 "はじめまして、AIユーチューバー「ミライ」です。\n\n"
                 "企画・台本・音声・画像・動画制作・投稿後の分析まで、AI中心で運営し、"
@@ -245,7 +351,6 @@ def run_generation(
     """
     ensure_runtime_dirs()
     init_db()
-    clear_runtime_cancel()
     character = load_character()
     recent = recent_videos(30)
     target = target_override or posts_per_day()
@@ -357,6 +462,9 @@ def run_generation(
             "id": video_id,
             "idea": idea,
             "title": metadata["title"],
+            "title_candidates": list(
+                metadata.get("title_candidates") or []
+            ),
             "script": written["script"],
             "description": metadata["description"],
             "tags": metadata["tags"],

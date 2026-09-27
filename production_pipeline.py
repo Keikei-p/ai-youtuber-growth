@@ -20,9 +20,11 @@ from storage import (
     get_channel_state,
     mark_guest_used,
     update_video_output,
+    update_video_thumbnail,
 )
 from self_improvement import effective_scene_image_count, record_failure
 from mirai_engines.composer import MiraiComposer
+from mirai_engines.editorial_quality_engine import MiraiEditorialQualityEngine
 from mirai_engines.quality_engine import MiraiQualityEngine
 from mirai_engines.visual_learning import VisualLearningMemory
 from mirai_engines.visual_quality_engine import MiraiVisualQualityEngine
@@ -39,6 +41,7 @@ from studio.video_generator import (
 )
 from voice.provider import build_voice_provider
 from video.renderer import render_short
+from video.thumbnail import build_thumbnail_candidates
 from paths import AUDIO_DIR, VIDEO_DIR
 
 
@@ -589,9 +592,66 @@ def render_videos(results: list[dict], character: dict) -> None:
                 guest = item.get("guest") or {}
                 if guest.get("id"):
                     mark_guest_used(int(guest["id"]))
+                try:
+                    thumbnail = build_thumbnail_candidates(item)
+                    item["thumbnail"] = thumbnail
+                    item["thumbnail_path"] = thumbnail.get("path")
+                    update_video_thumbnail(
+                        int(item["id"]),
+                        str(thumbnail.get("path") or "") or None,
+                    )
+                    print(
+                        f"[PIPELINE][THUMBNAIL] #{item['id']} "
+                        f"best={thumbnail.get('score')}/100 / "
+                        f"{thumbnail.get('path')}"
+                    )
+                except Exception as thumb_exc:
+                    item["thumbnail_error"] = str(thumb_exc)
+                    record_failure(
+                        "thumbnail.generate",
+                        thumb_exc,
+                        {"video_id": item.get("id")},
+                    )
+                    print(
+                        f"[PIPELINE][THUMBNAIL] #{item['id']} "
+                        f"生成失敗。YouTube自動サムネイルで継続: {thumb_exc}"
+                    )
+
+                editorial = MiraiEditorialQualityEngine().inspect(
+                    item,
+                    technical_quality=quality,
+                )
+                item["editorial_quality"] = editorial
+                print(
+                    f"[PIPELINE][EDITORIAL] #{item['id']} "
+                    f"{'PASS' if editorial.get('passed') else 'FAIL'} "
+                    f"{editorial.get('score')}/100 / "
+                    f"{editorial.get('dimensions')}"
+                )
+                if not editorial.get("passed"):
+                    item["quality_passed"] = False
+                    item["status"] = "editorial_failed"
+                    update_video_output(
+                        item["id"],
+                        str(video_path),
+                        status="editorial_failed",
+                    )
+                    record_failure(
+                        "quality.editorial",
+                        "投稿前編集品質ゲート不合格",
+                        {
+                            "video_id": item.get("id"),
+                            "score": editorial.get("score"),
+                            "dimensions": editorial.get("dimensions"),
+                            "notes": editorial.get("notes"),
+                        },
+                    )
+
                 print(
                     f"[PIPELINE][QUALITY] #{item['id']} "
-                    f"PASS {quality.get('score')}/100"
+                    f"{'PASS' if item.get('quality_passed') else 'FAIL'} "
+                    f"technical={quality.get('score')}/100 "
+                    f"editorial={editorial.get('score')}/100"
                 )
             else:
                 item["status"] = "quality_failed"

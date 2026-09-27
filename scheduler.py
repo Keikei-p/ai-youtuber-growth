@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,7 @@ from runtime_control import (
 )
 from media_cleanup import cleanup_uploaded_media
 from storage import (
+    acquire_runtime_lock,
     acquire_upload_lock,
     active_guests,
     cancel_queued_videos,
@@ -41,19 +43,30 @@ from storage import (
     mark_uploaded,
     mark_video_queue_uploaded,
     occupied_schedule_times,
+    pending_upload_receipt,
+    record_upload_receipt,
     queue_item_for_video,
     queue_video,
     queued_items,
+    release_runtime_lock,
     release_upload_lock,
     reset_queue_for_video,
     get_channel_state,
     set_channel_state,
+    set_upload_receipt_thumbnail,
     update_queue_schedule,
+    update_upload_receipt_verification,
     video_by_id,
 )
 from voice.provider import voice_attribution_status, voice_provider_status
 from upload_recovery import recover_upload_failure
 from youtube.auth import get_credentials
+from youtube.post_verifier import (
+    UploadVerificationError,
+    verify_uploaded_video,
+)
+from youtube.thumbnail import set_custom_thumbnail
+from youtube.market_research import maybe_refresh_market_research
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -887,12 +900,124 @@ def regenerate_saved_video(video_id: int) -> dict:
 
 
 def _ensure_video_output(row: dict) -> dict:
-    output = str(row.get("output_path") or "").strip()
-    if output and Path(output).is_file():
-        return row
-    return regenerate_saved_video(
-        int(row.get("video_id") or row.get("id") or 0)
+    video_id = int(row.get("video_id") or row.get("id") or 0)
+    regeneration_requested = (
+        get_channel_state(
+            f"video_regeneration_requested_{video_id}",
+            "false",
+        ).strip().lower() == "true"
     )
+    output = str(row.get("output_path") or "").strip()
+    if (
+        not regeneration_requested
+        and output
+        and Path(output).is_file()
+    ):
+        return row
+    return regenerate_saved_video(video_id)
+
+
+def _try_set_thumbnail(
+    video_id: int,
+    youtube_id: str,
+    row: dict,
+    receipt: dict,
+) -> None:
+    thumbnail = str(
+        receipt.get("thumbnail_path")
+        or row.get("thumbnail_path")
+        or ""
+    ).strip()
+    if not thumbnail or bool(receipt.get("thumbnail_set")):
+        return
+
+    try:
+        result = set_custom_thumbnail(youtube_id, thumbnail)
+        if result.get("ok"):
+            set_upload_receipt_thumbnail(
+                video_id,
+                thumbnail_set=True,
+            )
+            print(
+                f"[YOUTUBE] #{video_id} custom thumbnail set"
+            )
+    except Exception as exc:
+        # チャンネル権限等でcustom thumbnail不可でも、
+        # YouTube自動サムネイルが存在すれば投稿完了は継続できる。
+        record_failure(
+            "youtube.thumbnail",
+            exc,
+            {
+                "video_id": video_id,
+                "youtube_video_id": youtube_id,
+                "thumbnail_path": thumbnail,
+            },
+        )
+        print(
+            f"[YOUTUBE] #{video_id} custom thumbnail skipped: {exc}"
+        )
+
+
+def _verify_receipt_and_finalize(
+    *,
+    video_id: int,
+    row: dict,
+    receipt: dict,
+    source: str,
+    previous_youtube_id: str | None = None,
+) -> dict:
+    youtube_id = str(receipt["youtube_video_id"])
+    try:
+        verification = verify_uploaded_video(
+            youtube_id,
+            expected_title=str(receipt.get("expected_title") or ""),
+            expected_description=str(
+                receipt.get("expected_description") or ""
+            ),
+            expected_privacy=str(
+                receipt.get("expected_privacy") or ""
+            ),
+        )
+    except UploadVerificationError as exc:
+        update_upload_receipt_verification(
+            video_id,
+            status=(
+                "failed"
+                if exc.terminal
+                else "processing"
+            ),
+            detail=exc.detail,
+            error=str(exc),
+        )
+        raise
+
+    # YouTube側の変換完了後にcustom thumbnailを設定する。
+    _try_set_thumbnail(video_id, youtube_id, row, receipt)
+
+    update_upload_receipt_verification(
+        video_id,
+        status="verified",
+        detail=verification,
+    )
+    uploaded_at = _now().isoformat(timespec="seconds")
+    privacy = str(
+        receipt.get("expected_privacy") or upload_privacy()
+    )
+    mark_uploaded(
+        video_id,
+        youtube_id,
+        uploaded_at,
+        privacy_status=privacy,
+        source=source,
+        replaced_youtube_video_id=previous_youtube_id,
+    )
+    set_channel_state("youtube_auth_attention", "false")
+    return {
+        "youtube_video_id": youtube_id,
+        "uploaded_at": uploaded_at,
+        "privacy": privacy,
+        "verification": verification,
+    }
 
 
 def upload_saved_video_now(
@@ -903,7 +1028,7 @@ def upload_saved_video_now(
 ) -> dict:
     """
     生成ライブラリから完成済み動画を即時投稿/再投稿する。
-    再投稿は新しいYouTube動画として作成し、旧IDは履歴へ保持する。
+    API応答だけで完了にせず、YouTube側処理完了まで確認する。
     """
     init_db()
     video_id = int(video_id)
@@ -928,6 +1053,28 @@ def upload_saved_video_now(
                 "youtube_video_id": existing,
                 "privacy": None,
             }
+
+        source = "library_repost" if force_reupload else "library_manual"
+        if not force_reupload:
+            receipt = pending_upload_receipt(video_id)
+            if receipt:
+                finalized = _verify_receipt_and_finalize(
+                    video_id=video_id,
+                    row=row,
+                    receipt=receipt,
+                    source=source,
+                    previous_youtube_id=existing or None,
+                )
+                mark_video_queue_uploaded(
+                    video_id,
+                    finalized["uploaded_at"],
+                )
+                return {
+                    "status": "verified_existing_upload",
+                    "video_id": video_id,
+                    "previous_youtube_video_id": existing or None,
+                    **finalized,
+                }
 
         row = _ensure_video_output(row)
         candidate = Path(str(row.get("output_path") or ""))
@@ -967,36 +1114,56 @@ def upload_saved_video_now(
                 default_language=settings.youtube_default_language,
                 contains_synthetic_media=True,
             )
+            record_upload_receipt(
+                video_id,
+                youtube_id,
+                source=source,
+                expected_title=title,
+                expected_description=description,
+                expected_privacy=privacy,
+                thumbnail_path=str(
+                    row.get("thumbnail_path") or ""
+                ) or None,
+            )
+            receipt = pending_upload_receipt(video_id)
+            if not receipt:
+                raise RuntimeError(
+                    "YouTube ID取得後の投稿レシート保存に失敗しました。"
+                )
+            finalized = _verify_receipt_and_finalize(
+                video_id=video_id,
+                row=row,
+                receipt=receipt,
+                source=source,
+                previous_youtube_id=existing or None,
+            )
         except Exception as exc:
             record_failure(
-                "youtube.manual_repost" if force_reupload else "youtube.manual_upload",
+                "youtube.manual_repost"
+                if force_reupload
+                else "youtube.manual_upload",
                 exc,
-                {"video_id": video_id, "previous_youtube_id": existing},
+                {
+                    "video_id": video_id,
+                    "previous_youtube_id": existing,
+                },
             )
             raise
 
-        uploaded_at = _now().isoformat(timespec="seconds")
-        source = "library_repost" if force_reupload else "library_manual"
-        mark_uploaded(
+        mark_video_queue_uploaded(
             video_id,
-            youtube_id,
-            uploaded_at,
-            privacy_status=privacy,
-            source=source,
-            replaced_youtube_video_id=existing or None,
+            finalized["uploaded_at"],
         )
-        mark_video_queue_uploaded(video_id, uploaded_at)
-        set_channel_state("youtube_auth_attention", "false")
         print(
-            f"[MANUAL-UPLOAD] #{video_id} -> {youtube_id} "
-            f"[{privacy}] source={source}"
+            f"[MANUAL-UPLOAD] #{video_id} -> "
+            f"{finalized['youtube_video_id']} "
+            f"[{privacy}] verified"
         )
         return {
             "status": "reuploaded" if force_reupload else "uploaded",
             "video_id": video_id,
-            "youtube_video_id": youtube_id,
             "previous_youtube_video_id": existing or None,
-            "privacy": privacy,
+            **finalized,
         }
     finally:
         release_upload_lock(video_id)
@@ -1119,8 +1286,13 @@ def run_due() -> None:
                 "false",
             ).strip().lower() != "true"
         )
+        production_armed = get_channel_state(
+            "production_autonomy_armed",
+            "false",
+        ).strip().lower() == "true"
         only_first_episode = (
-            automation_enabled()
+            production_armed
+            and automation_enabled()
             and first_pending
             and first_id.isdigit()
             and rows
@@ -1176,32 +1348,56 @@ def run_due() -> None:
 
             privacy = upload_privacy()
             title, description, tags = _safe_upload_metadata(row)
-            youtube_id = upload_video(
-                video_path=Path(output_path),
-                title=title,
-                description=description,
-                tags=tags,
-                privacy_status=privacy,
-                category_id=settings.youtube_category_id,
-                default_language=settings.youtube_default_language,
-                contains_synthetic_media=True,
-            )
-            uploaded_at = _now().isoformat(timespec="seconds")
-            mark_uploaded(
-                video_id,
-                youtube_id,
-                uploaded_at,
-                privacy_status=privacy,
+            receipt = pending_upload_receipt(video_id)
+
+            if receipt:
+                print(
+                    f"[AUTO-UPLOAD] #{video_id} 既存YouTubeレシート "
+                    f"{receipt['youtube_video_id']} を再確認します。"
+                )
+            else:
+                youtube_id = upload_video(
+                    video_path=Path(output_path),
+                    title=title,
+                    description=description,
+                    tags=tags,
+                    privacy_status=privacy,
+                    category_id=settings.youtube_category_id,
+                    default_language=settings.youtube_default_language,
+                    contains_synthetic_media=True,
+                )
+                record_upload_receipt(
+                    video_id,
+                    youtube_id,
+                    source="auto_schedule",
+                    expected_title=title,
+                    expected_description=description,
+                    expected_privacy=privacy,
+                    thumbnail_path=str(
+                        row.get("thumbnail_path") or ""
+                    ) or None,
+                )
+                receipt = pending_upload_receipt(video_id)
+                if not receipt:
+                    raise RuntimeError(
+                        "YouTube ID取得後の投稿レシート保存に失敗しました。"
+                    )
+
+            finalized = _verify_receipt_and_finalize(
+                video_id=video_id,
+                row=row,
+                receipt=receipt,
                 source="auto_schedule",
             )
+            uploaded_at = finalized["uploaded_at"]
+            youtube_id = finalized["youtube_video_id"]
             mark_queue_uploaded(
                 row["queue_id"],
                 uploaded_at,
             )
-            set_channel_state("youtube_auth_attention", "false")
             print(
                 f"[AUTO-UPLOAD] #{video_id} -> {youtube_id} "
-                f"[{privacy}]"
+                f"[{finalized['privacy']}] verified"
             )
             active_test = _full_test_state()
             test_ids = {
@@ -1273,7 +1469,7 @@ def show_queue() -> None:
             f"{relation} | {row['title']}"
         )
 
-def tick() -> None:
+def _tick_unlocked() -> None:
     delivery_state = self_heal_delivery_controls()
     if delivery_state.get("repairs"):
         print(
@@ -1317,6 +1513,17 @@ def tick() -> None:
         return
 
     # 第1話投稿後だけ通常の成長ループへ進む。
+    try:
+        market = maybe_refresh_market_research(min_hours=24)
+        if market.get("status") == "refreshed":
+            print(
+                "[MARKET] YouTube市場パターンを更新: "
+                f"sample={market.get('sample_size', 0)}"
+            )
+    except Exception as exc:
+        record_failure("market.research", exc)
+        print(f"[MARKET] 市場調査は次回へ延期: {exc}")
+
     run_growth_cycle()
     try:
         maybe_run_improvement_review(min_hours=12)
@@ -1337,6 +1544,26 @@ def tick() -> None:
             exc,
         )
         print(f"[NATIVE-TRAIN] 自動再学習を次回へ延期: {exc}")
+
+
+def tick() -> None:
+    init_db()
+    owner = f"pid={os.getpid()} / {_now().isoformat(timespec='seconds')}"
+    if not acquire_runtime_lock(
+        "scheduler_tick",
+        owner=owner,
+        ttl_minutes=180,
+    ):
+        print(
+            "[SCHEDULE] 別プロセスの自動サイクルが実行中のため"
+            "このtickはスキップします。"
+        )
+        return
+
+    try:
+        _tick_unlocked()
+    finally:
+        release_runtime_lock("scheduler_tick")
 
 def main() -> None:
     parser = argparse.ArgumentParser(

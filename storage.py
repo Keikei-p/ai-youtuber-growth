@@ -91,6 +91,18 @@ def init_db() -> None:
             likes INTEGER NOT NULL DEFAULT 0,
             comments INTEGER NOT NULL DEFAULT 0,
             avg_view_percentage REAL NOT NULL DEFAULT 0,
+            average_view_duration REAL NOT NULL DEFAULT 0,
+            estimated_minutes_watched REAL NOT NULL DEFAULT 0,
+            shares INTEGER NOT NULL DEFAULT 0,
+            subscribers_gained INTEGER NOT NULL DEFAULT 0,
+            subscribers_lost INTEGER NOT NULL DEFAULT 0,
+            engaged_views INTEGER NOT NULL DEFAULT 0,
+            impressions INTEGER NOT NULL DEFAULT 0,
+            ctr REAL NOT NULL DEFAULT 0,
+            traffic_json TEXT NOT NULL DEFAULT '[]',
+            retention_at_3_seconds REAL NOT NULL DEFAULT 0,
+            retention_at_15_seconds REAL NOT NULL DEFAULT 0,
+            retention_curve_json TEXT NOT NULL DEFAULT '[]',
             score REAL NOT NULL DEFAULT 0,
             note TEXT NOT NULL DEFAULT '',
             UNIQUE(video_id, checkpoint_hours),
@@ -136,6 +148,29 @@ def init_db() -> None:
             owner TEXT NOT NULL DEFAULT '',
             FOREIGN KEY(video_id) REFERENCES videos(id)
         );
+
+        CREATE TABLE IF NOT EXISTS runtime_locks (
+            name TEXT PRIMARY KEY,
+            acquired_at TEXT NOT NULL,
+            owner TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS youtube_upload_receipts (
+            video_id INTEGER PRIMARY KEY,
+            youtube_video_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
+            expected_title TEXT NOT NULL DEFAULT '',
+            expected_description TEXT NOT NULL DEFAULT '',
+            expected_privacy TEXT NOT NULL DEFAULT '',
+            thumbnail_path TEXT,
+            thumbnail_set INTEGER NOT NULL DEFAULT 0,
+            verification_status TEXT NOT NULL DEFAULT 'pending',
+            verification_json TEXT NOT NULL DEFAULT '{}',
+            last_error TEXT,
+            verified_at TEXT,
+            FOREIGN KEY(video_id) REFERENCES videos(id)
+        );
         """)
 
         video_columns = {
@@ -150,6 +185,34 @@ def init_db() -> None:
         if "guest_id" not in video_columns:
             conn.execute("ALTER TABLE videos ADD COLUMN guest_id INTEGER")
 
+        if "thumbnail_path" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN thumbnail_path TEXT")
+        if "post_verified_at" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN post_verified_at TEXT")
+
+        if "average_view_duration" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN average_view_duration REAL")
+        if "estimated_minutes_watched" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN estimated_minutes_watched REAL")
+        if "shares" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN shares INTEGER")
+        if "subscribers_gained" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN subscribers_gained INTEGER")
+        if "subscribers_lost" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN subscribers_lost INTEGER")
+        if "engaged_views" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN engaged_views INTEGER")
+        if "impressions" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN impressions INTEGER")
+        if "traffic_json" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN traffic_json TEXT NOT NULL DEFAULT '[]'")
+        if "retention_at_3_seconds" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN retention_at_3_seconds REAL")
+        if "retention_at_15_seconds" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN retention_at_15_seconds REAL")
+        if "retention_curve_json" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN retention_curve_json TEXT NOT NULL DEFAULT '[]'")
+
         queue_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(posting_queue)").fetchall()
@@ -158,6 +221,30 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE posting_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
             )
+
+        analytics_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(analytics_snapshots)").fetchall()
+        }
+        analytics_additions = {
+            "average_view_duration": "REAL NOT NULL DEFAULT 0",
+            "estimated_minutes_watched": "REAL NOT NULL DEFAULT 0",
+            "shares": "INTEGER NOT NULL DEFAULT 0",
+            "subscribers_gained": "INTEGER NOT NULL DEFAULT 0",
+            "subscribers_lost": "INTEGER NOT NULL DEFAULT 0",
+            "engaged_views": "INTEGER NOT NULL DEFAULT 0",
+            "impressions": "INTEGER NOT NULL DEFAULT 0",
+            "ctr": "REAL NOT NULL DEFAULT 0",
+            "traffic_json": "TEXT NOT NULL DEFAULT '[]'",
+            "retention_at_3_seconds": "REAL NOT NULL DEFAULT 0",
+            "retention_at_15_seconds": "REAL NOT NULL DEFAULT 0",
+            "retention_curve_json": "TEXT NOT NULL DEFAULT '[]'",
+        }
+        for column, definition in analytics_additions.items():
+            if column not in analytics_columns:
+                conn.execute(
+                    f"ALTER TABLE analytics_snapshots ADD COLUMN {column} {definition}"
+                )
 
         conn.execute(
             """
@@ -205,6 +292,7 @@ def dashboard_videos(limit: int = 30) -> list[dict[str, Any]]:
                 v.id, v.created_at, v.title, v.status, v.output_path,
                 v.youtube_video_id, v.uploaded_at, v.views, v.likes, v.comments,
                 v.avg_view_percentage, v.description, v.tags_json,
+                v.thumbnail_path, v.post_verified_at,
                 g.name AS guest_name,
                 q.scheduled_for, q.status AS queue_status, q.error AS queue_error
             FROM videos v
@@ -226,6 +314,7 @@ def video_by_id(video_id: int) -> dict[str, Any] | None:
                 v.status, v.output_path, v.youtube_video_id, v.uploaded_at,
                 v.views, v.likes, v.comments, v.avg_view_percentage,
                 v.description, v.tags_json, v.script, v.guest_id,
+                v.thumbnail_path, v.post_verified_at,
                 g.name AS guest_name
             FROM videos v
             LEFT JOIN guests g ON g.id = v.guest_id
@@ -369,6 +458,186 @@ def mark_uploaded(
             )
 
 
+def update_video_thumbnail(video_id: int, thumbnail_path: str | None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE videos SET thumbnail_path = ? WHERE id = ?",
+            (str(thumbnail_path) if thumbnail_path else None, int(video_id)),
+        )
+
+
+def record_upload_receipt(
+    video_id: int,
+    youtube_video_id: str,
+    *,
+    source: str,
+    expected_title: str,
+    expected_description: str,
+    expected_privacy: str,
+    thumbnail_path: str | None = None,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO youtube_upload_receipts (
+                video_id, youtube_video_id, created_at, source,
+                expected_title, expected_description, expected_privacy,
+                thumbnail_path, thumbnail_set, verification_status,
+                verification_json, last_error, verified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', '{}', NULL, NULL)
+            ON CONFLICT(video_id) DO UPDATE SET
+                youtube_video_id = excluded.youtube_video_id,
+                created_at = excluded.created_at,
+                source = excluded.source,
+                expected_title = excluded.expected_title,
+                expected_description = excluded.expected_description,
+                expected_privacy = excluded.expected_privacy,
+                thumbnail_path = excluded.thumbnail_path,
+                thumbnail_set = 0,
+                verification_status = 'pending',
+                verification_json = '{}',
+                last_error = NULL,
+                verified_at = NULL
+            """,
+            (
+                int(video_id),
+                str(youtube_video_id),
+                now,
+                str(source or ""),
+                str(expected_title or ""),
+                str(expected_description or ""),
+                str(expected_privacy or ""),
+                str(thumbnail_path) if thumbnail_path else None,
+            ),
+        )
+
+
+def pending_upload_receipt(video_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM youtube_upload_receipts
+            WHERE video_id = ?
+              AND verification_status IN ('pending', 'processing')
+            LIMIT 1
+            """,
+            (int(video_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_upload_receipt_thumbnail(video_id: int, *, thumbnail_set: bool) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE youtube_upload_receipts
+            SET thumbnail_set = ?
+            WHERE video_id = ?
+            """,
+            (1 if thumbnail_set else 0, int(video_id)),
+        )
+
+
+def update_upload_receipt_verification(
+    video_id: int,
+    *,
+    status: str,
+    detail: dict[str, Any] | None = None,
+    error: str = "",
+) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    verified_at = now if status == "verified" else None
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE youtube_upload_receipts
+            SET verification_status = ?,
+                verification_json = ?,
+                last_error = ?,
+                verified_at = COALESCE(?, verified_at)
+            WHERE video_id = ?
+            """,
+            (
+                str(status),
+                json.dumps(detail or {}, ensure_ascii=False),
+                str(error or "")[:2000] or None,
+                verified_at,
+                int(video_id),
+            ),
+        )
+        if status == "verified":
+            conn.execute(
+                "UPDATE videos SET post_verified_at = ? WHERE id = ?",
+                (now, int(video_id)),
+            )
+
+
+def upload_receipt(video_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM youtube_upload_receipts WHERE video_id = ? LIMIT 1",
+            (int(video_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def acquire_runtime_lock(
+    name: str,
+    *,
+    owner: str = "",
+    ttl_minutes: int = 180,
+) -> bool:
+    lock_name = str(name or "").strip()
+    if not lock_name:
+        raise ValueError("runtime lock name is required")
+
+    now = datetime.now(timezone.utc)
+    cutoff = now.timestamp() - max(5, int(ttl_minutes)) * 60
+    with connect() as conn:
+        # SELECT→INSERTの競合窓を潰すため、先にwrite lockを取得する。
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT acquired_at FROM runtime_locks WHERE name = ?",
+            (lock_name,),
+        ).fetchone()
+        if row:
+            try:
+                acquired = datetime.fromisoformat(str(row["acquired_at"]))
+                if acquired.tzinfo is None:
+                    acquired = acquired.replace(tzinfo=timezone.utc)
+                if acquired.timestamp() >= cutoff:
+                    return False
+            except Exception:
+                pass
+            conn.execute(
+                "DELETE FROM runtime_locks WHERE name = ?",
+                (lock_name,),
+            )
+
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO runtime_locks (
+                name, acquired_at, owner
+            ) VALUES (?, ?, ?)
+            """,
+            (
+                lock_name,
+                now.isoformat(timespec="seconds"),
+                str(owner or "")[:200],
+            ),
+        )
+        return int(cur.rowcount or 0) == 1
+
+def release_runtime_lock(name: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM runtime_locks WHERE name = ?",
+            (str(name or "").strip(),),
+        )
+
+
 def acquire_upload_lock(
     video_id: int,
     *,
@@ -378,6 +647,7 @@ def acquire_upload_lock(
     now = datetime.now(timezone.utc)
     cutoff = now.timestamp() - max(5, int(ttl_minutes)) * 60
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT acquired_at FROM youtube_upload_locks WHERE video_id = ?",
             (video_id,),
@@ -395,9 +665,10 @@ def acquire_upload_lock(
                 "DELETE FROM youtube_upload_locks WHERE video_id = ?",
                 (video_id,),
             )
-        conn.execute(
+
+        cur = conn.execute(
             """
-            INSERT INTO youtube_upload_locks (
+            INSERT OR IGNORE INTO youtube_upload_locks (
                 video_id, acquired_at, owner
             ) VALUES (?, ?, ?)
             """,
@@ -407,8 +678,7 @@ def acquire_upload_lock(
                 str(owner or "")[:200],
             ),
         )
-        return True
-
+        return int(cur.rowcount or 0) == 1
 
 def release_upload_lock(video_id: int) -> None:
     with connect() as conn:
@@ -456,7 +726,13 @@ def update_metrics(video_id: int, metrics: dict) -> None:
         conn.execute(
             """
             UPDATE videos
-            SET views = ?, likes = ?, comments = ?, avg_view_percentage = ?
+            SET views = ?, likes = ?, comments = ?,
+                avg_view_percentage = ?, average_view_duration = ?,
+                estimated_minutes_watched = ?, shares = ?,
+                subscribers_gained = ?, subscribers_lost = ?,
+                engaged_views = ?, impressions = ?, ctr = ?,
+                traffic_json = ?, retention_at_3_seconds = ?,
+                retention_at_15_seconds = ?, retention_curve_json = ?
             WHERE id = ?
             """,
             (
@@ -464,7 +740,25 @@ def update_metrics(video_id: int, metrics: dict) -> None:
                 int(metrics.get("likes") or 0),
                 int(metrics.get("comments") or 0),
                 float(metrics.get("averageViewPercentage") or 0),
-                video_id,
+                float(metrics.get("averageViewDuration") or 0),
+                float(metrics.get("estimatedMinutesWatched") or 0),
+                int(metrics.get("shares") or 0),
+                int(metrics.get("subscribersGained") or 0),
+                int(metrics.get("subscribersLost") or 0),
+                int(metrics.get("engagedViews") or 0),
+                int(metrics.get("impressions") or 0),
+                float(metrics.get("ctr") or 0),
+                json.dumps(
+                    metrics.get("trafficSources") or [],
+                    ensure_ascii=False,
+                ),
+                float(metrics.get("retentionAt3Seconds") or 0),
+                float(metrics.get("retentionAt15Seconds") or 0),
+                json.dumps(
+                    metrics.get("retentionCurve") or [],
+                    ensure_ascii=False,
+                ),
+                int(video_id),
             ),
         )
 
@@ -527,18 +821,41 @@ def save_analytics_snapshot(
             """
             INSERT OR REPLACE INTO analytics_snapshots (
                 video_id, checkpoint_hours, captured_at,
-                views, likes, comments, avg_view_percentage, score, note
+                views, likes, comments, avg_view_percentage,
+                average_view_duration, estimated_minutes_watched,
+                shares, subscribers_gained, subscribers_lost,
+                engaged_views, impressions, ctr, traffic_json,
+                retention_at_3_seconds, retention_at_15_seconds,
+                retention_curve_json, score, note
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                video_id,
-                checkpoint_hours,
+                int(video_id),
+                int(checkpoint_hours),
                 captured_at,
                 int(metrics.get("views") or 0),
                 int(metrics.get("likes") or 0),
                 int(metrics.get("comments") or 0),
                 float(metrics.get("averageViewPercentage") or 0),
+                float(metrics.get("averageViewDuration") or 0),
+                float(metrics.get("estimatedMinutesWatched") or 0),
+                int(metrics.get("shares") or 0),
+                int(metrics.get("subscribersGained") or 0),
+                int(metrics.get("subscribersLost") or 0),
+                int(metrics.get("engagedViews") or 0),
+                int(metrics.get("impressions") or 0),
+                float(metrics.get("ctr") or 0),
+                json.dumps(
+                    metrics.get("trafficSources") or [],
+                    ensure_ascii=False,
+                ),
+                float(metrics.get("retentionAt3Seconds") or 0),
+                float(metrics.get("retentionAt15Seconds") or 0),
+                json.dumps(
+                    metrics.get("retentionCurve") or [],
+                    ensure_ascii=False,
+                ),
                 float(score),
                 note,
             ),
@@ -551,7 +868,11 @@ def analytics_history(limit: int = 60) -> list[dict[str, Any]]:
             SELECT
                 s.video_id, s.checkpoint_hours, s.captured_at,
                 s.views, s.likes, s.comments, s.avg_view_percentage,
-                s.score, s.note,
+                s.average_view_duration, s.estimated_minutes_watched,
+                s.shares, s.subscribers_gained, s.subscribers_lost,
+                s.engaged_views, s.impressions, s.ctr, s.traffic_json,
+                s.retention_at_3_seconds, s.retention_at_15_seconds,
+                s.retention_curve_json, s.score, s.note,
                 v.idea, v.angle, v.title
             FROM analytics_snapshots s
             JOIN videos v ON v.id = s.video_id
@@ -797,7 +1118,7 @@ def due_queue(now_iso: str, oldest_allowed_iso: str | None = None) -> list[dict[
                 SELECT
                     q.id AS queue_id, q.video_id, q.scheduled_for, q.attempts,
                     v.title, v.description, v.tags_json, v.guest_id,
-                    v.script, v.output_path
+                    v.script, v.output_path, v.thumbnail_path
                 FROM posting_queue q
                 JOIN videos v ON v.id = q.video_id
                 WHERE q.status = 'queued'
@@ -868,6 +1189,23 @@ def mark_queue_error(queue_id: int, error: str) -> None:
             """,
             (error[:1000], queue_id),
         )
+
+def set_queue_failed(
+    queue_id: int,
+    error: str,
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE posting_queue
+            SET status = 'failed',
+                error = ?,
+                attempts = MAX(attempts, 5)
+            WHERE id = ?
+            """,
+            (str(error)[:1000], int(queue_id)),
+        )
+
 
 def set_queue_recovery(
     queue_id: int,

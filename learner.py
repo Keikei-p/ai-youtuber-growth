@@ -12,9 +12,24 @@ def build_learning_note(
     likes = float(metrics.get("likes") or 0)
     comments = float(metrics.get("comments") or 0)
     retention = float(metrics.get("averageViewPercentage") or 0)
+    avg_duration = float(metrics.get("averageViewDuration") or 0)
+    watch_minutes = float(metrics.get("estimatedMinutesWatched") or 0)
+    shares = float(metrics.get("shares") or 0)
+    subscribers = float(metrics.get("subscribersGained") or 0)
+    impressions = float(metrics.get("impressions") or 0)
+    ctr = float(metrics.get("ctr") or 0)
+    traffic = list(metrics.get("trafficSources") or [])
+    retention_3 = float(
+        metrics.get("retentionAt3Seconds") or 0
+    ) * 100.0
+    retention_15 = float(
+        metrics.get("retentionAt15Seconds") or 0
+    ) * 100.0
 
     like_rate = (likes / views * 100) if views else 0.0
     comment_rate = (comments / views * 100) if views else 0.0
+    share_rate = (shares / views * 100) if views else 0.0
+    sub_rate = (subscribers / views * 100) if views else 0.0
 
     notes: list[str] = [
         f"{checkpoint_hours}時間時点の分析。"
@@ -37,6 +52,40 @@ def build_learning_note(
         notes.append(
             "視聴維持率はまだ取得できていないため、維持率だけで良し悪しを決めない。"
         )
+
+    if retention_3 > 0:
+        if retention_3 < 65:
+            notes.append(
+                f"冒頭3秒維持{retention_3:.0f}%で離脱が大きい。"
+                "最初の説明を削り、1秒目から結論/異変を見せる。"
+            )
+        elif retention_3 >= 85:
+            notes.append(
+                f"冒頭3秒維持{retention_3:.0f}%が強い。"
+                "このフック構造を別テーマへ転用する。"
+            )
+
+    if retention_15 > 0:
+        if retention_15 < 45:
+            notes.append(
+                f"15秒時点維持{retention_15:.0f}%が弱い。"
+                "5〜15秒の説明を圧縮し、展開を早める。"
+            )
+        elif retention_15 >= 70:
+            notes.append(
+                f"15秒時点維持{retention_15:.0f}%が強い。"
+                "中盤の展開速度を維持する。"
+            )
+
+    if impressions > 0:
+        if ctr >= 8:
+            notes.append(
+                "CTRが強い。タイトルとサムネイルの構造を別テーマでも再利用する。"
+            )
+        elif ctr < 3:
+            notes.append(
+                "CTRが弱い。タイトルを短くし、サムネイルの主役と訴求を1つに絞る。"
+            )
 
     if views < 20:
         notes.append(
@@ -61,6 +110,44 @@ def build_learning_note(
                 "コメント誘導は短くし、答えやすい具体的な質問にする。"
             )
 
+        if share_rate >= 0.5:
+            notes.append(
+                "共有率が良い。人に見せたくなる驚き・共感の型を残す。"
+            )
+        if sub_rate >= 0.5:
+            notes.append(
+                "登録転換が良い。キャラクター性と次話予告を維持する。"
+            )
+        elif views >= 100 and subscribers <= 0:
+            notes.append(
+                "視聴はあるが登録増が弱い。シリーズ性と次話を見る理由を強める。"
+            )
+
+    if traffic:
+        ranked = sorted(
+            traffic,
+            key=lambda row: int(row.get("views") or 0),
+            reverse=True,
+        )
+        top_source = str((ranked[0] or {}).get("source") or "")
+        if top_source == "SHORTS":
+            notes.append(
+                "Shortsフィード流入が中心。最初の1〜3秒とループ感を優先する。"
+            )
+        elif top_source == "YT_SEARCH":
+            notes.append(
+                "検索流入が中心。タイトル・説明文で検索意図との一致を維持する。"
+            )
+        elif top_source:
+            notes.append(
+                f"主な流入は{top_source}。流入面に合う導入と見せ方を次回検証する。"
+            )
+
+    if avg_duration > 0 and watch_minutes > 0:
+        notes.append(
+            f"平均視聴{avg_duration:.1f}秒・総視聴{watch_minutes:.1f}分も判断材料にする。"
+        )
+
     if checkpoint_hours >= 168:
         notes.append(
             "7日データなので、一時的な伸びより再現できる型を優先して判断する。"
@@ -70,10 +157,22 @@ def build_learning_note(
             "72時間データなので、24時間時点との差も見て伸び続ける企画か判断する。"
         )
 
-    retention_score = retention * 0.65 if retention > 0 else 32.5
-    engagement_score = min(like_rate, 10) * 2.0 + min(comment_rate, 5) * 1.5
-    volume_score = min(math.log10(max(views, 1) + 1) * 4.0, 12.0)
-    score = min(100.0, retention_score + engagement_score + volume_score)
+    retention_score = retention * 0.58 if retention > 0 else 29.0
+    engagement_score = (
+        min(like_rate, 10) * 1.8
+        + min(comment_rate, 5) * 1.5
+        + min(share_rate, 3) * 1.8
+        + min(sub_rate, 3) * 2.0
+    )
+    reach_score = min(max(ctr, 0), 15) * 1.0 if impressions > 0 else 0.0
+    volume_score = min(
+        math.log10(max(views, 1) + 1) * 4.0,
+        10.0,
+    )
+    score = min(
+        100.0,
+        retention_score + engagement_score + reach_score + volume_score,
+    )
 
     return " ".join(notes), round(score, 2)
 
@@ -116,6 +215,84 @@ def _fallback_strategy(history: list[dict]) -> str:
         "1本は新しい実験にする。"
     )
     return " ".join(parts)
+
+def build_success_pattern_memory(
+    history: list[dict],
+) -> dict:
+    latest_by_video: dict[int, dict] = {}
+    for row in history:
+        video_id = int(row.get("video_id") or 0)
+        if video_id <= 0:
+            continue
+        current = latest_by_video.get(video_id)
+        if (
+            current is None
+            or int(row.get("checkpoint_hours") or 0)
+            > int(current.get("checkpoint_hours") or 0)
+        ):
+            latest_by_video[video_id] = row
+
+    ranked = sorted(
+        latest_by_video.values(),
+        key=lambda row: float(row.get("score") or 0),
+        reverse=True,
+    )
+    top = ranked[:5]
+    patterns: list[dict] = []
+    for row in top:
+        signals: list[str] = []
+        retention = float(row.get("avg_view_percentage") or 0)
+        ctr = float(row.get("ctr") or 0)
+        comments = int(row.get("comments") or 0)
+        shares = int(row.get("shares") or 0)
+        subscribers = int(row.get("subscribers_gained") or 0)
+        retention_3 = float(row.get("retention_at_3_seconds") or 0) * 100
+        retention_15 = float(row.get("retention_at_15_seconds") or 0) * 100
+
+        if retention_3 >= 85:
+            signals.append("冒頭3秒フックが強い")
+        elif 0 < retention_3 < 65:
+            signals.append("冒頭3秒の離脱改善が必要")
+        if retention_15 >= 70:
+            signals.append("5〜15秒の展開が強い")
+
+        if retention >= 70:
+            signals.append("強い視聴維持: 冒頭とテンポの型を再利用")
+        elif retention > 0:
+            signals.append("維持率改善余地: 導入を短くする")
+        if ctr >= 6:
+            signals.append("タイトル/サムネイル訴求が比較的強い")
+        if comments > 0:
+            signals.append("視聴者参加につながった")
+        if shares > 0:
+            signals.append("共有される要素があった")
+        if subscribers > 0:
+            signals.append("シリーズ/キャラクター転換に寄与")
+
+        patterns.append({
+            "video_id": int(row.get("video_id") or 0),
+            "title": str(row.get("title") or ""),
+            "idea": str(row.get("idea") or ""),
+            "angle": str(row.get("angle") or ""),
+            "checkpoint_hours": int(row.get("checkpoint_hours") or 0),
+            "score": float(row.get("score") or 0),
+            "views": int(row.get("views") or 0),
+            "retention": retention,
+            "ctr": ctr,
+            "comments": comments,
+            "signals": signals,
+            "note": str(row.get("note") or ""),
+        })
+
+    return {
+        "sample_size": len(latest_by_video),
+        "top_patterns": patterns,
+        "instruction": (
+            "上位動画のタイトルや内容をコピーせず、"
+            "signalsにある構成・冒頭・参加性の型だけを別企画へ転用する。"
+        ),
+    }
+
 
 def build_channel_strategy(history: list[dict]) -> str:
     fallback = _fallback_strategy(history)

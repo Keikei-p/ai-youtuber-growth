@@ -9,6 +9,7 @@ from runtime_control import post_times
 from storage import (
     connect,
     set_channel_state,
+    set_queue_failed,
     set_queue_recovery,
 )
 
@@ -40,6 +41,37 @@ def classify_upload_failure(error: Exception | str) -> dict[str, Any]:
             "code": "rate_limit",
             "retryable": True,
             "safe_action": "retry_later",
+        }
+    if any(x in text for x in (
+        "youtube_processing_pending",
+        "動画処理完了を確認できません",
+        "processing pending",
+    )):
+        return {
+            "code": "youtube_processing_pending",
+            "retryable": True,
+            "safe_action": "verify_same_video_later",
+        }
+    if any(x in text for x in (
+        "youtube_processing_failed",
+        "投稿後処理に失敗",
+        "transcodefailed",
+        "conversion",
+        "invalidfile",
+    )):
+        return {
+            "code": "youtube_processing_failed",
+            "retryable": True,
+            "safe_action": "regenerate_then_retry",
+        }
+    if any(x in text for x in (
+        "youtube_metadata_mismatch",
+        "投稿情報が期待値と一致",
+    )):
+        return {
+            "code": "youtube_metadata_mismatch",
+            "retryable": True,
+            "safe_action": "verify_metadata_later",
         }
     if any(x in text for x in (
         "500", "502", "503", "504", "backenderror",
@@ -172,6 +204,115 @@ def recent_recovery_events(limit: int = 20) -> list[dict[str, Any]]:
     return result
 
 
+def known_resolution(
+    failure_code: str,
+) -> dict[str, Any] | None:
+    _ensure_table()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                created_at, failure_code, action, result,
+                message, context_json
+            FROM upload_recovery_events
+            WHERE failure_code = ?
+              AND result = 'handled'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(failure_code),),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    try:
+        item["context"] = json.loads(
+            item.pop("context_json") or "{}"
+        )
+    except Exception:
+        item["context"] = {}
+        item.pop("context_json", None)
+    return item
+
+
+def _recovery_occurrences(
+    video_id: int,
+    failure_code: str,
+) -> int:
+    _ensure_table()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM upload_recovery_events
+            WHERE video_id = ?
+              AND failure_code = ?
+            """,
+            (int(video_id), str(failure_code)),
+        ).fetchone()
+    return int((row or {})["c"] or 0) if row else 0
+
+
+def _failure_knowledge(code: str) -> dict[str, str]:
+    mapping = {
+        "oauth": {
+            "cause": "OAuth/refresh tokenが無効または権限不足",
+            "fix": "自動突破せず再認証要求を保存",
+            "prevention": "バックグラウンドでブラウザ認証を起動しない",
+        },
+        "network": {
+            "cause": "ネットワーク未復旧・DNS・接続断",
+            "fix": "ネット復帰後へ再スケジュール",
+            "prevention": "wake後の疎通待機と回復トリガーを使用",
+        },
+        "youtube_transient": {
+            "cause": "YouTube/Google APIの一時5xx",
+            "fix": "再開可能upload/時間差再試行",
+            "prevention": "同一障害の短時間連打を避ける",
+        },
+        "rate_limit": {
+            "cause": "APIレート制限",
+            "fix": "長めのバックオフ",
+            "prevention": "短時間のAPI連打を避ける",
+        },
+        "quota": {
+            "cause": "YouTube API日次quota/上限",
+            "fix": "翌投稿枠へ延期",
+            "prevention": "市場調査・投稿API回数を必要最小限にする",
+        },
+        "missing_file": {
+            "cause": "投稿対象MP4欠損",
+            "fix": "保存済み台本から動画再生成",
+            "prevention": "投稿確認前にローカル動画を削除しない",
+        },
+        "youtube_processing_pending": {
+            "cause": "YouTube側エンコード処理が未完了",
+            "fix": "新規投稿せず同じvideoIdを再確認",
+            "prevention": "upload receiptでremote IDを永続化",
+        },
+        "youtube_processing_failed": {
+            "cause": "YouTube側変換/処理失敗",
+            "fix": "動画を再レンダリングして新規投稿候補へ",
+            "prevention": "ffprobe品質ゲート後だけ投稿する",
+        },
+        "youtube_metadata_mismatch": {
+            "cause": "YouTube上のメタ情報が期待値と不一致",
+            "fix": "同じvideoIdを再確認し、盲目的な再投稿を避ける",
+            "prevention": "投稿レシートへ期待値を保存",
+        },
+        "metadata": {
+            "cause": "YouTubeメタデータ制約違反",
+            "fix": "タイトル/説明/タグを安全化して再試行",
+            "prevention": "文字数とタグ総量を投稿前に制限",
+        },
+    }
+    return mapping.get(code, {
+        "cause": "未知の失敗",
+        "fix": "ログを保存し別経路を診断",
+        "prevention": "同じ操作を無限反復しない",
+    })
+
+
 def _tomorrow_first_slot(now: datetime) -> datetime:
     first = "09:00"
     values = [
@@ -209,11 +350,75 @@ def recover_upload_failure(
     video_id = int(row.get("video_id") or row.get("id") or 0)
     message = str(error)
 
+    previous_resolution = known_resolution(code)
+    previous_count = _recovery_occurrences(video_id, code)
+    knowledge = _failure_knowledge(code)
     result = {
         **diagnosis,
         "handled": False,
         "scheduled_for": None,
+        "previous_resolution": previous_resolution,
+        "same_failure_count": previous_count + 1,
+        "knowledge": knowledge,
     }
+
+    # 同一原因を無限反復しない。安全な短期回復を数回試した後は
+    # circuit breakerで停止し、診断/実施内容/残課題を保存する。
+    limits = {
+        "network": 6,
+        "youtube_transient": 6,
+        "rate_limit": 5,
+        "youtube_processing_pending": 12,
+        "youtube_metadata_mismatch": 4,
+        "youtube_processing_failed": 4,
+        "missing_file": 4,
+        "metadata": 4,
+        "quota": 3,
+        "oauth": 2,
+        "unknown": 4,
+    }
+    limit = int(limits.get(code, 5))
+    if previous_count >= limit:
+        error_text = (
+            f"[CIRCUIT-BREAKER:{code}] 同一原因が"
+            f"{previous_count + 1}回続いたため自動反復を停止。 "
+            f"原因={knowledge['cause']} / "
+            f"実施={knowledge['fix']} / "
+            "残課題=別の修正方法または外部状態の確認が必要"
+        )
+        set_queue_failed(queue_id, error_text)
+        set_channel_state(
+            f"upload_recovery_attention_{video_id}",
+            json.dumps(
+                {
+                    "failure_code": code,
+                    "count": previous_count + 1,
+                    "cause": knowledge["cause"],
+                    "fix": knowledge["fix"],
+                    "prevention": knowledge["prevention"],
+                    "message": message[:1000],
+                },
+                ensure_ascii=False,
+            ),
+        )
+        result.update(
+            handled=True,
+            safe_action="circuit_breaker_attention",
+            circuit_breaker=True,
+        )
+        _record(
+            video_id=video_id or None,
+            queue_id=queue_id,
+            failure_code=code,
+            message=message,
+            action="circuit_breaker_attention",
+            result="circuit_breaker",
+            context={
+                "same_failure_count": previous_count + 1,
+                **knowledge,
+            },
+        )
+        return result
 
     if queue_id <= 0:
         _record(
@@ -226,7 +431,13 @@ def recover_upload_failure(
         )
         return result
 
-    if code in {"network", "youtube_transient", "rate_limit"}:
+    if code in {
+        "network",
+        "youtube_transient",
+        "rate_limit",
+        "youtube_processing_pending",
+        "youtube_metadata_mismatch",
+    }:
         delay = 20 if code == "rate_limit" else 10
         retry_at = now + timedelta(minutes=delay)
         set_queue_recovery(
@@ -263,6 +474,22 @@ def recover_upload_failure(
         set_channel_state(
             "youtube_auth_attention_message",
             message[:1000],
+        )
+        result.update(
+            handled=True,
+            scheduled_for=retry_at.isoformat(timespec="minutes"),
+        )
+    elif code == "youtube_processing_failed":
+        retry_at = now + timedelta(minutes=30)
+        set_channel_state(
+            f"video_regeneration_requested_{video_id}",
+            "true",
+        )
+        set_queue_recovery(
+            queue_id,
+            scheduled_for=retry_at.isoformat(timespec="minutes"),
+            error=f"[AUTO-RECOVERY:youtube_processing_failed] {message}",
+            increment_attempt=True,
         )
         result.update(
             handled=True,
@@ -317,6 +544,11 @@ def recover_upload_failure(
         context={
             "scheduled_for": result.get("scheduled_for"),
             "attempts": row.get("attempts"),
+            "previous_resolution": previous_resolution,
+            "same_failure_count": previous_count + 1,
+            "cause": knowledge["cause"],
+            "fix": knowledge["fix"],
+            "prevention": knowledge["prevention"],
         },
     )
     set_channel_state(

@@ -80,15 +80,6 @@ def self_heal_delivery_controls() -> dict[str, Any]:
         first.get("video_id") and not first.get("youtube_video_id")
     )
 
-    if (
-        first_pending
-        and not runtime_cancel_requested()
-        and automation_enabled()
-        and not auto_upload_enabled()
-    ):
-        set_auto_upload_enabled(True)
-        repairs.append("第1話未投稿なのに自動投稿OFFだったためONへ復旧")
-
     production_armed = get_channel_state(
         "production_autonomy_armed", "false"
     ).strip().lower() == "true"
@@ -105,6 +96,18 @@ def self_heal_delivery_controls() -> dict[str, Any]:
         set_channel_state("production_autonomy_armed", "true")
         production_armed = True
         repairs.append("既存の自動投稿ON設定を本番配送arm状態へ移行")
+
+    # 本番arm済みなのに片方だけOFFへ崩れた時だけ自己修復する。
+    # 夜間テスト等の「自動運転ON / 投稿OFF」は意図した状態なので触らない。
+    if (
+        first_pending
+        and production_armed
+        and not runtime_cancel_requested()
+        and automation_enabled()
+        and not auto_upload_enabled()
+    ):
+        set_auto_upload_enabled(True)
+        repairs.append("本番arm済み第1話の自動投稿OFF不整合をONへ復旧")
 
     if (
         first_pending
@@ -123,7 +126,6 @@ def self_heal_delivery_controls() -> dict[str, Any]:
         json.dumps(refreshed, ensure_ascii=False),
     )
     return refreshed
-
 
 def arm_production_autonomy() -> dict[str, Any]:
     set_channel_state("production_autonomy_armed", "true")
