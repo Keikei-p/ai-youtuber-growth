@@ -20,6 +20,7 @@ from storage import (
     get_channel_state,
     mark_guest_used,
     update_video_output,
+    update_video_thumbnail,
 )
 from self_improvement import effective_scene_image_count, record_failure
 from mirai_engines.composer import MiraiComposer
@@ -39,6 +40,7 @@ from studio.video_generator import (
 )
 from voice.provider import build_voice_provider
 from video.renderer import render_short
+from video.thumbnail import build_thumbnail_candidates
 from paths import AUDIO_DIR, VIDEO_DIR
 
 
@@ -589,6 +591,31 @@ def render_videos(results: list[dict], character: dict) -> None:
                 guest = item.get("guest") or {}
                 if guest.get("id"):
                     mark_guest_used(int(guest["id"]))
+                try:
+                    thumbnail = build_thumbnail_candidates(item)
+                    item["thumbnail"] = thumbnail
+                    item["thumbnail_path"] = thumbnail.get("path")
+                    update_video_thumbnail(
+                        int(item["id"]),
+                        str(thumbnail.get("path") or "") or None,
+                    )
+                    print(
+                        f"[PIPELINE][THUMBNAIL] #{item['id']} "
+                        f"best={thumbnail.get('score')}/100 / "
+                        f"{thumbnail.get('path')}"
+                    )
+                except Exception as thumb_exc:
+                    item["thumbnail_error"] = str(thumb_exc)
+                    record_failure(
+                        "thumbnail.generate",
+                        thumb_exc,
+                        {"video_id": item.get("id")},
+                    )
+                    print(
+                        f"[PIPELINE][THUMBNAIL] #{item['id']} "
+                        f"生成失敗。YouTube自動サムネイルで継続: {thumb_exc}"
+                    )
+
                 print(
                     f"[PIPELINE][QUALITY] #{item['id']} "
                     f"PASS {quality.get('score')}/100"
