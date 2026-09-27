@@ -135,6 +135,123 @@ class FastVisualModeTests(unittest.TestCase):
         self.assertEqual(selected["quality"]["score"], 82)
         generator.assert_called_once()
 
+
+    def test_fast_image_first_pass_uses_reduced_steps(self) -> None:
+        image = Image.effect_noise(
+            (512, 768),
+            70,
+        ).convert("RGB")
+        fake_settings = SimpleNamespace(
+            media_fast_mode=True,
+            studio_fast_image_steps=18,
+            studio_fast_background_steps=14,
+            visual_candidate_count=2,
+            visual_background_candidates=1,
+            visual_retry_rounds=1,
+            visual_min_score=60,
+        )
+        calls: list[int] = []
+
+        def fake_generate(_prompt, preset, *, seed=None):
+            calls.append(int(preset.steps))
+            return image, "fake-backend"
+
+        report = {
+            "score": 88,
+            "passed": True,
+            "metrics": {},
+            "issues": [],
+        }
+        with (
+            patch.object(image_generator, "settings", fake_settings),
+            patch.object(
+                image_generator,
+                "_generate",
+                side_effect=fake_generate,
+            ),
+            patch.object(
+                image_generator.MiraiVisualQualityEngine,
+                "inspect_image",
+                return_value=report,
+            ),
+            patch.object(
+                image_generator,
+                "_seed_base",
+                return_value=100,
+            ),
+        ):
+            selected = image_generator._generate_best_image(
+                "fast steps",
+                ImagePreset(512, 768, 24, 6.0),
+                asset_type="mirai",
+            )
+
+        self.assertEqual(calls, [18])
+        self.assertEqual(selected["inference_steps"], 18)
+        self.assertTrue(selected["fast_pass"])
+
+    def test_borderline_fast_image_retries_full_steps(self) -> None:
+        image = Image.effect_noise(
+            (512, 768),
+            70,
+        ).convert("RGB")
+        fake_settings = SimpleNamespace(
+            media_fast_mode=True,
+            studio_fast_image_steps=18,
+            studio_fast_background_steps=14,
+            visual_candidate_count=1,
+            visual_background_candidates=1,
+            visual_retry_rounds=1,
+            visual_min_score=60,
+        )
+        calls: list[int] = []
+
+        def fake_generate(_prompt, preset, *, seed=None):
+            calls.append(int(preset.steps))
+            return image, "fake-backend"
+
+        reports = [
+            {
+                "score": 63,
+                "passed": True,
+                "metrics": {},
+                "issues": [],
+            },
+            {
+                "score": 82,
+                "passed": True,
+                "metrics": {},
+                "issues": [],
+            },
+        ]
+        with (
+            patch.object(image_generator, "settings", fake_settings),
+            patch.object(
+                image_generator,
+                "_generate",
+                side_effect=fake_generate,
+            ),
+            patch.object(
+                image_generator.MiraiVisualQualityEngine,
+                "inspect_image",
+                side_effect=reports,
+            ),
+            patch.object(
+                image_generator,
+                "_seed_base",
+                return_value=100,
+            ),
+        ):
+            selected = image_generator._generate_best_image(
+                "borderline",
+                ImagePreset(512, 768, 24, 6.0),
+                asset_type="mirai",
+            )
+
+        self.assertEqual(calls, [18, 24])
+        self.assertEqual(selected["quality"]["score"], 82)
+        self.assertFalse(selected["fast_pass"])
+
     def test_fast_mode_uses_one_new_scene_background(self) -> None:
         fake_settings = SimpleNamespace(
             media_fast_mode=True,
