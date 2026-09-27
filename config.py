@@ -131,7 +131,7 @@ class Settings:
     ai_video_enabled: bool = (
         os.getenv("AI_VIDEO_ENABLED", "false").lower() == "true"
     )
-    ai_video_backend: str = os.getenv("AI_VIDEO_BACKEND", "animatediff")
+    ai_video_backend: str = os.getenv("AI_VIDEO_BACKEND", "google")
     ai_video_license_confirmed: bool = (
         os.getenv("AI_VIDEO_LICENSE_CONFIRMED", "false").lower() == "true"
     )
