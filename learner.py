@@ -19,6 +19,12 @@ def build_learning_note(
     impressions = float(metrics.get("impressions") or 0)
     ctr = float(metrics.get("ctr") or 0)
     traffic = list(metrics.get("trafficSources") or [])
+    retention_3 = float(
+        metrics.get("retentionAt3Seconds") or 0
+    ) * 100.0
+    retention_15 = float(
+        metrics.get("retentionAt15Seconds") or 0
+    ) * 100.0
 
     like_rate = (likes / views * 100) if views else 0.0
     comment_rate = (comments / views * 100) if views else 0.0
@@ -46,6 +52,30 @@ def build_learning_note(
         notes.append(
             "視聴維持率はまだ取得できていないため、維持率だけで良し悪しを決めない。"
         )
+
+    if retention_3 > 0:
+        if retention_3 < 65:
+            notes.append(
+                f"冒頭3秒維持{retention_3:.0f}%で離脱が大きい。"
+                "最初の説明を削り、1秒目から結論/異変を見せる。"
+            )
+        elif retention_3 >= 85:
+            notes.append(
+                f"冒頭3秒維持{retention_3:.0f}%が強い。"
+                "このフック構造を別テーマへ転用する。"
+            )
+
+    if retention_15 > 0:
+        if retention_15 < 45:
+            notes.append(
+                f"15秒時点維持{retention_15:.0f}%が弱い。"
+                "5〜15秒の説明を圧縮し、展開を早める。"
+            )
+        elif retention_15 >= 70:
+            notes.append(
+                f"15秒時点維持{retention_15:.0f}%が強い。"
+                "中盤の展開速度を維持する。"
+            )
 
     if impressions > 0:
         if ctr >= 8:
