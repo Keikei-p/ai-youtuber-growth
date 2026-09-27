@@ -57,6 +57,38 @@ Quality FAILの動画はPCには残しますが、自動投稿キューには入
 Quality / Debug / YouTube Analytics を見て、Ollamaがなくても決定論的な改善を行います。
 Ollamaが利用できる場合は追加提案を行いますが、改善の土台はMirai Improvement Engineです。
 
+## Local / Cloud 制作実行
+
+重いメディア制作は `execution_provider.py` を通し、同じミライをPCと制作サーバーのどちらでも動かせます。
+
+- `EXECUTION_MODE=local`: 従来どおりPCで画像・音声・FFmpeg編集・品質検査
+- `EXECUTION_MODE=cloud`: HTTP Execution Workerへ制作ジョブを送信
+- Cloud Workerは `pending → running → succeeded / failed` で状態管理
+- 成功時は完成MP4/サムネイルをmanifestで返し、クライアント側へ安全に取得
+- Cloud障害時は `CLOUD_EXECUTION_FALLBACK_LOCAL=true` ならPCへ自動フォールバック
+- APIトークンは `.env` / サーバー環境変数のみで管理し、Gitへ保存しない
+
+Cloud Workerは同じリポジトリで起動できます。
+
+```powershell
+python cloud_worker.py --host 127.0.0.1 --port 8766
+```
+
+ローカルでCloud経路を試す場合:
+
+```env
+EXECUTION_MODE=cloud
+CLOUD_EXECUTION_URL=http://127.0.0.1:8766
+CLOUD_EXECUTION_TOKEN=
+CLOUD_EXECUTION_FALLBACK_LOCAL=true
+```
+
+外部サーバーへ公開する場合、`CLOUD_EXECUTION_TOKEN` 未設定ではWorkerを外部bindできない安全設計です。
+
+### 現段階のCloud境界
+
+現在Cloudへ移したのは、**企画・台本完成後の画像生成 → 音声生成 → 動画編集 → 品質検査**です。企画/台本のOllama、スケジューラ、YouTube投稿・分析はまだ管理側PCで動きます。次段階でこれらもクラウドへ移せるよう、ジョブ境界を先に分離しています。
+
 ## 通常制作フロー
 
 1. Ollamaで企画・台本・メタデータを作成
