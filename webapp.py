@@ -36,6 +36,7 @@ from maintenance import compact_runtime_storage, rotate_log, storage_snapshot
 from quick_test import run_quick_diagnostics
 from paths import VIDEO_DIR
 from runtime_control import (
+    ai_video_backend_name,
     ai_video_enabled,
     ai_video_license_confirmed,
     apply_daily_auto_preset,
@@ -48,6 +49,7 @@ from runtime_control import (
     guest_new_every,
     post_times,
     posts_per_day,
+    set_ai_video_backend_name,
     set_ai_video_enabled,
     set_ai_video_license_confirmed,
     set_auto_upload_enabled,
@@ -1246,6 +1248,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         <button id="studioInstallBtn" onclick="runAction('studio_install')">AIスタジオをPCへ導入</button>
       </div>
       <div class="row"><span>ゲスト画像を自動生成</span><button id="guestImageAutoBtn" onclick="toggleGuestImageAuto()"></button></div>
+      <div class="row"><span>AI動画provider</span>
+        <select id="aiVideoBackend" onchange="saveAiVideoBackend()">
+          <option value="google">Google Veo 3.1</option>
+          <option value="animatediff">AnimateDiff（ローカル）</option>
+          <option value="native">Mirai Native Video（自作）</option>
+        </select>
+      </div>
       <div class="row"><span>AI動画素材を自動生成</span><button id="aiVideoBtn" onclick="toggleAiVideo()"></button></div>
       <div class="row" id="aiVideoLicenseRow">
         <span>AI動画モデルの利用条件</span>
@@ -1258,11 +1267,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         AI動画をONにするには、使用モデルの利用条件を確認して「確認済み」にチェックしてください。
       </div>
       <div class="small" style="margin:6px 0">
-        移行用モデル:
-        <a href="https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2" target="_blank" rel="noopener">AnimateDiff Motion Adapter</a>
-        /
-        <a href="https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5" target="_blank" rel="noopener">Stable Diffusion v1.5</a>
-        <br>Native backend選択時は上記の学習済み重みを使用しません。
+        Google VeoはGemini Developer APIを使用します。APIキーはローカル.envのみで管理し、Gitへ保存しません。
+        <br>Google失敗時はミライ固定画像の自作軽量モーションへ自動フォールバックします。
       </div>
       <div id="aiVideoStatus" class="small" style="margin:8px 0 12px"></div>
       <div class="actions" style="margin-top:12px">
@@ -1501,6 +1507,9 @@ async function refresh(){
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
     aiVideoBtn.textContent=state.ai_video_enabled?'ON':'OFF';
     aiVideoBtn.className=state.ai_video_enabled?'primary':'';
+    if(document.activeElement!==aiVideoBackend){
+      aiVideoBackend.value=(state.ai_video||{}).backend||'google';
+    }
     const nativeVideoBackend=(state.ai_video||{}).backend==='native';
     aiVideoLicenseRow.style.display=nativeVideoBackend?'none':'flex';
     aiVideoHint.style.display=nativeVideoBackend?'none':'block';
@@ -1687,6 +1696,17 @@ async function toggleAutomation(){await api('/api/settings',{automation_enabled:
 async function toggleGuestImageAuto(){
   await api('/api/settings',{guest_image_auto_enabled:!state.guest_image_auto_enabled});
   refresh();
+}
+async function saveAiVideoBackend(){
+  const backend=String(aiVideoBackend.value||'google');
+  try{
+    const data=await api('/api/settings',{ai_video_backend:backend});
+    await refresh();
+    alert(data.message);
+  }catch(e){
+    alert(e.message);
+    await refresh();
+  }
 }
 async function toggleAiVideoLicense(){
   const next=Boolean(aiVideoLicenseConfirmed.checked);
@@ -2144,18 +2164,22 @@ class Handler(BaseHTTPRequestHandler):
                     set_guest_image_auto_enabled(
                         bool(body["guest_image_auto_enabled"])
                     )
+                if "ai_video_backend" in body:
+                    selected_backend = str(body["ai_video_backend"])
+                    set_ai_video_backend_name(selected_backend)
+                    if (
+                        selected_backend.strip().lower() == "google"
+                        and ai_video_enabled()
+                        and not bool(ai_video_status().get("available"))
+                    ):
+                        set_ai_video_enabled(False)
                 if "ai_video_license_confirmed" in body:
                     set_ai_video_license_confirmed(
                         bool(body["ai_video_license_confirmed"])
                     )
                 if "ai_video_enabled" in body:
                     enabled = bool(body["ai_video_enabled"])
-                    native_backend = (
-                        str(settings.ai_video_backend or "")
-                        .strip()
-                        .lower()
-                        == "native"
-                    )
+                    native_backend = ai_video_backend_name() == "native"
                     if (
                         enabled
                         and not native_backend
@@ -2165,12 +2189,7 @@ class Handler(BaseHTTPRequestHandler):
                             "AI動画モデルの利用条件が未確認です。"
                             " 管理画面で利用条件を確認後、「確認済み」をチェックしてください。"
                         )
-                    google_backend = (
-                        str(settings.ai_video_backend or "")
-                        .strip()
-                        .lower()
-                        == "google"
-                    )
+                    google_backend = ai_video_backend_name() == "google"
                     if (
                         enabled
                         and google_backend
@@ -2334,7 +2353,7 @@ class Handler(BaseHTTPRequestHandler):
                             image_path=(
                                 str(reference)
                                 if reference.is_file()
-                                and str(settings.ai_video_backend).strip().lower() == "google"
+                                and ai_video_backend_name() == "google"
                                 else None
                             ),
                         )
