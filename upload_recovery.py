@@ -42,6 +42,37 @@ def classify_upload_failure(error: Exception | str) -> dict[str, Any]:
             "safe_action": "retry_later",
         }
     if any(x in text for x in (
+        "youtube_processing_pending",
+        "動画処理完了を確認できません",
+        "processing pending",
+    )):
+        return {
+            "code": "youtube_processing_pending",
+            "retryable": True,
+            "safe_action": "verify_same_video_later",
+        }
+    if any(x in text for x in (
+        "youtube_processing_failed",
+        "投稿後処理に失敗",
+        "transcodefailed",
+        "conversion",
+        "invalidfile",
+    )):
+        return {
+            "code": "youtube_processing_failed",
+            "retryable": True,
+            "safe_action": "regenerate_then_retry",
+        }
+    if any(x in text for x in (
+        "youtube_metadata_mismatch",
+        "投稿情報が期待値と一致",
+    )):
+        return {
+            "code": "youtube_metadata_mismatch",
+            "retryable": True,
+            "safe_action": "verify_metadata_later",
+        }
+    if any(x in text for x in (
         "500", "502", "503", "504", "backenderror",
         "internalerror", "service unavailable",
     )):
@@ -226,7 +257,13 @@ def recover_upload_failure(
         )
         return result
 
-    if code in {"network", "youtube_transient", "rate_limit"}:
+    if code in {
+        "network",
+        "youtube_transient",
+        "rate_limit",
+        "youtube_processing_pending",
+        "youtube_metadata_mismatch",
+    }:
         delay = 20 if code == "rate_limit" else 10
         retry_at = now + timedelta(minutes=delay)
         set_queue_recovery(
@@ -263,6 +300,22 @@ def recover_upload_failure(
         set_channel_state(
             "youtube_auth_attention_message",
             message[:1000],
+        )
+        result.update(
+            handled=True,
+            scheduled_for=retry_at.isoformat(timespec="minutes"),
+        )
+    elif code == "youtube_processing_failed":
+        retry_at = now + timedelta(minutes=30)
+        set_channel_state(
+            f"video_regeneration_requested_{video_id}",
+            "true",
+        )
+        set_queue_recovery(
+            queue_id,
+            scheduled_for=retry_at.isoformat(timespec="minutes"),
+            error=f"[AUTO-RECOVERY:youtube_processing_failed] {message}",
+            increment_attempt=True,
         )
         result.update(
             handled=True,
