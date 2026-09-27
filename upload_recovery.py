@@ -43,6 +43,15 @@ def classify_upload_failure(error: Exception | str) -> dict[str, Any]:
             "safe_action": "retry_later",
         }
     if any(x in text for x in (
+        "youtube_upload_reconcile_pending",
+        "直前の投稿結果をyoutube側で確認中",
+    )):
+        return {
+            "code": "upload_reconcile_pending",
+            "retryable": True,
+            "safe_action": "verify_same_video_later",
+        }
+    if any(x in text for x in (
         "youtube_processing_pending",
         "動画処理完了を確認できません",
         "processing pending",
@@ -285,6 +294,11 @@ def _failure_knowledge(code: str) -> dict[str, str]:
             "fix": "保存済み台本から動画再生成",
             "prevention": "投稿確認前にローカル動画を削除しない",
         },
+        "upload_reconcile_pending": {
+            "cause": "投稿完了直後の中断でlocal receipt有無が不明",
+            "fix": "新規投稿せずYouTube直近投稿を再照合",
+            "prevention": "upload intentを送信前に永続化して二重投稿を防ぐ",
+        },
         "youtube_processing_pending": {
             "cause": "YouTube側エンコード処理が未完了",
             "fix": "新規投稿せず同じvideoIdを再確認",
@@ -369,6 +383,7 @@ def recover_upload_failure(
         "youtube_transient": 6,
         "rate_limit": 5,
         "youtube_processing_pending": 12,
+        "upload_reconcile_pending": 12,
         "youtube_metadata_mismatch": 4,
         "youtube_processing_failed": 4,
         "missing_file": 4,
@@ -437,8 +452,26 @@ def recover_upload_failure(
         "rate_limit",
         "youtube_processing_pending",
         "youtube_metadata_mismatch",
+        "upload_reconcile_pending",
     }:
-        delay = 20 if code == "rate_limit" else 10
+        if code == "rate_limit":
+            delay = 20
+        elif code == "upload_reconcile_pending":
+            delay = max(
+                2,
+                min(
+                    int(
+                        getattr(
+                            __import__("config").settings,
+                            "youtube_reconcile_grace_minutes",
+                            3,
+                        )
+                    ),
+                    10,
+                ),
+            )
+        else:
+            delay = 10
         retry_at = now + timedelta(minutes=delay)
         set_queue_recovery(
             queue_id,
