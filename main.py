@@ -289,6 +289,33 @@ def _first_episode_package() -> dict:
         },
         "metadata": {
             "title": "今日から、完全AIユーチューバーになります。【第1話】",
+            "title_candidates": [
+                {
+                    "title": "今日から、完全AIユーチューバーになります。【第1話】",
+                    "score": 96,
+                    "reasons": ["content_match", "series_start"],
+                },
+                {
+                    "title": "AIが自分でYouTubeを運営したらどうなる？【第1話】",
+                    "score": 92,
+                    "reasons": ["curiosity", "content_match"],
+                },
+                {
+                    "title": "企画から投稿改善まで、AIだけで始めます",
+                    "score": 88,
+                    "reasons": ["direct", "content_match"],
+                },
+                {
+                    "title": "成長するAI YouTuber「ミライ」始動",
+                    "score": 86,
+                    "reasons": ["brand", "series_start"],
+                },
+                {
+                    "title": "AIが自分の再生数を見て成長するチャンネル、始めます",
+                    "score": 84,
+                    "reasons": ["growth_story", "content_match"],
+                },
+            ],
             "description": (
                 "はじめまして、AIユーチューバー「ミライ」です。\n\n"
                 "企画・台本・音声・画像・動画制作・投稿後の分析まで、AI中心で運営し、"
