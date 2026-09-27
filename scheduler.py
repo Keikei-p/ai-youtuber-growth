@@ -825,13 +825,43 @@ def prepare_upcoming() -> None:
     print(f"[SCHEDULE] {queued_count}本を投稿キューへ追加しました。")
 
 def _safe_upload_metadata(row: dict) -> tuple[str, str, list[str]]:
-    title = " ".join(str(row.get("title") or "").split())[:100]
+    video_id = int(
+        row.get("video_id")
+        or row.get("id")
+        or 0
+    )
+    strict = (
+        video_id > 0
+        and get_channel_state(
+            f"metadata_sanitize_requested_{video_id}",
+            "false",
+        ).strip().lower()
+        == "true"
+    )
+
+    def clean_text(value: object, *, keep_lines: bool) -> str:
+        out: list[str] = []
+        for char in str(value or ""):
+            code = ord(char)
+            if code >= 32:
+                out.append(char)
+            elif keep_lines and char in {"\n", "\t"}:
+                out.append(char)
+        return "".join(out)
+
+    title_limit = 90 if strict else 100
+    title = " ".join(
+        clean_text(row.get("title"), keep_lines=False).split()
+    )[:title_limit]
     if not title:
         title = "ミライ AI YouTuber"
 
-    description = str(row.get("description") or (
-        "AIが自分で企画・制作・分析しながら成長するチャンネルです。"
-    ))[:5000]
+    description_limit = 4500 if strict else 5000
+    description = clean_text(
+        row.get("description")
+        or "AIが自分で企画・制作・分析しながら成長するチャンネルです。",
+        keep_lines=True,
+    )[:description_limit]
 
     try:
         raw_tags = json.loads(row.get("tags_json") or "[]")
@@ -842,13 +872,18 @@ def _safe_upload_metadata(row: dict) -> tuple[str, str, list[str]]:
 
     tags: list[str] = []
     total = 0
+    max_tags = 15 if strict else 30
+    max_total = 300 if strict else 450
+    max_tag_len = 40 if strict else 60
     for raw in raw_tags:
-        tag = " ".join(str(raw or "").split()).strip("#, ")
+        tag = " ".join(
+            clean_text(raw, keep_lines=False).split()
+        ).strip("#, ")
         if not tag or tag in tags:
             continue
-        tag = tag[:60]
+        tag = tag[:max_tag_len]
         projected = total + len(tag) + (1 if tags else 0)
-        if projected > 450 or len(tags) >= 30:
+        if projected > max_total or len(tags) >= max_tags:
             break
         tags.append(tag)
         total = projected
@@ -1021,6 +1056,11 @@ def _verify_receipt_and_finalize(
         replaced_youtube_video_id=previous_youtube_id,
     )
     set_channel_state("youtube_auth_attention", "false")
+    set_channel_state(
+        f"metadata_sanitize_requested_{video_id}",
+        "false",
+    )
+    _clear_upload_intent(video_id)
     return {
         "youtube_video_id": youtube_id,
         "uploaded_at": uploaded_at,
@@ -1540,12 +1580,19 @@ def run_due() -> None:
                 ),
             )
             if not gate["allowed"]:
-                print(
-                    f"[LEGAL] #{video_id} は公開前確認待ち。"
-                    f" approval_id={gate.get('approval_id')} / "
-                    f"{gate.get('risks')}"
+                risks = ", ".join(
+                    str(value)
+                    for value in (gate.get("risks") or [])
                 )
-                continue
+                raise RuntimeError(
+                    "公開前確認待ちのため投稿を停止しました。"
+                    + (
+                        f" approval_id={gate.get('approval_id')}"
+                        if gate.get("approval_id")
+                        else ""
+                    )
+                    + (f" / {risks}" if risks else "")
+                )
 
             privacy = upload_privacy()
             title, description, tags = _safe_upload_metadata(row)
