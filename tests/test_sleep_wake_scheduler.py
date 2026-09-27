@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -117,6 +118,61 @@ class SleepWakeSchedulerTests(unittest.TestCase):
                 (queue_id,),
             ).fetchone()
         self.assertEqual(queue["status"], "uploaded")
+        event = json.loads(
+            storage.get_channel_state("auto_post_last_event", "{}")
+        )
+        self.assertEqual(event["status"], "verified")
+        self.assertEqual(event["video_id"], video_id)
+        self.assertEqual(
+            event["youtube_video_id"],
+            "youtube-sleep-wake",
+        )
+
+    def test_sleep_resume_network_failure_records_recovery_wait(self) -> None:
+        video_id, _ = self._queued_video(
+            "2026-09-26T09:00+09:00"
+        )
+        now = datetime(2026, 9, 26, 9, 37, tzinfo=JST)
+        fake_settings = SimpleNamespace(
+            post_sleep_catchup_hours=6,
+            post_grace_minutes=20,
+            youtube_category_id="22",
+            youtube_default_language="ja",
+        )
+
+        with (
+            patch.object(scheduler, "settings", fake_settings),
+            patch.object(scheduler, "_now", return_value=now),
+            patch.object(scheduler, "_full_test_state", return_value={}),
+            patch.object(scheduler, "auto_upload_enabled", return_value=True),
+            patch.object(scheduler, "upload_privacy", return_value="private"),
+            patch.object(
+                scheduler,
+                "voice_attribution_status",
+                return_value={"resolved": True, "credit": ""},
+            ),
+            patch.object(
+                scheduler,
+                "publish_gate",
+                return_value={"allowed": True, "risks": []},
+            ),
+            patch.object(
+                scheduler,
+                "upload_video",
+                side_effect=TimeoutError("network timeout"),
+            ),
+        ):
+            scheduler.run_due()
+
+        event = json.loads(
+            storage.get_channel_state("auto_post_last_event", "{}")
+        )
+        self.assertEqual(event["status"], "recovery_wait")
+        self.assertEqual(event["code"], "network")
+        self.assertEqual(event["video_id"], video_id)
+        queue = storage.queue_item_for_video(video_id)
+        self.assertEqual(queue["status"], "queued")
+        self.assertEqual(int(queue["attempts"]), 1)
 
     def test_failed_upload_is_kept_for_resume_retry_inside_catchup_window(self) -> None:
         _, queue_id = self._queued_video(
