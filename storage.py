@@ -1008,7 +1008,7 @@ def due_queue(now_iso: str, oldest_allowed_iso: str | None = None) -> list[dict[
                 SELECT
                     q.id AS queue_id, q.video_id, q.scheduled_for, q.attempts,
                     v.title, v.description, v.tags_json, v.guest_id,
-                    v.script, v.output_path
+                    v.script, v.output_path, v.thumbnail_path
                 FROM posting_queue q
                 JOIN videos v ON v.id = q.video_id
                 WHERE q.status = 'queued'
