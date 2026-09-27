@@ -203,6 +203,37 @@ def recent_recovery_events(limit: int = 20) -> list[dict[str, Any]]:
     return result
 
 
+def known_resolution(
+    failure_code: str,
+) -> dict[str, Any] | None:
+    _ensure_table()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                created_at, failure_code, action, result,
+                message, context_json
+            FROM upload_recovery_events
+            WHERE failure_code = ?
+              AND result = 'handled'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(failure_code),),
+        ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    try:
+        item["context"] = json.loads(
+            item.pop("context_json") or "{}"
+        )
+    except Exception:
+        item["context"] = {}
+        item.pop("context_json", None)
+    return item
+
+
 def _tomorrow_first_slot(now: datetime) -> datetime:
     first = "09:00"
     values = [
@@ -240,10 +271,12 @@ def recover_upload_failure(
     video_id = int(row.get("video_id") or row.get("id") or 0)
     message = str(error)
 
+    previous_resolution = known_resolution(code)
     result = {
         **diagnosis,
         "handled": False,
         "scheduled_for": None,
+        "previous_resolution": previous_resolution,
     }
 
     if queue_id <= 0:
@@ -370,6 +403,14 @@ def recover_upload_failure(
         context={
             "scheduled_for": result.get("scheduled_for"),
             "attempts": row.get("attempts"),
+            "previous_resolution": previous_resolution,
+            "prevention": {
+                "oauth": "バックグラウンド再認証を行わず明示通知",
+                "network": "復帰後ネット待機+同一キュー再試行",
+                "youtube_processing_pending": "同一videoIdを再確認し再アップロード禁止",
+                "youtube_processing_failed": "処理失敗を記録し再生成後に再試行",
+                "metadata": "安全化したメタデータで再確認",
+            }.get(code, "同一操作の無限反復を避け別経路を検討"),
         },
     )
     set_channel_state(
