@@ -321,10 +321,30 @@ class GoogleVeoVideoTests(unittest.TestCase):
                 storage.DB_PATH = Path(tmp) / "provider.db"
                 storage.init_db()
                 runtime_control.set_ai_video_backend_name("google")
-                self.assertEqual(
-                    runtime_control.ai_video_backend_name(),
-                    "google",
-                )
+                with patch.object(
+                    runtime_control,
+                    "settings",
+                    SimpleNamespace(
+                        ai_video_backend="native",
+                        google_video_enabled=False,
+                    ),
+                ):
+                    self.assertEqual(
+                        runtime_control.ai_video_backend_name(),
+                        "native",
+                    )
+                with patch.object(
+                    runtime_control,
+                    "settings",
+                    SimpleNamespace(
+                        ai_video_backend="native",
+                        google_video_enabled=True,
+                    ),
+                ):
+                    self.assertEqual(
+                        runtime_control.ai_video_backend_name(),
+                        "google",
+                    )
                 runtime_control.set_ai_video_backend_name("native")
                 self.assertEqual(
                     runtime_control.ai_video_backend_name(),
