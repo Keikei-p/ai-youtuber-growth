@@ -10,7 +10,8 @@ class ScriptReviewQualityTests(unittest.TestCase):
     def test_long_opening_and_missing_next_hook_are_rejected(self) -> None:
         script = (
             "これは最初の一文がとても長くて視聴者が結論にたどり着くまで"
-            "かなり長い時間待つ必要がある説明になっているので冒頭として弱いです。"
+            "かなり長い時間待つ必要がある説明になっているので冒頭として弱く、"
+            "しかも結論を出さず背景説明だけを延々と続けてしまう悪い導入の例です。"
             "その後に説明を続けて終わります。"
         )
         with (
