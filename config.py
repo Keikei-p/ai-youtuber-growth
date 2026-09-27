@@ -128,6 +128,16 @@ class Settings:
     studio_scene_images_per_video: int = int(
         os.getenv("STUDIO_SCENE_IMAGES_PER_VIDEO", "2")
     )
+    # 速度優先モード。品質ゲートは維持しつつ、
+    # 背景生成数・候補生成数・GPUのモデル移動を抑える。
+    media_fast_mode: bool = (
+        os.getenv("MEDIA_FAST_MODE", "true").lower() == "true"
+    )
+    # auto: NVENCが利用可能ならGPUエンコード、無理ならlibx264へ自動退避。
+    ffmpeg_video_encoder: str = os.getenv(
+        "FFMPEG_VIDEO_ENCODER",
+        "auto",
+    ).strip().lower()
 
     # Visual Evolution v1。GTX 1070で落ちにくい範囲で候補比較する。
     visual_candidate_count: int = int(os.getenv("VISUAL_CANDIDATE_COUNT", "2"))
