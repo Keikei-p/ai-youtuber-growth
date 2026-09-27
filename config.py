@@ -46,6 +46,21 @@ class Settings:
     app_root: str = os.getenv("APP_ROOT", ".")
     data_dir: str = os.getenv("DATA_DIR", "data")
     output_dir: str = os.getenv("OUTPUT_DIR", "output")
+
+    # 制作実行場所。localは従来PC、cloudはHTTP Execution Worker。
+    execution_mode: str = os.getenv("EXECUTION_MODE", "local")
+    cloud_execution_url: str = os.getenv("CLOUD_EXECUTION_URL", "")
+    cloud_execution_token: str = os.getenv("CLOUD_EXECUTION_TOKEN", "")
+    cloud_execution_timeout_seconds: int = int(
+        os.getenv("CLOUD_EXECUTION_TIMEOUT_SECONDS", "1800")
+    )
+    cloud_execution_poll_seconds: int = int(
+        os.getenv("CLOUD_EXECUTION_POLL_SECONDS", "5")
+    )
+    cloud_execution_fallback_local: bool = (
+        os.getenv("CLOUD_EXECUTION_FALLBACK_LOCAL", "true").lower()
+        == "true"
+    )
     character_file: str = os.getenv("CHARACTER_FILE", "character/character.json")
     youtube_client_secret_file: str = os.getenv("YOUTUBE_CLIENT_SECRET_FILE", "client_secret.json")
     youtube_token_file: str = os.getenv("YOUTUBE_TOKEN_FILE", "token.json")

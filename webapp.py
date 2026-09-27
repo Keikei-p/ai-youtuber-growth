@@ -27,6 +27,7 @@ from native_models.lab import migration_summary
 from mirai_engines.evolution_controller import evolution_status
 from autonomy_policy import autonomy_state, resolve_approval
 from config import settings
+from execution_provider import execution_status
 from delivery_supervisor import (
     arm_production_autonomy,
     disarm_production_autonomy,
@@ -48,12 +49,15 @@ from runtime_control import (
     automation_enabled,
     daily_auto_status,
     disable_daily_auto,
+    execution_mode,
     guest_appearance_every,
     guest_image_auto_enabled,
     guest_new_every,
     post_times,
     posts_per_day,
     set_ai_video_backend_name,
+    set_execution_mode,
+    set_cloud_execution_fallback_local,
     set_ai_video_enabled,
     set_ai_video_license_confirmed,
     set_auto_upload_enabled,
@@ -310,7 +314,8 @@ def _ensure_local_services() -> None:
 
     voice_status = voice_provider_status()
     if (
-        not voice_status["available"]
+        execution_mode() == "local"
+        and not voice_status["available"]
         and voice_provider_name() == "voicevox"
     ):
         paths = _candidate_voicevox_paths()
@@ -627,6 +632,16 @@ def _status_payload() -> dict:
     services = _service_status()
     auto_post_health = _cached_auto_post_health()
 
+    execution = execution_status()
+    if execution.get("mode") == "cloud":
+        system_ready = bool(
+            services.get("ollama")
+            and services.get("youtube_token")
+            and execution.get("cloud_configured")
+        )
+    else:
+        system_ready = all(services.values())
+
     return {
         "automation_enabled": automation_enabled(),
         "auto_upload_enabled": auto_upload_enabled(),
@@ -636,6 +651,7 @@ def _status_payload() -> dict:
         "posts_per_day": posts_per_day(),
         "post_times": post_times(),
         "daily_auto": daily_auto_status(),
+        "execution": execution,
         "guest_every": guest_appearance_every(),
         "guest_new_every": guest_new_every(),
         "guest_image_auto_enabled": guest_image_auto_enabled(),
@@ -665,7 +681,7 @@ def _status_payload() -> dict:
         "evolution": evolution_status(),
         "engines": _engine_status(),
         "rights": _rights_status(),
-        "system_ready": all(services.values()),
+        "system_ready": system_ready,
         "queue": _queue_status(),
         "videos": _video_status(),
         "guests": _guest_status(),
@@ -1268,6 +1284,19 @@ body.app-ready .grid>.card.app-active{display:block}
 
     <section class="card">
       <h2>運用設定</h2>
+      <div class="row"><span>制作場所</span>
+        <select id="executionMode" style="min-width:180px">
+          <option value="local">このPC</option>
+          <option value="cloud">クラウド（メディア制作）</option>
+        </select>
+      </div>
+      <div class="row"><span>Cloud失敗時</span>
+        <select id="cloudFallback" style="min-width:180px">
+          <option value="true">PCへ自動切替</option>
+          <option value="false">停止して確認</option>
+        </select>
+      </div>
+      <div id="executionStatus" class="small" style="margin:6px 0 12px"></div>
       <div class="row"><span>1日投稿数</span><input id="postsPerDay" type="number" min="1" max="10" style="width:92px"></div>
       <div class="row"><span>投稿時刻</span><input id="postTimes" placeholder="09:00,15:00,21:00" style="width:190px"></div>
       <div class="row"><span>ゲスト出演</span><input id="guestEvery" type="number" min="0" max="100" style="width:92px"></div>
@@ -1574,7 +1603,8 @@ async function refresh(){
     const lastHome=aphHome.last_post_event||{};
     const resilience=((state.improvement||{}).resilience)||{};
     homeAutoState.textContent=(state.automation_enabled&&state.auto_upload_enabled)?'稼働中':'確認必要';
-    homeAutoDetail.textContent='自動運転 '+(state.automation_enabled?'ON':'OFF')+' / 投稿 '+(state.auto_upload_enabled?'ON':'OFF');
+    const exHome=state.execution||{};
+    homeAutoDetail.textContent='自動運転 '+(state.automation_enabled?'ON':'OFF')+' / 投稿 '+(state.auto_upload_enabled?'ON':'OFF')+' / 制作 '+(exHome.mode==='cloud'?'Cloud':'PC');
     homeNextPost.textContent=nextHome.scheduled_for?String(nextHome.scheduled_for).replace('T',' ').slice(5,16):'予定なし';
     homeNextPostDetail.textContent=nextHome.video_id?('#'+Number(nextHome.video_id)+' '+String(nextHome.title||'')):'投稿キューは空です';
     const lastLabels={verified:'成功',recovery_wait:'再試行待ち',attention:'要確認',blocked:'停止中',attempting:'投稿中',idle:'待機'};
@@ -1660,6 +1690,21 @@ async function refresh(){
     if(document.activeElement!==guestNewEvery) guestNewEvery.value=state.guest_new_every;
     const voiceState=state.voice_provider||{};
     if(document.activeElement!==voiceProvider) voiceProvider.value=voiceState.selected||'voicevox';
+    const execution=state.execution||{};
+    if(document.activeElement!==executionMode) executionMode.value=execution.mode||'local';
+    if(document.activeElement!==cloudFallback) cloudFallback.value=execution.fallback_local?'true':'false';
+    const exLast=execution.last_event||{};
+    executionStatus.textContent=
+      '現在: '+(execution.mode==='cloud'?'クラウド':'このPC')+
+      (execution.mode==='cloud'
+        ? (' / Worker '+(execution.cloud_configured?'設定済み':'未接続'))
+        : '')+
+      (exLast.location
+        ? (' / 最終実行 '+(exLast.location==='cloud'?'Cloud':'Local')+
+           (exLast.fallback?'（フォールバック）':'')+
+           ' / '+(exLast.status||''))
+        : '')+
+      (exLast.detail?' / '+exLast.detail:'');
     autostartStatus.textContent=state.autostart_enabled?'登録済み':'未登録';
     autostartStatus.className='badge '+(state.autostart_enabled?'ok':'');
     wakeTaskStatus.textContent=state.wake_task_enabled?'登録済み':'未登録';
@@ -2058,7 +2103,9 @@ async function saveOperationSettings(){
     post_times:postTimes.value,
     guest_every:Number(guestEvery.value),
     guest_new_every:Number(guestNewEvery.value),
-    voice_provider:String(voiceProvider.value||'voicevox')
+    voice_provider:String(voiceProvider.value||'voicevox'),
+    execution_mode:String(executionMode.value||'local'),
+    cloud_execution_fallback_local:String(cloudFallback.value||'true')==='true'
   };
   const data=await api('/api/settings',body);
   alert(data.message);
@@ -2388,6 +2435,12 @@ class Handler(BaseHTTPRequestHandler):
                     set_guest_new_every(int(body["guest_new_every"]))
                 if "voice_provider" in body:
                     set_voice_provider_name(str(body["voice_provider"]))
+                if "execution_mode" in body:
+                    set_execution_mode(str(body["execution_mode"]))
+                if "cloud_execution_fallback_local" in body:
+                    set_cloud_execution_fallback_local(
+                        bool(body["cloud_execution_fallback_local"])
+                    )
                 if "guest_image_auto_enabled" in body:
                     set_guest_image_auto_enabled(
                         bool(body["guest_image_auto_enabled"])
