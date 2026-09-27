@@ -967,7 +967,6 @@ def _verify_receipt_and_finalize(
     previous_youtube_id: str | None = None,
 ) -> dict:
     youtube_id = str(receipt["youtube_video_id"])
-    _try_set_thumbnail(video_id, youtube_id, row, receipt)
     try:
         verification = verify_uploaded_video(
             youtube_id,
@@ -991,6 +990,9 @@ def _verify_receipt_and_finalize(
             error=str(exc),
         )
         raise
+
+    # YouTube側の変換完了後にcustom thumbnailを設定する。
+    _try_set_thumbnail(video_id, youtube_id, row, receipt)
 
     update_upload_receipt_verification(
         video_id,
