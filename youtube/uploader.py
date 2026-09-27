@@ -108,7 +108,9 @@ def find_recent_matching_upload(
     if started_at:
         parsed_started = _published_at(started_at)
         if parsed_started is not None:
-            cutoff = min(
+            # intent開始より大きく前の同名動画は回収しない。
+            # lookbackとintentのうち、より新しい時刻を採用する。
+            cutoff = max(
                 cutoff,
                 parsed_started - timedelta(minutes=2),
             )
