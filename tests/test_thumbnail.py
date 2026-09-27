@@ -8,6 +8,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from video import thumbnail
+from mirai_engines.visual_quality_engine import MiraiVisualQualityEngine
 
 
 class ThumbnailTests(unittest.TestCase):
@@ -47,6 +48,24 @@ class ThumbnailTests(unittest.TestCase):
             self.assertEqual(
                 result["score"],
                 max(row["score"] for row in result["candidates"]),
+            )
+
+            quality = MiraiVisualQualityEngine().inspect_image(
+                result["path"],
+                asset_type="thumbnail",
+            )
+            issue_codes = {
+                row["code"]
+                for row in quality.get("issues") or []
+            }
+            self.assertNotIn("not_vertical", issue_codes)
+            self.assertNotIn(
+                "resolution_below_target",
+                issue_codes,
+            )
+            self.assertNotIn(
+                "thumbnail_not_landscape",
+                issue_codes,
             )
 
 
