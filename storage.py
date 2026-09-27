@@ -142,6 +142,23 @@ def init_db() -> None:
             acquired_at TEXT NOT NULL,
             owner TEXT NOT NULL DEFAULT ''
         );
+
+        CREATE TABLE IF NOT EXISTS youtube_upload_receipts (
+            video_id INTEGER PRIMARY KEY,
+            youtube_video_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
+            expected_title TEXT NOT NULL DEFAULT '',
+            expected_description TEXT NOT NULL DEFAULT '',
+            expected_privacy TEXT NOT NULL DEFAULT '',
+            thumbnail_path TEXT,
+            thumbnail_set INTEGER NOT NULL DEFAULT 0,
+            verification_status TEXT NOT NULL DEFAULT 'pending',
+            verification_json TEXT NOT NULL DEFAULT '{}',
+            last_error TEXT,
+            verified_at TEXT,
+            FOREIGN KEY(video_id) REFERENCES videos(id)
+        );
         """)
 
         video_columns = {
@@ -155,6 +172,11 @@ def init_db() -> None:
             conn.execute("ALTER TABLE videos ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'")
         if "guest_id" not in video_columns:
             conn.execute("ALTER TABLE videos ADD COLUMN guest_id INTEGER")
+
+        if "thumbnail_path" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN thumbnail_path TEXT")
+        if "post_verified_at" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN post_verified_at TEXT")
 
         queue_columns = {
             row["name"]
@@ -211,6 +233,7 @@ def dashboard_videos(limit: int = 30) -> list[dict[str, Any]]:
                 v.id, v.created_at, v.title, v.status, v.output_path,
                 v.youtube_video_id, v.uploaded_at, v.views, v.likes, v.comments,
                 v.avg_view_percentage, v.description, v.tags_json,
+                v.thumbnail_path, v.post_verified_at,
                 g.name AS guest_name,
                 q.scheduled_for, q.status AS queue_status, q.error AS queue_error
             FROM videos v
@@ -232,6 +255,7 @@ def video_by_id(video_id: int) -> dict[str, Any] | None:
                 v.status, v.output_path, v.youtube_video_id, v.uploaded_at,
                 v.views, v.likes, v.comments, v.avg_view_percentage,
                 v.description, v.tags_json, v.script, v.guest_id,
+                v.thumbnail_path, v.post_verified_at,
                 g.name AS guest_name
             FROM videos v
             LEFT JOIN guests g ON g.id = v.guest_id
@@ -373,6 +397,131 @@ def mark_uploaded(
                 """,
                 ("mirai_first_episode_uploaded", now),
             )
+
+
+def update_video_thumbnail(video_id: int, thumbnail_path: str | None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE videos SET thumbnail_path = ? WHERE id = ?",
+            (str(thumbnail_path) if thumbnail_path else None, int(video_id)),
+        )
+
+
+def record_upload_receipt(
+    video_id: int,
+    youtube_video_id: str,
+    *,
+    source: str,
+    expected_title: str,
+    expected_description: str,
+    expected_privacy: str,
+    thumbnail_path: str | None = None,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO youtube_upload_receipts (
+                video_id, youtube_video_id, created_at, source,
+                expected_title, expected_description, expected_privacy,
+                thumbnail_path, thumbnail_set, verification_status,
+                verification_json, last_error, verified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', '{}', NULL, NULL)
+            ON CONFLICT(video_id) DO UPDATE SET
+                youtube_video_id = excluded.youtube_video_id,
+                created_at = excluded.created_at,
+                source = excluded.source,
+                expected_title = excluded.expected_title,
+                expected_description = excluded.expected_description,
+                expected_privacy = excluded.expected_privacy,
+                thumbnail_path = excluded.thumbnail_path,
+                thumbnail_set = 0,
+                verification_status = 'pending',
+                verification_json = '{}',
+                last_error = NULL,
+                verified_at = NULL
+            """,
+            (
+                int(video_id),
+                str(youtube_video_id),
+                now,
+                str(source or ""),
+                str(expected_title or ""),
+                str(expected_description or ""),
+                str(expected_privacy or ""),
+                str(thumbnail_path) if thumbnail_path else None,
+            ),
+        )
+
+
+def pending_upload_receipt(video_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM youtube_upload_receipts
+            WHERE video_id = ?
+              AND verification_status IN ('pending', 'processing')
+            LIMIT 1
+            """,
+            (int(video_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_upload_receipt_thumbnail(video_id: int, *, thumbnail_set: bool) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE youtube_upload_receipts
+            SET thumbnail_set = ?
+            WHERE video_id = ?
+            """,
+            (1 if thumbnail_set else 0, int(video_id)),
+        )
+
+
+def update_upload_receipt_verification(
+    video_id: int,
+    *,
+    status: str,
+    detail: dict[str, Any] | None = None,
+    error: str = "",
+) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    verified_at = now if status == "verified" else None
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE youtube_upload_receipts
+            SET verification_status = ?,
+                verification_json = ?,
+                last_error = ?,
+                verified_at = COALESCE(?, verified_at)
+            WHERE video_id = ?
+            """,
+            (
+                str(status),
+                json.dumps(detail or {}, ensure_ascii=False),
+                str(error or "")[:2000] or None,
+                verified_at,
+                int(video_id),
+            ),
+        )
+        if status == "verified":
+            conn.execute(
+                "UPDATE videos SET post_verified_at = ? WHERE id = ?",
+                (now, int(video_id)),
+            )
+
+
+def upload_receipt(video_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM youtube_upload_receipts WHERE video_id = ? LIMIT 1",
+            (int(video_id),),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def acquire_runtime_lock(
