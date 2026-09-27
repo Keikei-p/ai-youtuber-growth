@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import random
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,13 @@ from native_models.common import (
     read_json,
     write_json,
 )
+
+
+_INFERENCE_LOCK = threading.RLock()
+_INFERENCE_MODEL = None
+_INFERENCE_CONFIG = None
+_INFERENCE_DEVICE = None
+_INFERENCE_STAMP = None
 
 
 @dataclass
@@ -268,6 +276,50 @@ def train(
     return meta
 
 
+def _inference_model(torch, paths: dict, meta: dict):
+    global _INFERENCE_MODEL, _INFERENCE_CONFIG
+    global _INFERENCE_DEVICE, _INFERENCE_STAMP
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    stamp = (
+        int(paths["weights"].stat().st_mtime_ns),
+        device,
+    )
+    with _INFERENCE_LOCK:
+        if (
+            _INFERENCE_MODEL is not None
+            and _INFERENCE_STAMP == stamp
+        ):
+            return (
+                _INFERENCE_MODEL,
+                _INFERENCE_CONFIG,
+                _INFERENCE_DEVICE,
+            )
+
+        raw = meta.get("architecture") or {}
+        config = VideoConfig(
+            **{
+                key: raw[key]
+                for key in asdict(VideoConfig()).keys()
+                if key in raw
+            }
+        )
+        model = build_model(config).to(device)
+        model.load_state_dict(
+            torch.load(
+                paths["weights"],
+                map_location=device,
+                weights_only=True,
+            )
+        )
+        model.eval()
+        _INFERENCE_MODEL = model
+        _INFERENCE_CONFIG = config
+        _INFERENCE_DEVICE = device
+        _INFERENCE_STAMP = stamp
+        return model, config, device
+
+
 def generate_frames(
     start_image: Image.Image,
     prompt: str,
@@ -278,20 +330,11 @@ def generate_frames(
     meta = read_json(paths["meta"])
     if not paths["weights"].is_file() or not meta.get("ready"):
         raise RuntimeError("Mirai Native Video v0の学習済み重みがありません。")
-    raw = meta.get("architecture") or {}
-    config = VideoConfig(
-        **{
-            key: raw[key]
-            for key in asdict(VideoConfig()).keys()
-            if key in raw
-        }
+    model, config, device = _inference_model(
+        torch,
+        paths,
+        meta,
     )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = build_model(config).to(device)
-    model.load_state_dict(
-        torch.load(paths["weights"], map_location=device, weights_only=True)
-    )
-    model.eval()
     im = start_image.convert("RGB").resize((config.size, config.size))
     data = torch.tensor(
         list(im.getdata()),
@@ -305,7 +348,7 @@ def generate_frames(
         device=device,
     )
     frames: list[Image.Image] = []
-    with torch.no_grad():
+    with torch.inference_mode():
         for index in range(config.frames):
             pixels = (
                 ((current[0].clamp(-1, 1) + 1.0) * 127.5)
