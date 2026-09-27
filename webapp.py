@@ -1509,11 +1509,28 @@ async function refresh(){
     }
     aiVideoLicenseRow.style.outline=(!nativeVideoBackend&&!state.ai_video_enabled&&!state.ai_video_license_confirmed)?'1px solid #8b6b30':'none';
     aiVideoHint.textContent=state.ai_video_enabled
-      ? 'AI動画の自動生成はONです。'
+      ? ((state.ai_video||{}).backend==='google'
+        ? 'Google Veoの自動生成はONです。生成失敗時は自作モーションへ自動フォールバックします。'
+        : 'AI動画の自動生成はONです。')
       : (state.ai_video_license_confirmed
-        ? '利用条件確認済みです。AI動画ボタンでON/OFFできます。'
+        ? (((state.ai_video||{}).backend==='google' && !(state.ai_video||{}).available)
+          ? '利用条件は確認済みですが、GEMINI_API_KEY / GOOGLE_API_KEY が未設定です。'
+          : '利用条件確認済みです。AI動画ボタンでON/OFFできます。')
         : 'AI動画をONにするには、使用モデルの利用条件を確認して「確認済み」にチェックしてください。');
-    aiVideoStatus.textContent='AI動画: '+(state.ai_video.available?'利用可能':'未準備')+' / '+escapeHtml(state.ai_video.backend||'')+' / '+state.ai_video.frames+' frames / '+state.ai_video.steps+' steps / '+state.ai_video.size.join('x')+(state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF')+(state.ai_video_license_confirmed?' / 利用条件確認済み':' / 利用条件未確認');
+    const av=state.ai_video||{};
+    if(av.backend==='google'){
+      aiVideoStatus.textContent='AI動画: '+(av.available?'Google接続準備OK':'Google API未準備')+
+        ' / '+escapeHtml(av.model||'Veo')+
+        ' / '+escapeHtml(av.aspect_ratio||'9:16')+
+        ' / '+Number(av.duration_seconds||4)+'秒'+
+        ' / '+escapeHtml(av.resolution||'720p')+
+        ' / 有料API'+
+        (state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF')+
+        (state.ai_video_license_confirmed?' / 利用条件確認済み':' / 利用条件未確認')+
+        (av.reason?' / '+escapeHtml(av.reason):'');
+    }else{
+      aiVideoStatus.textContent='AI動画: '+(av.available?'利用可能':'未準備')+' / '+escapeHtml(av.backend||'')+' / '+Number(av.frames||0)+' frames / '+Number(av.steps||0)+' steps / '+((av.size||[]).join('x'))+(state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF')+(state.ai_video_license_confirmed?' / 利用条件確認済み':' / 利用条件未確認');
+    }
     const backend=state.studio.selected||'未接続';
     const gpu=state.studio.gpu_name||state.gpu.name||'CPU';
     const cuda=state.studio.cuda_available?('CUDA '+(state.studio.cuda_version||'')):'CUDA未検出';
@@ -1700,7 +1717,13 @@ async function toggleAiVideoLicense(){
   }
 }
 async function toggleAiVideo(){
-  const nativeVideo=(state.ai_video||{}).backend==='native';
+  const videoState=state.ai_video||{};
+  const nativeVideo=videoState.backend==='native';
+  const googleVideo=videoState.backend==='google';
+  if(googleVideo && !state.ai_video_enabled && !videoState.available){
+    alert('Google VeoをONにするには、ローカル.envへ GEMINI_API_KEY または GOOGLE_API_KEY を設定してください。APIキーはGitへ保存しません。');
+    return;
+  }
   if(!nativeVideo && !state.ai_video_enabled && !state.ai_video_license_confirmed){
     aiVideoLicenseRow.scrollIntoView({behavior:'smooth',block:'center'});
     aiVideoLicenseRow.style.outline='2px solid #d6a23d';
@@ -1711,7 +1734,12 @@ async function toggleAiVideo(){
     );
     return;
   }
-  if(!state.ai_video_enabled && !confirm('AI動画はGTX 1070では重い処理です。1本ずつ直列生成でONにしますか？')) return;
+  if(!state.ai_video_enabled){
+    const msg=googleVideo
+      ? 'Google Veoは有料APIです。Fast/720p/4秒を基本に、batch上限付きで自動生成します。失敗時は自作モーションへ戻します。ONにしますか？'
+      : 'AI動画はGTX 1070では重い処理です。1本ずつ直列生成でONにしますか？';
+    if(!confirm(msg)) return;
+  }
   try{
     await api('/api/settings',{ai_video_enabled:!state.ai_video_enabled});
     await refresh();
@@ -1747,7 +1775,15 @@ async function runStudioBackground(){
 async function runStudioAiVideo(){
   const prompt=aiVideoPrompt.value.trim();
   if(!prompt){alert('AI動画の内容を入力してください');return;}
-  if(!confirm('短いAI動画を1本だけ生成します。GTX 1070では時間がかかる場合があります。実行しますか？')) return;
+  const googleVideo=(state.ai_video||{}).backend==='google';
+  if(googleVideo && !(state.ai_video||{}).available){
+    alert('Google Veo APIキーが未設定です。GEMINI_API_KEY または GOOGLE_API_KEY を.envへ設定してください。');
+    return;
+  }
+  const msg=googleVideo
+    ? 'Google Veoで短い縦動画を1本生成します。有料APIです。実行しますか？'
+    : '短いAI動画を1本だけ生成します。GTX 1070では時間がかかる場合があります。実行しますか？';
+  if(!confirm(msg)) return;
   const data=await api('/api/action',{action:'studio_ai_video',prompt});
   alert(data.message);
   setTimeout(refresh,1200);
@@ -2129,6 +2165,22 @@ class Handler(BaseHTTPRequestHandler):
                             "AI動画モデルの利用条件が未確認です。"
                             " 管理画面で利用条件を確認後、「確認済み」をチェックしてください。"
                         )
+                    google_backend = (
+                        str(settings.ai_video_backend or "")
+                        .strip()
+                        .lower()
+                        == "google"
+                    )
+                    if (
+                        enabled
+                        and google_backend
+                        and not bool(ai_video_status().get("available"))
+                    ):
+                        raise ValueError(
+                            "Google Veo APIキーが未設定です。"
+                            " ローカル.envへ GEMINI_API_KEY または "
+                            "GOOGLE_API_KEY を設定してください。"
+                        )
                     set_ai_video_enabled(enabled)
                 if "visual_candidate_count" in body:
                     set_visual_candidate_count(int(body["visual_candidate_count"]))
@@ -2275,7 +2327,18 @@ class Handler(BaseHTTPRequestHandler):
                         self._json({"message": "AI動画プロンプトが必要です"}, 400)
                         return
                     label = "AI動画テスト生成"
-                    func = lambda: print(generate_animatediff_clip(prompt))
+                    reference = Path(settings.mirai_reference_image)
+                    func = lambda: print(
+                        generate_animatediff_clip(
+                            prompt,
+                            image_path=(
+                                str(reference)
+                                if reference.is_file()
+                                and str(settings.ai_video_backend).strip().lower() == "google"
+                                else None
+                            ),
+                        )
+                    )
                 elif action == "studio_guest":
                     guest_id = int(body.get("guest_id") or 0)
                     row = next(
