@@ -133,6 +133,18 @@ def upload_results(
                         "YouTube ID取得後の投稿レシート保存に失敗しました。"
                     )
 
+            verification = verify_uploaded_video(
+                youtube_id,
+                expected_title=title,
+                expected_description=description,
+                expected_privacy=effective_privacy,
+            )
+            update_upload_receipt_verification(
+                int(item["id"]),
+                status="verified",
+                detail=verification,
+            )
+
             thumbnail_path = str(
                 receipt.get("thumbnail_path")
                 or item.get("thumbnail_path")
@@ -159,17 +171,6 @@ def upload_results(
                         },
                     )
 
-            verification = verify_uploaded_video(
-                youtube_id,
-                expected_title=title,
-                expected_description=description,
-                expected_privacy=effective_privacy,
-            )
-            update_upload_receipt_verification(
-                int(item["id"]),
-                status="verified",
-                detail=verification,
-            )
 
             item["youtube_video_id"] = youtube_id
             item["status"] = "uploaded"
