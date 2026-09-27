@@ -100,6 +100,9 @@ def init_db() -> None:
             impressions INTEGER NOT NULL DEFAULT 0,
             ctr REAL NOT NULL DEFAULT 0,
             traffic_json TEXT NOT NULL DEFAULT '[]',
+            retention_at_3_seconds REAL NOT NULL DEFAULT 0,
+            retention_at_15_seconds REAL NOT NULL DEFAULT 0,
+            retention_curve_json TEXT NOT NULL DEFAULT '[]',
             score REAL NOT NULL DEFAULT 0,
             note TEXT NOT NULL DEFAULT '',
             UNIQUE(video_id, checkpoint_hours),
@@ -203,6 +206,12 @@ def init_db() -> None:
             conn.execute("ALTER TABLE videos ADD COLUMN impressions INTEGER")
         if "traffic_json" not in video_columns:
             conn.execute("ALTER TABLE videos ADD COLUMN traffic_json TEXT NOT NULL DEFAULT '[]'")
+        if "retention_at_3_seconds" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN retention_at_3_seconds REAL")
+        if "retention_at_15_seconds" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN retention_at_15_seconds REAL")
+        if "retention_curve_json" not in video_columns:
+            conn.execute("ALTER TABLE videos ADD COLUMN retention_curve_json TEXT NOT NULL DEFAULT '[]'")
 
         queue_columns = {
             row["name"]
@@ -227,6 +236,9 @@ def init_db() -> None:
             "impressions": "INTEGER NOT NULL DEFAULT 0",
             "ctr": "REAL NOT NULL DEFAULT 0",
             "traffic_json": "TEXT NOT NULL DEFAULT '[]'",
+            "retention_at_3_seconds": "REAL NOT NULL DEFAULT 0",
+            "retention_at_15_seconds": "REAL NOT NULL DEFAULT 0",
+            "retention_curve_json": "TEXT NOT NULL DEFAULT '[]'",
         }
         for column, definition in analytics_additions.items():
             if column not in analytics_columns:
@@ -719,7 +731,8 @@ def update_metrics(video_id: int, metrics: dict) -> None:
                 estimated_minutes_watched = ?, shares = ?,
                 subscribers_gained = ?, subscribers_lost = ?,
                 engaged_views = ?, impressions = ?, ctr = ?,
-                traffic_json = ?
+                traffic_json = ?, retention_at_3_seconds = ?,
+                retention_at_15_seconds = ?, retention_curve_json = ?
             WHERE id = ?
             """,
             (
@@ -737,6 +750,12 @@ def update_metrics(video_id: int, metrics: dict) -> None:
                 float(metrics.get("ctr") or 0),
                 json.dumps(
                     metrics.get("trafficSources") or [],
+                    ensure_ascii=False,
+                ),
+                float(metrics.get("retentionAt3Seconds") or 0),
+                float(metrics.get("retentionAt15Seconds") or 0),
+                json.dumps(
+                    metrics.get("retentionCurve") or [],
                     ensure_ascii=False,
                 ),
                 int(video_id),
@@ -806,9 +825,10 @@ def save_analytics_snapshot(
                 average_view_duration, estimated_minutes_watched,
                 shares, subscribers_gained, subscribers_lost,
                 engaged_views, impressions, ctr, traffic_json,
-                score, note
+                retention_at_3_seconds, retention_at_15_seconds,
+                retention_curve_json, score, note
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(video_id),
@@ -830,6 +850,12 @@ def save_analytics_snapshot(
                     metrics.get("trafficSources") or [],
                     ensure_ascii=False,
                 ),
+                float(metrics.get("retentionAt3Seconds") or 0),
+                float(metrics.get("retentionAt15Seconds") or 0),
+                json.dumps(
+                    metrics.get("retentionCurve") or [],
+                    ensure_ascii=False,
+                ),
                 float(score),
                 note,
             ),
@@ -845,7 +871,8 @@ def analytics_history(limit: int = 60) -> list[dict[str, Any]]:
                 s.average_view_duration, s.estimated_minutes_watched,
                 s.shares, s.subscribers_gained, s.subscribers_lost,
                 s.engaged_views, s.impressions, s.ctr, s.traffic_json,
-                s.score, s.note,
+                s.retention_at_3_seconds, s.retention_at_15_seconds,
+                s.retention_curve_json, s.score, s.note,
                 v.idea, v.angle, v.title
             FROM analytics_snapshots s
             JOIN videos v ON v.id = s.video_id
