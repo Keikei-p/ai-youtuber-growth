@@ -43,8 +43,9 @@ def load_character() -> dict:
 def render_results(results: list[dict], character: dict) -> None:
     """
     互換用ラッパー。
-    実処理は production_pipeline で
-    画像 → 音声 → 字幕付き編集の順に直列実行する。
+    実処理はExecution Provider経由。
+    localは従来production_pipeline、cloudはHTTP Workerで
+    画像 → 音声 → 字幕付き編集 → 品質検査を実行する。
     """
     execute_media(results, character)
 
