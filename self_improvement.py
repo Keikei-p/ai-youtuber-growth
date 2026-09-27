@@ -252,6 +252,10 @@ def _apply_safe_learning(
 def effective_scene_image_count() -> int:
     if get_channel_state("runtime_resource_mode", "").strip() == "urgent":
         return 1
+    if bool(getattr(settings, "media_fast_mode", True)):
+        # Shortsは字幕・キャラ・カメラモーションで場面変化を作れるため、
+        # 高速モードでは毎回新規生成する背景を1枚に抑える。
+        return 1
 
     raw = get_channel_state(
         "learned_scene_images_override",
