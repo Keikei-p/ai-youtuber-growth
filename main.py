@@ -378,6 +378,9 @@ def run_generation(
             "id": video_id,
             "idea": idea,
             "title": metadata["title"],
+            "title_candidates": list(
+                metadata.get("title_candidates") or []
+            ),
             "script": written["script"],
             "description": metadata["description"],
             "tags": metadata["tags"],
