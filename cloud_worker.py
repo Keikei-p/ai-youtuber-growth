@@ -61,6 +61,42 @@ def _read_job(job_id: str) -> dict | None:
             return None
 
 
+def _recover_stale_jobs() -> int:
+    JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    recovered = 0
+    for path in JOB_ROOT.glob("*.json"):
+        try:
+            payload = json.loads(
+                path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            )
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("status") or "") not in {
+            "pending",
+            "running",
+        }:
+            continue
+        job_id = str(payload.get("job_id") or path.stem)
+        _write_job(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": "failed",
+                "error": (
+                    "Cloud Worker再起動を検出したため、"
+                    "未完了ジョブを安全に失敗扱いへ変更しました。"
+                ),
+            },
+        )
+        recovered += 1
+    return recovered
+
+
 def _artifact_copy(
     job_id: str,
     source_raw: str,
@@ -414,6 +450,11 @@ def run(
     ensure_runtime_dirs()
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
     ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
+    recovered = _recover_stale_jobs()
+    if recovered:
+        print(
+            f"[CLOUD-WORKER] stale jobs recovered: {recovered}"
+        )
     server = ThreadingHTTPServer(
         (host, int(port)),
         CloudWorkerHandler,
