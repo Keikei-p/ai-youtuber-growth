@@ -69,7 +69,10 @@ from youtube.post_verifier import (
 )
 from youtube.thumbnail import set_custom_thumbnail
 from youtube.market_research import maybe_refresh_market_research
-from youtube.uploader import upload_video
+from youtube.uploader import (
+    find_recent_matching_upload,
+    upload_video,
+)
 
 def _tz() -> ZoneInfo:
     return ZoneInfo(settings.app_timezone)
@@ -1174,6 +1177,130 @@ def upload_saved_video_now(
     finally:
         release_upload_lock(video_id)
 
+def _upload_intent_key(video_id: int) -> str:
+    return f"youtube_upload_intent_{int(video_id)}"
+
+
+def _load_upload_intent(video_id: int) -> dict:
+    raw = get_channel_state(
+        _upload_intent_key(video_id),
+        "",
+    ).strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_upload_intent(
+    video_id: int,
+    *,
+    title: str,
+    description: str,
+    privacy: str,
+    queue_id: int | None = None,
+) -> dict:
+    payload = {
+        "video_id": int(video_id),
+        "queue_id": int(queue_id or 0),
+        "started_at": _now().isoformat(timespec="seconds"),
+        "title": str(title),
+        "description": str(description),
+        "privacy": str(privacy),
+        "status": "upload_started",
+    }
+    set_channel_state(
+        _upload_intent_key(video_id),
+        json.dumps(payload, ensure_ascii=False),
+    )
+    return payload
+
+
+def _clear_upload_intent(video_id: int) -> None:
+    set_channel_state(
+        _upload_intent_key(video_id),
+        "",
+    )
+
+
+def _reconcile_upload_intent(
+    *,
+    video_id: int,
+    title: str,
+    description: str,
+    privacy: str,
+    thumbnail_path: str | None,
+    source: str,
+) -> dict | None:
+    """
+    YouTubeが動画IDを返した直後、receipt保存前にプロセスが落ちても
+    次回tickでremote側を照合し、同じ動画を再uploadしない。
+    """
+    intent = _load_upload_intent(video_id)
+    if not intent:
+        return None
+
+    recovered_id = find_recent_matching_upload(
+        title=title,
+        description=description,
+        started_at=str(intent.get("started_at") or ""),
+    )
+    if recovered_id:
+        record_upload_receipt(
+            video_id,
+            recovered_id,
+            source=source + "_reconciled",
+            expected_title=title,
+            expected_description=description,
+            expected_privacy=privacy,
+            thumbnail_path=thumbnail_path,
+        )
+        receipt = pending_upload_receipt(video_id)
+        if receipt:
+            _clear_upload_intent(video_id)
+            print(
+                f"[AUTO-UPLOAD] #{video_id} "
+                f"中断前のYouTube投稿 {recovered_id} を回収しました。"
+            )
+            return receipt
+
+    started_raw = str(intent.get("started_at") or "").strip()
+    try:
+        started = datetime.fromisoformat(started_raw)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=_tz())
+        age_minutes = (
+            _now() - started.astimezone(_tz())
+        ).total_seconds() / 60
+    except Exception:
+        age_minutes = 999.0
+
+    grace = max(
+        1,
+        min(
+            int(
+                getattr(
+                    settings,
+                    "youtube_reconcile_grace_minutes",
+                    3,
+                )
+            ),
+            15,
+        ),
+    )
+    if age_minutes < grace:
+        raise RuntimeError(
+            "youtube_upload_reconcile_pending: "
+            "直前の投稿結果をYouTube側で確認中です。"
+        )
+
+    # remoteに見つからず猶予時間も超えた場合だけ再uploadを許可。
+    return None
+
+
 def _save_auto_post_event(
     status: str,
     *,
@@ -1420,6 +1547,9 @@ def run_due() -> None:
             privacy = upload_privacy()
             title, description, tags = _safe_upload_metadata(row)
             receipt = pending_upload_receipt(video_id)
+            thumbnail_path = str(
+                row.get("thumbnail_path") or ""
+            ) or None
 
             if receipt:
                 print(
@@ -1427,6 +1557,23 @@ def run_due() -> None:
                     f"{receipt['youtube_video_id']} を再確認します。"
                 )
             else:
+                receipt = _reconcile_upload_intent(
+                    video_id=video_id,
+                    title=title,
+                    description=description,
+                    privacy=privacy,
+                    thumbnail_path=thumbnail_path,
+                    source="auto_schedule",
+                )
+
+            if not receipt:
+                _save_upload_intent(
+                    video_id,
+                    title=title,
+                    description=description,
+                    privacy=privacy,
+                    queue_id=int(row["queue_id"]),
+                )
                 youtube_id = upload_video(
                     video_path=Path(output_path),
                     title=title,
@@ -1444,15 +1591,14 @@ def run_due() -> None:
                     expected_title=title,
                     expected_description=description,
                     expected_privacy=privacy,
-                    thumbnail_path=str(
-                        row.get("thumbnail_path") or ""
-                    ) or None,
+                    thumbnail_path=thumbnail_path,
                 )
                 receipt = pending_upload_receipt(video_id)
                 if not receipt:
                     raise RuntimeError(
                         "YouTube ID取得後の投稿レシート保存に失敗しました。"
                     )
+                _clear_upload_intent(video_id)
 
             finalized = _verify_receipt_and_finalize(
                 video_id=video_id,
