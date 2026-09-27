@@ -1287,7 +1287,7 @@ body.app-ready .grid>.card.app-active{display:block}
       <div class="row"><span>制作場所</span>
         <select id="executionMode" style="min-width:180px">
           <option value="local">このPC</option>
-          <option value="cloud">クラウド</option>
+          <option value="cloud">クラウド（メディア制作）</option>
         </select>
       </div>
       <div class="row"><span>Cloud失敗時</span>
@@ -1603,7 +1603,8 @@ async function refresh(){
     const lastHome=aphHome.last_post_event||{};
     const resilience=((state.improvement||{}).resilience)||{};
     homeAutoState.textContent=(state.automation_enabled&&state.auto_upload_enabled)?'稼働中':'確認必要';
-    homeAutoDetail.textContent='自動運転 '+(state.automation_enabled?'ON':'OFF')+' / 投稿 '+(state.auto_upload_enabled?'ON':'OFF');
+    const exHome=state.execution||{};
+    homeAutoDetail.textContent='自動運転 '+(state.automation_enabled?'ON':'OFF')+' / 投稿 '+(state.auto_upload_enabled?'ON':'OFF')+' / 制作 '+(exHome.mode==='cloud'?'Cloud':'PC');
     homeNextPost.textContent=nextHome.scheduled_for?String(nextHome.scheduled_for).replace('T',' ').slice(5,16):'予定なし';
     homeNextPostDetail.textContent=nextHome.video_id?('#'+Number(nextHome.video_id)+' '+String(nextHome.title||'')):'投稿キューは空です';
     const lastLabels={verified:'成功',recovery_wait:'再試行待ち',attention:'要確認',blocked:'停止中',attempting:'投稿中',idle:'待機'};
