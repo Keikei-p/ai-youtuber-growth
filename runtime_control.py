@@ -204,10 +204,14 @@ def set_voice_provider_name(value: str) -> None:
 
 
 def ai_video_backend_name() -> str:
-    value = get_channel_state(
-        "ai_video_backend",
-        "",
-    ).strip().lower()
+    try:
+        value = get_channel_state(
+            "ai_video_backend",
+            "",
+        ).strip().lower()
+    except Exception:
+        # CLIの単体処理などDB初期化前でもprovider確認は可能にする。
+        value = ""
     if value in {"google", "animatediff", "native"}:
         return value
 
