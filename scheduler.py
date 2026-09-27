@@ -900,12 +900,21 @@ def regenerate_saved_video(video_id: int) -> dict:
 
 
 def _ensure_video_output(row: dict) -> dict:
-    output = str(row.get("output_path") or "").strip()
-    if output and Path(output).is_file():
-        return row
-    return regenerate_saved_video(
-        int(row.get("video_id") or row.get("id") or 0)
+    video_id = int(row.get("video_id") or row.get("id") or 0)
+    regeneration_requested = (
+        get_channel_state(
+            f"video_regeneration_requested_{video_id}",
+            "false",
+        ).strip().lower() == "true"
     )
+    output = str(row.get("output_path") or "").strip()
+    if (
+        not regeneration_requested
+        and output
+        and Path(output).is_file()
+    ):
+        return row
+    return regenerate_saved_video(video_id)
 
 
 def _try_set_thumbnail(
