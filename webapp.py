@@ -1146,7 +1146,7 @@ HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ミライ AI YouTuber 管理</title>
+<title>ミライ</title>
 <style>
 :root{font-family:Inter,"Yu Gothic UI",Meiryo,sans-serif;color:#eef5ff;background:#08111f}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(135deg,#07111f,#10223c 55%,#151a36);min-height:100vh}
@@ -1183,9 +1183,9 @@ body.app-ready .grid>.card.app-active{display:block}
 <body>
 <div class="wrap">
   <div class="top">
-    <div class="hero"><div class="orb"></div><div><h1>ミライ AI YouTuber 管理</h1><div class="sub">企画 → 制作 → 投稿 → 分析 → 改善を自動運転</div></div></div>
+    <div class="hero"><div class="orb"></div><div><h1>ミライ</h1><div class="sub">AI YouTuber 自動運営</div></div></div>
     <div class="actions">
-      <button class="primary" onclick="runAction('cycle')">今すぐ1サイクル実行</button>
+      <button class="primary" onclick="runAction('cycle')">今すぐ実行</button>
       <button onclick="refresh()">更新</button>
     </div>
   </div>
@@ -1508,7 +1508,7 @@ const appPageMap={
   '自動運転':'home',
   '毎日自動投稿':'home',
   'システム状態':'home',
-  '自動投稿・スリープ診断':'home',
+  '自動投稿・スリープ診断':'settings',
   '今日18時まで3本・完全自動テスト':'posts',
   '投稿キュー':'posts',
   '生成ライブラリ':'posts',
@@ -1582,7 +1582,7 @@ async function refresh(){
     homeLastPostDetail.textContent=lastHome.video_id?('#'+Number(lastHome.video_id)+' '+String(lastHome.detail||'')):String(lastHome.detail||'');
     homeLearning.textContent=Number(resilience.learned_patterns||0)+'件 学習済み';
     homeLearningDetail.textContent='未解決 '+Number(resilience.unresolved_patterns||0)+' / 復旧成功 '+Number(resilience.learned_successes||0);
-    document.title=(state.system_ready?'✓ ':'⚠ ')+'ミライ AI YouTuber 管理';
+    document.title=(state.system_ready?'✓ ':'⚠ ')+'ミライ';
     services.innerHTML=[
       ['文章AI',state.services.ollama],
       ['Voice '+escapeHtml((state.voice_provider||{}).name||''),state.services.voicevox],
