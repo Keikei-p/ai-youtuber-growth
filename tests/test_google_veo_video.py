@@ -26,6 +26,7 @@ class GoogleVeoVideoTests(unittest.TestCase):
     def _settings(self, **overrides):
         values = {
             "google_ai_api_key": "test-key",
+            "google_video_enabled": True,
             "google_video_model": "veo-3.1-fast-generate-preview",
             "google_video_duration_seconds": 4,
             "google_video_resolution": "720p",
@@ -220,6 +221,37 @@ class GoogleVeoVideoTests(unittest.TestCase):
                 ),
                 1,
             )
+
+    def test_paid_google_video_is_blocked_without_explicit_opt_in(self) -> None:
+        settings = self._settings(
+            google_video_enabled=False,
+        )
+        with (
+            patch.object(
+                google_video_generator,
+                "settings",
+                settings,
+            ),
+            patch.object(
+                google_video_generator.requests,
+                "post",
+            ) as post,
+        ):
+            status = google_video_generator.google_video_status()
+            self.assertFalse(status["available"])
+            self.assertFalse(status["google_video_enabled"])
+            with self.assertRaises(
+                google_video_generator.GoogleVideoGenerationError
+            ) as ctx:
+                google_video_generator.generate_google_veo_clip(
+                    "test",
+                )
+
+        self.assertEqual(
+            ctx.exception.code,
+            "google_video_disabled",
+        )
+        post.assert_not_called()
 
     def test_missing_key_fails_without_network(self) -> None:
         with (
