@@ -819,8 +819,11 @@ def render_videos(results: list[dict], character: dict) -> None:
     stamp = datetime.now().strftime("%Y%m%d")
     composer = MiraiComposer()
     quality_engine = MiraiQualityEngine()
+    render_batch_started = time.perf_counter()
+    render_performance: list[dict] = []
 
     for index, item in enumerate(results, start=1):
+        item_render_started = time.perf_counter()
         print(f"[PIPELINE][EDIT] {index}/{len(results)} #{item['id']}")
         audio_raw = item.get("audio_path")
         if not audio_raw:
@@ -1022,7 +1025,49 @@ def render_videos(results: list[dict], character: dict) -> None:
                 {"video_id": item.get("id")},
             )
             print(f"[PIPELINE][EDIT] #{item['id']} 失敗: {exc}")
+        finally:
+            render_seconds = round(
+                time.perf_counter() - item_render_started,
+                3,
+            )
+            render_performance.append(
+                {
+                    "video_id": int(item.get("id") or 0),
+                    "render_seconds": render_seconds,
+                    "quality_passed": bool(
+                        item.get("quality_passed")
+                    ),
+                }
+            )
+            print(
+                f"[PERF][RENDER] #{item['id']} "
+                f"{render_seconds:.3f}s"
+            )
 
+    render_summary = {
+        "recorded_at": datetime.now().astimezone().isoformat(
+            timespec="seconds"
+        ),
+        "total_seconds": round(
+            time.perf_counter() - render_batch_started,
+            3,
+        ),
+        "items": render_performance,
+    }
+    try:
+        set_channel_state(
+            "media_render_performance_last",
+            json.dumps(
+                render_summary,
+                ensure_ascii=False,
+            ),
+        )
+    except Exception:
+        pass
+    print(
+        "[PERF][RENDER] total="
+        f"{render_summary['total_seconds']:.3f}s"
+    )
     print("[PIPELINE] STEP 4/5 Composer/Quality工程完了")
 
 
