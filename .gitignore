@@ -11,3 +11,7 @@ logs/
 assets/guests/*.png
 assets/generated/
 assets/studio_index.json
+
+# Runtime sleep/wake status
+automation/last_cycle_status.json
+automation/last_cycle_status.json.tmp

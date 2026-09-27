@@ -1168,6 +1168,29 @@ def upload_saved_video_now(
     finally:
         release_upload_lock(video_id)
 
+def _save_auto_post_event(
+    status: str,
+    *,
+    video_id: int | None = None,
+    queue_id: int | None = None,
+    detail: str = "",
+    extra: dict | None = None,
+) -> None:
+    payload = {
+        "status": str(status),
+        "checked_at": _now().isoformat(timespec="seconds"),
+        "video_id": video_id,
+        "queue_id": queue_id,
+        "detail": str(detail or "")[:2000],
+    }
+    if extra:
+        payload.update(extra)
+    set_channel_state(
+        "auto_post_last_event",
+        json.dumps(payload, ensure_ascii=False),
+    )
+
+
 def _upload_runtime_block_reason() -> str:
     if bool(getattr(settings, "dry_run", False)):
         production_armed = get_channel_state(
@@ -1192,6 +1215,11 @@ def run_due() -> None:
         )
 
     if runtime_cancel_requested():
+        _save_auto_post_event(
+            "blocked",
+            detail="安全停止が有効です。",
+            extra={"code": "safety_stop"},
+        )
         print("[SCHEDULE] 安全停止中のためYouTube投稿を実行しません。")
         return
 
@@ -1257,6 +1285,11 @@ def run_due() -> None:
             )
 
     if not rows:
+        _save_auto_post_event(
+            "idle",
+            detail="現在、投稿時刻を迎えた動画はありません。",
+            extra={"due_count": 0},
+        )
         print("[SCHEDULE] 現在、投稿時刻を迎えた動画はありません。")
         _maybe_finish_full_test()
         return
@@ -1269,6 +1302,14 @@ def run_due() -> None:
             {
                 "due_count": len(rows),
                 "dry_run": bool(getattr(settings, "dry_run", False)),
+            },
+        )
+        _save_auto_post_event(
+            "blocked",
+            detail=block_reason,
+            extra={
+                "code": "runtime_block",
+                "due_count": len(rows),
             },
         )
         print(f"[SCHEDULE] 投稿停止: {block_reason}")
@@ -1302,6 +1343,14 @@ def run_due() -> None:
             )
         )
         if not only_first_episode:
+            _save_auto_post_event(
+                "blocked",
+                detail="YouTube自動投稿がOFFです。",
+                extra={
+                    "code": "auto_upload_off",
+                    "due_count": len(rows),
+                },
+            )
             print(
                 f"[SCHEDULE] {len(rows)}本が投稿時刻を迎えていますが、"
                 "自動投稿がOFFのため投稿しません。"
@@ -1320,6 +1369,12 @@ def run_due() -> None:
             video_id,
             owner=f"auto_queue:{row['queue_id']}",
         ):
+            _save_auto_post_event(
+                "busy",
+                video_id=video_id,
+                queue_id=int(row["queue_id"]),
+                detail="別処理が同じ動画を投稿中です。",
+            )
             print(
                 f"[AUTO-UPLOAD] #{video_id} は別処理が投稿中のため"
                 "このtickではスキップします。"
@@ -1327,6 +1382,16 @@ def run_due() -> None:
             continue
 
         try:
+            _save_auto_post_event(
+                "attempting",
+                video_id=video_id,
+                queue_id=int(row["queue_id"]),
+                detail="YouTube自動投稿を開始しました。",
+                extra={
+                    "scheduled_for": row.get("scheduled_for"),
+                    "attempts": int(row.get("attempts") or 0),
+                },
+            )
             row = _ensure_video_output(row)
             output_path = str(row.get("output_path") or "")
 
@@ -1395,6 +1460,17 @@ def run_due() -> None:
                 row["queue_id"],
                 uploaded_at,
             )
+            _save_auto_post_event(
+                "verified",
+                video_id=video_id,
+                queue_id=int(row["queue_id"]),
+                detail="YouTube上の存在・処理完了・投稿情報を確認しました。",
+                extra={
+                    "youtube_video_id": youtube_id,
+                    "privacy": finalized["privacy"],
+                    "uploaded_at": uploaded_at,
+                },
+            )
             print(
                 f"[AUTO-UPLOAD] #{video_id} -> {youtube_id} "
                 f"[{finalized['privacy']}] verified"
@@ -1436,6 +1512,24 @@ def run_due() -> None:
                     "video_id": video_id,
                     "queue_id": row.get("queue_id"),
                     "recovery": recovery,
+                },
+            )
+            _save_auto_post_event(
+                (
+                    "attention"
+                    if recovery.get("circuit_breaker")
+                    or recovery.get("code") in {"oauth", "publish_guard"}
+                    else "recovery_wait"
+                ),
+                video_id=video_id,
+                queue_id=int(row["queue_id"]),
+                detail=str(exc),
+                extra={
+                    "code": recovery.get("code"),
+                    "safe_action": recovery.get("safe_action"),
+                    "handled": bool(recovery.get("handled")),
+                    "scheduled_for": recovery.get("scheduled_for"),
+                    "same_failure_count": recovery.get("same_failure_count"),
                 },
             )
             print(

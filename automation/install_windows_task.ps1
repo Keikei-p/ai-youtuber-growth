@@ -122,6 +122,22 @@ if ($DryRun) {
 
 Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
 
+# 登録API成功だけで完了扱いにせず、Windowsから実体を読み戻して検証する。
+$RegisteredTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+$RegisteredInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction Stop
+if (-not $RegisteredTask.Settings.WakeToRun) {
+    throw "Registered task verification failed: WakeToRun=false"
+}
+if (-not $RegisteredTask.Settings.StartWhenAvailable) {
+    throw "Registered task verification failed: StartWhenAvailable=false"
+}
+if ([string]$RegisteredTask.State -eq "Disabled") {
+    throw "Registered task verification failed: task disabled"
+}
+if (@($RegisteredTask.Triggers).Count -lt 4) {
+    throw "Registered task verification failed: too few triggers"
+}
+
 # AC/DCともWake Timerを有効化。デスクトップではAC設定が主に効く。
 try {
     & powercfg.exe /SETACVALUEINDEX SCHEME_CURRENT SUB_SLEEP RTCWAKE 1 | Out-Null
@@ -141,6 +157,10 @@ Write-Host "Prepare wake: $PrepareMinutes minutes before"
 Write-Host "Recovery wake: $($RecoveryMinutes -join ',') minutes after"
 Write-Host "WakeToRun: enabled"
 Write-Host "StartWhenAvailable: enabled"
+Write-Host "Registered triggers: $(@($RegisteredTask.Triggers).Count)"
+Write-Host "Last run: $($RegisteredInfo.LastRunTime)"
+Write-Host "Next run: $($RegisteredInfo.NextRunTime)"
+Write-Host "Last task result: $($RegisteredInfo.LastTaskResult)"
 Write-Host ""
 Write-Host "確認: powercfg /waketimers"
 Write-Host "確認: Get-ScheduledTask -TaskName \"$TaskName\" | Select-Object -ExpandProperty Triggers"
