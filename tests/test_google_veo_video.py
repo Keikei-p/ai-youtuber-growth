@@ -342,6 +342,11 @@ class GoogleVeoVideoTests(unittest.TestCase):
                 ),
                 patch.object(
                     production_pipeline,
+                    "visual_video_min_score",
+                    return_value=60,
+                ),
+                patch.object(
+                    production_pipeline,
                     "generate_animatediff_clip",
                     side_effect=RuntimeError("google down"),
                 ) as google,
