@@ -26,6 +26,13 @@ from automation_health import (
 from native_models.lab import migration_summary
 from mirai_engines.evolution_controller import evolution_status
 from autonomy_policy import autonomy_state, resolve_approval
+from autopilot_controller import (
+    autopilot_status,
+    heal_autopilot,
+    production_autonomy_armed,
+    start_autopilot,
+    stop_autopilot,
+)
 from config import settings
 from execution_provider import execution_status
 from delivery_supervisor import (
@@ -144,6 +151,7 @@ _native_voice_cache: dict = {}
 _process_git_sha = ""
 _auto_post_health_cache_at = 0.0
 _auto_post_health_cache: dict = {}
+_last_platform_autonomy_heal_at = 0.0
 
 
 def _cached_auto_post_health(*, force: bool = False) -> dict:
@@ -352,6 +360,19 @@ def _cycle_worker() -> None:
                 )
                 _restart_for_external_code_update()
                 return
+
+            # production armが残っている限り、automation/uploadの
+            # 設定ずれを先に直す。automation_enabled()を先に判定すると
+            # OFFへ崩れた時に自己修復へ到達できないため順序が重要。
+            if production_autonomy_armed():
+                healed = heal_autopilot()
+                last = healed.get("last_event") or {}
+                if str(last.get("status") or "") == "repaired":
+                    _append_log(
+                        "[AUTOPILOT] "
+                        + str(last.get("detail") or "設定ずれを修復")
+                    )
+                _platform_autonomy_repair()
 
             if automation_enabled():
                 # Web常駐中も期限投稿をAIサービス起動より先に処理する。
@@ -651,6 +672,7 @@ def _status_payload() -> dict:
         "posts_per_day": posts_per_day(),
         "post_times": post_times(),
         "daily_auto": daily_auto_status(),
+        "autopilot": autopilot_status(),
         "execution": execution,
         "guest_every": guest_appearance_every(),
         "guest_new_every": guest_new_every(),
@@ -731,7 +753,9 @@ def _install_windows_autostart() -> str:
     import winreg
 
     pythonw = Path(sys.executable).with_name("pythonw.exe")
-    launcher = ROOT / "web_launcher.pyw"
+    launcher = ROOT / "web_background.pyw"
+    if not launcher.is_file():
+        launcher = ROOT / "web_launcher.pyw"
     command = f'"{pythonw}" "{launcher}"'
 
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -750,6 +774,92 @@ def _install_windows_autostart() -> str:
         )
 
     return "PC起動時のWebアプリ自動起動を登録しました。"
+
+
+
+def _platform_autonomy_repair(*, force: bool = False) -> list[str]:
+    """完全自動運用中のWindows常駐/Wake設定だけ自己修復する。"""
+    global _last_platform_autonomy_heal_at
+
+    if not production_autonomy_armed() or os.name != "nt":
+        return []
+
+    now = time.time()
+    if (
+        not force
+        and _last_platform_autonomy_heal_at
+        and now - _last_platform_autonomy_heal_at < 1800
+    ):
+        return []
+    _last_platform_autonomy_heal_at = now
+
+    repairs: list[str] = []
+    if not _windows_autostart_enabled():
+        try:
+            repairs.append(_install_windows_autostart())
+        except Exception as exc:
+            _append_log(
+                "[AUTOPILOT] Windows自動起動の自己修復失敗: "
+                + str(exc)
+            )
+
+    try:
+        task = windows_task_status(ROOT)
+        task_ok = bool(
+            task.get("registered")
+            and task.get("wake_to_run")
+            and task.get("start_when_available")
+            and task.get("enabled", True)
+        )
+        if not task_ok:
+            repairs.append(_install_wake_task(60))
+    except Exception as exc:
+        _append_log(
+            "[AUTOPILOT] Wakeタスクの自己修復失敗: "
+            + str(exc)
+        )
+
+    if repairs:
+        set_channel_state(
+            "autopilot_platform_last_repair",
+            datetime.now().astimezone().isoformat(
+                timespec="seconds"
+            ),
+        )
+    return repairs
+
+
+def _start_full_autopilot() -> dict:
+    """一度押せば、以後はarm状態を正本にして自動復帰する。"""
+    # 起動処理は即返し、Ollama/VOICEVOX等はwake後のworkerが
+    # バックグラウンドで準備する。ボタン押下を重くしない。
+    status = start_autopilot()
+    notes: list[str] = []
+
+    if os.name == "nt":
+        try:
+            notes.append(_install_windows_autostart())
+        except Exception as exc:
+            notes.append(
+                "PC自動起動の登録は要確認: " + str(exc)
+            )
+        try:
+            notes.append(_install_wake_task(60))
+        except Exception as exc:
+            notes.append(
+                "スリープ復帰タスクは要確認: " + str(exc)
+            )
+
+    _wake_event.set()
+    _cached_auto_post_health(force=True)
+    return {"status": status, "notes": notes}
+
+
+def _stop_full_autopilot() -> dict:
+    status = stop_autopilot()
+    _wake_event.set()
+    _cached_auto_post_health(force=True)
+    return {"status": status}
 
 
 def _run_automation_script(
@@ -1182,6 +1292,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
 .app-nav{display:flex;gap:8px;position:sticky;top:10px;z-index:30;margin:14px 0 6px;padding:7px;background:rgba(7,17,31,.9);border:1px solid #263d5d;border-radius:16px;backdrop-filter:blur(14px)}
 .app-nav button{flex:1;background:transparent;border:0;color:#9cb0c9;padding:10px 8px}
 .app-nav button.active{background:#1c5fb3;color:#fff;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+.autopilot-panel{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-top:14px;padding:20px;border:1px solid #2d5f8f;border-radius:20px;background:linear-gradient(135deg,rgba(21,62,103,.94),rgba(13,35,62,.94));box-shadow:0 16px 45px rgba(0,0,0,.2)}
+.autopilot-copy{min-width:0}.autopilot-copy b{display:block;font-size:22px;margin:5px 0}.autopilot-main{min-width:260px;font-size:16px;padding:14px 18px}
 .app-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
 .app-stat{background:rgba(14,27,48,.88);border:1px solid #263d5d;border-radius:16px;padding:14px;min-height:88px}
 .app-stat b{display:block;font-size:20px;margin-top:6px}.app-stat .small{line-height:1.45}
@@ -1192,6 +1304,7 @@ body.app-ready .grid>.card.app-active{display:block}
 @media(max-width:900px){
   .card,.card.wide,.card.half{grid-column:span 12}.wrap{padding:12px 12px 94px}h1{font-size:22px}button,select,input{max-width:100%}.actions input,.actions select{min-width:0!important;flex:1 1 180px}
   .app-nav{position:fixed;left:8px;right:8px;top:auto;bottom:8px;margin:0;border-radius:18px}.app-nav button{font-size:12px;padding:11px 4px}
+  .autopilot-panel{align-items:stretch;flex-direction:column}.autopilot-main{width:100%;min-width:0;font-size:16px}
   .app-overview{grid-template-columns:repeat(2,minmax(0,1fr))}.app-stat{min-height:82px}.resilience-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 </style>
@@ -1201,7 +1314,6 @@ body.app-ready .grid>.card.app-active{display:block}
   <div class="top">
     <div class="hero"><div class="orb"></div><div><h1>ミライ</h1><div class="sub">AI YouTuber 自動運営</div></div></div>
     <div class="actions">
-      <button class="primary" onclick="runAction('cycle')">今すぐ実行</button>
       <button onclick="refresh()">更新</button>
     </div>
   </div>
@@ -1213,6 +1325,16 @@ body.app-ready .grid>.card.app-active{display:block}
     <button type="button" data-app-tab="growth" onclick="showAppPage('growth')">成長</button>
     <button type="button" data-app-tab="settings" onclick="showAppPage('settings')">設定</button>
   </nav>
+
+  <section id="autopilotPanel" class="autopilot-panel">
+    <div class="autopilot-copy">
+      <span class="small">普段はここだけでOK</span>
+      <b id="autopilotTitle">完全自動運用を確認中...</b>
+      <div id="autopilotDetail" class="small">企画・制作・品質確認・投稿・分析・改善を自動で続けます。</div>
+      <div id="autopilotAttention" class="small" style="margin-top:6px"></div>
+    </div>
+    <button id="autopilotMainBtn" class="primary autopilot-main" onclick="toggleFullAutopilot()">▶ 完全自動運用開始</button>
+  </section>
 
   <section id="homeOverview" class="app-overview">
     <div class="app-stat"><span class="small">自動運転</span><b id="homeAutoState">-</b><div id="homeAutoDetail" class="small"></div></div>
@@ -1534,8 +1656,8 @@ body.app-ready .grid>.card.app-active{display:block}
 let state=null;
 let currentAppPage='home';
 const appPageMap={
-  '自動運転':'home',
-  '毎日自動投稿':'home',
+  '自動運転':'settings',
+  '毎日自動投稿':'settings',
   'システム状態':'home',
   '自動投稿・スリープ診断':'settings',
   '今日18時まで3本・完全自動テスト':'posts',
@@ -1571,6 +1693,7 @@ function showAppPage(page){
     btn.classList.toggle('active',btn.dataset.appTab===currentAppPage);
   });
   homeOverview.style.display=currentAppPage==='home'?'grid':'none';
+  autopilotPanel.style.display=currentAppPage==='home'?'flex':'none';
   currentPageTitle.textContent=appPageLabels[currentAppPage]||'ホーム';
   window.scrollTo({top:0,behavior:'smooth'});
 }
@@ -1602,7 +1725,30 @@ async function refresh(){
     const nextHome=aphHome.next_queue||{};
     const lastHome=aphHome.last_post_event||{};
     const resilience=((state.improvement||{}).resilience)||{};
-    homeAutoState.textContent=(state.automation_enabled&&state.auto_upload_enabled)?'稼働中':'確認必要';
+    const ap=state.autopilot||{};
+    const apRunning=Boolean(
+      ap.armed &&
+      state.automation_enabled &&
+      state.auto_upload_enabled &&
+      !ap.runtime_cancel_requested
+    );
+    const apRepairing=Boolean(ap.armed&&!apRunning&&!ap.runtime_cancel_requested);
+    const privacyLabelsHome={private:'非公開',unlisted:'限定公開',public:'公開'};
+    const privacyHome=privacyLabelsHome[state.privacy]||state.privacy||'不明';
+    autopilotTitle.textContent=ap.human_action_required
+      ? '🟠 1つだけ確認が必要'
+      : (apRunning?'🟢 完全自動運用中':(apRepairing?'🟡 自動復旧中':'完全自動運用は停止中'));
+    autopilotDetail.textContent=ap.armed
+      ? ('毎日'+Number(ap.posts_per_day||state.posts_per_day||0)+'本 / '+String(ap.post_times||state.post_times||'')+' / '+privacyHome+' / 再起動後も自動復帰')
+      : '開始後は企画・制作・品質確認・投稿・分析・改善までミライが自動で続けます。';
+    const firstProblem=((aphHome.problems||[])[0]||{}).detail||'';
+    autopilotAttention.textContent=ap.human_action_required
+      ? String(ap.human_action||'確認が必要です。')
+      : (ap.armed&&firstProblem?String(firstProblem):'');
+    autopilotMainBtn.textContent=ap.armed?'■ 完全自動運用を停止':'▶ 完全自動運用開始';
+    autopilotMainBtn.className=(ap.armed?'danger':'primary')+' autopilot-main';
+
+    homeAutoState.textContent=apRunning?'完全自動運用中':(apRepairing?'自動復旧中':'停止中');
     const exHome=state.execution||{};
     homeAutoDetail.textContent='自動運転 '+(state.automation_enabled?'ON':'OFF')+' / 投稿 '+(state.auto_upload_enabled?'ON':'OFF')+' / 制作 '+(exHome.mode==='cloud'?'Cloud':'PC');
     homeNextPost.textContent=nextHome.scheduled_for?String(nextHome.scheduled_for).replace('T',' ').slice(5,16):'予定なし';
@@ -1964,6 +2110,43 @@ async function repostLibraryVideo(id){
   }
 }
 function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+async function toggleFullAutopilot(){
+  const ap=(state&&state.autopilot)||{};
+  const privacyLabels={private:'非公開',unlisted:'限定公開',public:'公開'};
+  const privacyLabel=privacyLabels[(state&&state.privacy)||'private']||((state&&state.privacy)||'private');
+
+  if(ap.armed){
+    if(!confirm('完全自動運用を停止しますか？\n\n自動生成と自動投稿を停止します。')) return;
+    try{
+      const data=await api('/api/autopilot',{action:'stop'});
+      await refresh();
+      alert(data.message);
+    }catch(e){
+      alert('停止に失敗しました: '+e.message);
+      await refresh();
+    }
+    return;
+  }
+
+  const ok=confirm(
+    '完全自動運用を開始します。\n\n'+
+    '・企画 → 制作 → 品質確認 → YouTube投稿 → 分析 → 改善を自動実行\n'+
+    '・投稿設定: 毎日'+Number((state&&state.posts_per_day)||0)+'本 / '+String((state&&state.post_times)||'')+'\n'+
+    '・公開設定: '+privacyLabel+'\n'+
+    '・PC再起動後も自動復帰\n\n'+
+    'この設定で開始しますか？'
+  );
+  if(!ok) return;
+
+  try{
+    const data=await api('/api/autopilot',{action:'start'});
+    await refresh();
+    alert(data.message);
+  }catch(e){
+    alert(e.message);
+    await refresh();
+  }
+}
 async function toggleAutomation(){await api('/api/settings',{automation_enabled:!state.automation_enabled});refresh()}
 async function toggleGuestImageAuto(){
   await api('/api/settings',{guest_image_auto_enabled:!state.guest_image_auto_enabled});
@@ -2336,6 +2519,62 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = self._read_json()
+
+            if path == "/api/autopilot":
+                action = str(
+                    body.get("action") or ""
+                ).strip().lower()
+                if action == "start":
+                    try:
+                        result = _start_full_autopilot()
+                    except RuntimeError as exc:
+                        self._json(
+                            {
+                                "ok": False,
+                                "message": str(exc),
+                                "autopilot": autopilot_status(),
+                            },
+                            400,
+                        )
+                        return
+                    status = result["status"]
+                    notes = [
+                        value
+                        for value in (result.get("notes") or [])
+                        if value
+                    ]
+                    self._json({
+                        "ok": True,
+                        "message": (
+                            "完全自動運用を開始しました。"
+                            f" 毎日{status['posts_per_day']}本 / "
+                            f"{status['post_times']} / "
+                            f"公開設定={status['privacy']}。"
+                            + (
+                                "\n" + "\n".join(notes)
+                                if notes else ""
+                            )
+                        ),
+                        "autopilot": status,
+                    })
+                    return
+                if action == "stop":
+                    result = _stop_full_autopilot()
+                    self._json({
+                        "ok": True,
+                        "message": "完全自動運用を停止しました。",
+                        "autopilot": result["status"],
+                    })
+                    return
+                self._json(
+                    {
+                        "message": (
+                            "action must be start or stop"
+                        )
+                    },
+                    400,
+                )
+                return
 
             if path == "/api/daily-auto":
                 count = int(body.get("count") or 0)
@@ -2822,40 +3061,38 @@ def run(open_browser: bool = True) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     _process_git_sha = _current_git_sha()
 
-    # 自動運転がONなのにWindowsタスクが消失/古い場合は、
-    # 管理画面起動時に毎回再登録して自己修復する。
-    first_episode_pending = (
-        get_channel_state(
-            "mirai_first_episode_video_id",
-            "",
-        ).strip().isdigit()
-        and get_channel_state(
-            "mirai_first_episode_uploaded",
-            "false",
-        ).strip().lower() != "true"
-        and get_channel_state(
-            "runtime_cancel_requested",
-            "false",
-        ).strip().lower() != "true"
-    )
-    if (
-        os.name == "nt"
-        and (
-            (automation_enabled() and auto_upload_enabled())
-            or first_episode_pending
+    # 起動直後にproduction armを先に復旧する。
+    # これにより「前回は完全自動運用中だったが、DBの個別スイッチだけ
+    # OFFへ崩れた」ケースでもユーザー操作なしで再開できる。
+    try:
+        migrated = self_heal_delivery_controls()
+        if migrated.get("repairs"):
+            _append_log(
+                "[AUTOPILOT] startup delivery repair: "
+                + " / ".join(migrated["repairs"])
+            )
+        if production_autonomy_armed():
+            healed = heal_autopilot()
+            _append_log(
+                "[AUTOPILOT] startup resume: "
+                + str(
+                    (healed.get("last_event") or {}).get(
+                        "detail"
+                    )
+                    or "完全自動運用を再開"
+                )
+            )
+            repairs = _platform_autonomy_repair(force=True)
+            if repairs:
+                _append_log(
+                    "[AUTOPILOT] startup platform repair:\n"
+                    + "\n".join(repairs)
+                )
+    except Exception as exc:
+        _append_log(
+            "[AUTOPILOT] startup self-heal failed: "
+            + str(exc)
         )
-    ):
-        try:
-            wake_result = _install_wake_task(60)
-            _append_log(
-                "[AUTO-POST] startup wake-task self-heal OK\n"
-                + wake_result
-            )
-        except Exception as exc:
-            _append_log(
-                "[AUTO-POST] startup wake-task self-heal failed: "
-                + str(exc)
-            )
 
     url = f"http://{HOST}:{PORT}"
 
