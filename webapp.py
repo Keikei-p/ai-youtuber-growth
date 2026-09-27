@@ -1528,7 +1528,7 @@ async function refresh(){
         : 'AI動画をONにするには、使用モデルの利用条件を確認して「確認済み」にチェックしてください。');
     const av=state.ai_video||{};
     if(av.backend==='google'){
-      aiVideoStatus.textContent='AI動画: '+(av.available?'Google接続準備OK':'Google API未準備')+
+      aiVideoStatus.textContent='AI動画: '+(av.available?'Google APIキー設定済み':'Google API未準備')+
         ' / '+escapeHtml(av.model||'Veo')+
         ' / '+escapeHtml(av.aspect_ratio||'9:16')+
         ' / '+Number(av.duration_seconds||4)+'秒'+
