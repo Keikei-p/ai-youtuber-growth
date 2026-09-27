@@ -7,6 +7,33 @@ $LogDir = Join-Path $RepoRoot "logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $LogFile = Join-Path $LogDir ("automation-" + (Get-Date -Format "yyyy-MM-dd") + ".log")
 
+$StatusFile = Join-Path $RepoRoot "automation\last_cycle_status.json"
+
+function Write-CycleStatus {
+    param(
+        [string]$Status,
+        [string]$Stage,
+        [string]$Detail = "",
+        [hashtable]$Extra = @{}
+    )
+
+    $Payload = [ordered]@{
+        status = $Status
+        stage = $Stage
+        detail = $Detail
+        updated_at = (Get-Date).ToString("o")
+        pid = $PID
+        log_file = $LogFile
+    }
+    foreach ($Key in $Extra.Keys) {
+        $Payload[$Key] = $Extra[$Key]
+    }
+
+    $Temp = $StatusFile + ".tmp"
+    $Payload | ConvertTo-Json -Depth 6 | Set-Content -Path $Temp -Encoding UTF8
+    Move-Item -Force -Path $Temp -Destination $StatusFile
+}
+
 $mutex = New-Object System.Threading.Mutex($false, "AIYoutuberGrowthCycle")
 if (-not $mutex.WaitOne(0)) {
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] another cycle is already running; skip")
@@ -34,6 +61,7 @@ try {
     }
 
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] wake/cycle start")
+    Write-CycleStatus -Status "running" -Stage "wake_start" -Detail "Windowsタスクが起動しました。"
 
     # スリープ復帰直後はNIC/DNSが戻るまで時間がかかることがある。
     # 最大90秒待ち、戻らなければキューを消費せず次の回復トリガーへ回す。
@@ -50,14 +78,21 @@ try {
     }
     if (-not $NetworkReady) {
         Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] network not ready after wake; keep queue and retry later")
+        Write-CycleStatus -Status "retry_wait" -Stage "network_wait" -Detail "スリープ復帰後90秒以内にGoogle APIへのHTTPS接続を確認できませんでした。キューは保持し、次の回復トリガーで再試行します。"
         exit 0
     }
 
+    Write-CycleStatus -Status "running" -Stage "network_ready" -Detail "ネットワーク復旧を確認しました。"
+
     # MIRAI_DUE_FIRST: スリープ復帰後は重いAIサービスより投稿を最優先。
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] due-first start")
+    Write-CycleStatus -Status "running" -Stage "due_first" -Detail "AIサービス起動より先にYouTube投稿判定を実行しています。"
     & $Python "scheduler.py" "--run-due" *>> $LogFile
     $DueExitCode = $LASTEXITCODE
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] due-first end exit=" + $DueExitCode)
+    if ($DueExitCode -eq 0) {
+        Write-CycleStatus -Status "running" -Stage "due_first_done" -Detail "期限投稿判定が終了しました。" -Extra @{ due_exit_code = $DueExitCode }
+    }
     if ($DueExitCode -ne 0) {
         throw "scheduler.py --run-due failed with exit code $DueExitCode"
     }
@@ -65,6 +100,7 @@ try {
     # MIRAI_SAFE_SELF_UPDATE: 投稿判定を先に終えた後でだけ自己更新を確認。
     if (Test-Path (Join-Path $RepoRoot "safe_self_update.py")) {
         Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check")
+        Write-CycleStatus -Status "running" -Stage "self_update" -Detail "投稿判定後に安全な自己更新を確認しています。"
         & $Python "safe_self_update.py" *>> $LogFile
         Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check end")
     }
@@ -97,15 +133,23 @@ try {
         }
     }
 
+    Write-CycleStatus -Status "running" -Stage "tick" -Detail "通常の生成・分析サイクルを実行しています。"
     & $Python "scheduler.py" "--tick" *>> $LogFile
     $ExitCode = $LASTEXITCODE
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] cycle end exit=" + $ExitCode)
+    if ($ExitCode -eq 0) {
+        Write-CycleStatus -Status "success" -Stage "complete" -Detail "スリープ復帰/自動投稿サイクルを正常終了しました。" -Extra @{ tick_exit_code = $ExitCode; due_exit_code = $DueExitCode }
+    }
     if ($ExitCode -ne 0) {
         throw "scheduler.py --tick failed with exit code $ExitCode"
     }
 }
 catch {
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] ERROR: " + $_.Exception.Message)
+    try {
+        Write-CycleStatus -Status "failed" -Stage "error" -Detail $_.Exception.Message
+    }
+    catch {}
     try {
         if ($Python -and (Test-Path (Join-Path $RepoRoot "safe_code_repair.py"))) {
             Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check start")
