@@ -314,7 +314,8 @@ def _ensure_local_services() -> None:
 
     voice_status = voice_provider_status()
     if (
-        not voice_status["available"]
+        execution_mode() == "local"
+        and not voice_status["available"]
         and voice_provider_name() == "voicevox"
     ):
         paths = _candidate_voicevox_paths()
@@ -631,6 +632,16 @@ def _status_payload() -> dict:
     services = _service_status()
     auto_post_health = _cached_auto_post_health()
 
+    execution = execution_status()
+    if execution.get("mode") == "cloud":
+        system_ready = bool(
+            services.get("ollama")
+            and services.get("youtube_token")
+            and execution.get("cloud_configured")
+        )
+    else:
+        system_ready = all(services.values())
+
     return {
         "automation_enabled": automation_enabled(),
         "auto_upload_enabled": auto_upload_enabled(),
@@ -640,7 +651,7 @@ def _status_payload() -> dict:
         "posts_per_day": posts_per_day(),
         "post_times": post_times(),
         "daily_auto": daily_auto_status(),
-        "execution": execution_status(),
+        "execution": execution,
         "guest_every": guest_appearance_every(),
         "guest_new_every": guest_new_every(),
         "guest_image_auto_enabled": guest_image_auto_enabled(),
@@ -670,7 +681,7 @@ def _status_payload() -> dict:
         "evolution": evolution_status(),
         "engines": _engine_status(),
         "rights": _rights_status(),
-        "system_ready": all(services.values()),
+        "system_ready": system_ready,
         "queue": _queue_status(),
         "videos": _video_status(),
         "guests": _guest_status(),
