@@ -19,6 +19,21 @@ def review_script(title: str, script: str, recent: list[dict]) -> tuple[bool, li
         issues.append("script_too_long")
     if not title.strip():
         issues.append("missing_title")
+    elif len(title.strip()) > 75:
+        issues.append("title_too_long")
+
+    first_sentence = re.split(r"[。！？!?]", script, maxsplit=1)[0].strip()
+    if len(first_sentence) > 72:
+        issues.append("weak_hook_too_long")
+
+    ending = script[-110:]
+    if not any(
+        marker in ending
+        for marker in (
+            "コメント", "教えて", "どう思", "次", "見守", "続き",
+        )
+    ):
+        issues.append("missing_viewer_or_next_episode_hook")
 
     for phrase in BANNED_PHRASES:
         if phrase in title or phrase in script:
