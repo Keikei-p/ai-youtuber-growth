@@ -149,9 +149,18 @@ def studio_status() -> dict:
 
 
 def _resolve_backend() -> str:
+    cached = str(
+        getattr(_BATCH_LOCAL, "backend", "") or ""
+    ).strip()
+    if _image_batch_active() and cached:
+        return cached
+
     status = studio_status()
     if status["selected"]:
-        return str(status["selected"])
+        selected = str(status["selected"])
+        if _image_batch_active():
+            _BATCH_LOCAL.backend = selected
+        return selected
     if status["configured"] == "diffusers":
         raise RuntimeError(
             "Diffusers画像生成が未導入です。"
@@ -240,9 +249,11 @@ def image_generation_session():
 
     with exclusive_gpu_task("AI Studio画像バッチ"):
         try:
+            _BATCH_LOCAL.backend = ""
             yield
         finally:
             _BATCH_LOCAL.depth = 0
+            _BATCH_LOCAL.backend = ""
             _park_pipeline()
 
 
