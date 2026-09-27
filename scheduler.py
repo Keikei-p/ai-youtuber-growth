@@ -23,6 +23,7 @@ from self_improvement import (
 from runtime_control import (
     automation_enabled,
     auto_upload_enabled,
+    execution_mode,
     post_times,
     posts_per_day,
     set_auto_upload_enabled,
