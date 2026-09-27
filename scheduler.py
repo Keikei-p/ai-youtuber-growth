@@ -678,11 +678,15 @@ def _generation_runtime_ready() -> bool:
     problems: list[str] = []
     if not OllamaClient().available():
         problems.append("Ollama")
-    voice_status = voice_provider_status()
-    if not voice_status["available"]:
-        problems.append(f"Voice({voice_status['name']})")
-    if not shutil.which("ffmpeg"):
-        problems.append("FFmpeg")
+
+    # cloudでは画像/音声/FFmpeg/品質検査をWorker側で実行する。
+    # 現段階の企画・台本はローカルOllamaを使うためOllamaだけ確認する。
+    if execution_mode() == "local":
+        voice_status = voice_provider_status()
+        if not voice_status["available"]:
+            problems.append(f"Voice({voice_status['name']})")
+        if not shutil.which("ffmpeg"):
+            problems.append("FFmpeg")
 
     if problems:
         print(
