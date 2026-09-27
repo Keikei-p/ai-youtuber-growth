@@ -81,12 +81,25 @@ class ThreeVideoMediaPipelineTests(unittest.TestCase):
             self._visual("bg2.png", (45, 30, 75)),
         ]
 
+        scripts = [
+            (
+                "最初の動画では音声の自然さを確認します。"
+                "文章を区切って読み上げ、声と映像が最後まで同期するか検証します。"
+                "次は構成の見やすさを確認します。"
+            ),
+            (
+                "二本目は動画構成のテストです。"
+                "背景を切り替えながら字幕の長さと場面転換を確認します。"
+                "見づらい所があれば次の編集で直します。"
+            ),
+            (
+                "三本目では完成動画の品質を確認します。"
+                "解像度、音声、字幕、ファイルサイズをまとめて検査します。"
+                "問題がなければ次の工程へ進みます。"
+            ),
+        ]
         items: list[dict] = []
-        for index in range(1, 4):
-            script = (
-                f"これはミライのサーバー統合テスト{index}本目です。"
-                "音声設計、動画構成、字幕、編集、品質検査まで確認します。"
-            )
+        for index, script in enumerate(scripts, start=1):
             video_id = storage.save_video(
                 idea=f"server media {index}",
                 angle="full media pipeline",
