@@ -442,6 +442,23 @@ def recover_upload_failure(
         )
         return result
 
+    if (
+        video_id > 0
+        and code in {
+            "oauth",
+            "quota",
+            "metadata",
+            "publish_guard",
+            "missing_file",
+        }
+    ):
+        # これらはYouTube側で投稿完了している曖昧状態ではない。
+        # 古いintentを残すと次回に不要なremote照合が走るため消す。
+        set_channel_state(
+            f"youtube_upload_intent_{video_id}",
+            "",
+        )
+
     if queue_id <= 0:
         _record(
             video_id=video_id or None,
