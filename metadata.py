@@ -19,6 +19,129 @@ def _clean_title(title: str) -> str:
     title = title.replace("<", "").replace(">", "")
     return title[:100].rstrip()
 
+CLICKBAIT_PATTERNS = (
+    "絶対", "100%", "必ず", "衝撃", "閲覧注意", "知らないと損",
+    "ヤバすぎ", "神回", "史上最強",
+)
+
+
+def _keywords(text: str) -> set[str]:
+    words = re.findall(
+        r"[A-Za-z]{3,}|[一-龯ぁ-んァ-ヶー]{2,10}",
+        str(text or ""),
+    )
+    return {
+        word.lower()
+        for word in words
+        if word.lower() not in {
+            "youtube", "shorts", "short", "動画", "今回",
+        }
+    }
+
+
+def _title_score(
+    title: str,
+    *,
+    idea: dict,
+    script: str,
+) -> tuple[int, list[str]]:
+    value = _clean_title(title)
+    if not value:
+        return 0, ["empty"]
+
+    score = 70
+    reasons: list[str] = []
+    length = len(value)
+    if 18 <= length <= 42:
+        score += 12
+        reasons.append("smartphone_length")
+    elif length <= 55:
+        score += 6
+    elif length > 75:
+        score -= 12
+        reasons.append("too_long")
+
+    source = " ".join([
+        str(idea.get("idea") or ""),
+        str(idea.get("angle") or ""),
+        str(idea.get("hook") or ""),
+        str(script or ""),
+    ])
+    source_keys = _keywords(source)
+    title_keys = _keywords(value)
+    overlap = len(source_keys & title_keys)
+    if overlap >= 2:
+        score += 10
+        reasons.append("content_match")
+    elif overlap == 1:
+        score += 5
+    elif source_keys:
+        score -= 8
+        reasons.append("weak_content_match")
+
+    if any(mark in value for mark in ("？", "?", "なぜ", "どうなる", "結果")):
+        score += 4
+        reasons.append("curiosity")
+    if re.search(r"\d", value):
+        score += 2
+    if "ミライ" in value or "AI" in value:
+        score += 3
+
+    for pattern in CLICKBAIT_PATTERNS:
+        if pattern in value:
+            score -= 16
+            reasons.append("clickbait_penalty")
+
+    if value.endswith(("#Shorts", "#AIYouTuber")):
+        score -= 3
+
+    return max(0, min(score, 100)), reasons
+
+
+def _select_title(
+    candidates: list[str],
+    *,
+    idea: dict,
+    script: str,
+    fallback: str,
+) -> tuple[str, list[dict]]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in [*candidates, fallback]:
+        title = _clean_title(str(raw or ""))
+        key = title.lower()
+        if not title or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(title)
+
+    scored: list[dict] = []
+    for title in cleaned[:8]:
+        score, reasons = _title_score(
+            title,
+            idea=idea,
+            script=script,
+        )
+        scored.append({
+            "title": title,
+            "score": score,
+            "reasons": reasons,
+        })
+    scored.sort(
+        key=lambda row: (
+            int(row["score"]),
+            -abs(len(str(row["title"])) - 32),
+        ),
+        reverse=True,
+    )
+    selected = (
+        str(scored[0]["title"])
+        if scored
+        else _clean_title(fallback)
+    )
+    return selected, scored
+
+
 def _clean_tags(tags: list[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -79,8 +202,22 @@ def _fallback_metadata(written: dict, idea: dict, guest: dict | None) -> dict:
     if guest_name:
         tags += [guest_name, "AIゲスト"]
 
+    fallback_candidates = [
+        title,
+        _clean_title(f"{idea.get('idea', title)}｜AIの成長記録"),
+        _clean_title(f"AIが自分で改善したらどうなる？ {idea.get('idea', '')}"),
+        _clean_title(f"{idea.get('idea', title)}、ミライが自分で検証"),
+        _clean_title(f"第{max(1, len(str(idea.get('idea', '')))) % 9 + 1}回 AI成長実験：{idea.get('idea', title)}"),
+    ]
+    selected, scored = _select_title(
+        fallback_candidates,
+        idea=idea,
+        script=str(written.get("script") or ""),
+        fallback=title,
+    )
     return {
-        "title": title,
+        "title": selected,
+        "title_candidates": scored,
         "description": description,
         "tags": _clean_tags(tags),
     }
@@ -114,7 +251,8 @@ def build_metadata(
 {json.dumps(guest, ensure_ascii=False) if guest else "なし"}
 
 条件:
-- titleは内容を正確に表し、100文字以内。できれば40文字前後で強く分かりやすく
+- title_candidatesを5案作る。すべて内容を正確に表し、100文字以内、できれば18〜42文字
+- 5案は「疑問型」「結果型」「成長物語型」「検索意図型」「短い直球型」で意図的に差を付ける
 - 誇大表現、動画と違う釣りタイトルは禁止
 - descriptionは簡潔な概要 + 自然な視聴者参加の一言
 - description末尾に関連ハッシュタグを3〜5個
@@ -125,7 +263,7 @@ def build_metadata(
 - JSONだけ
 
 {{
-  "title":"...",
+  "title_candidates":["...","...","...","...","..."],
   "description":"...",
   "tags":["...","..."]
 }}
@@ -134,7 +272,28 @@ def build_metadata(
         data = client.generate_json(prompt)
         if not isinstance(data, dict):
             return fallback
-        title = _clean_title(str(data.get("title") or fallback["title"]))
+        raw_candidates = data.get("title_candidates") or []
+        if not isinstance(raw_candidates, list):
+            raw_candidates = []
+        # 旧モデル互換: titleしか返さない場合も候補へ加える。
+        if data.get("title"):
+            raw_candidates = [
+                str(data.get("title")),
+                *raw_candidates,
+            ]
+        raw_candidates.extend(
+            [
+                row["title"]
+                for row in (fallback.get("title_candidates") or [])
+                if isinstance(row, dict) and row.get("title")
+            ]
+        )
+        title, scored_candidates = _select_title(
+            [str(value) for value in raw_candidates],
+            idea=idea,
+            script=script,
+            fallback=fallback["title"],
+        )
         description = _append_disclosures(
             str(data.get("description") or fallback["description"])
         )
@@ -144,6 +303,7 @@ def build_metadata(
         )
         return {
             "title": title,
+            "title_candidates": scored_candidates,
             "description": description,
             "tags": tags,
         }
