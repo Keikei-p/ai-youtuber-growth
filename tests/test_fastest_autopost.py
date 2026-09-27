@@ -342,5 +342,88 @@ class FastestAutopostTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+    def test_due_cycle_recovers_remote_upload_without_second_upload(self) -> None:
+        video_id = self._video()
+        storage.queue_video(
+            video_id,
+            "2026-09-28T12:00+09:00",
+        )
+        now = datetime(2026, 9, 28, 12, 1, tzinfo=JST)
+        with patch.object(scheduler, "_now", return_value=now):
+            scheduler._save_upload_intent(
+                video_id,
+                title="Recovered upload",
+                description="safe description",
+                privacy="private",
+                queue_id=1,
+            )
+
+        verified = {
+            "verified": True,
+            "exists": True,
+            "processing_status": "succeeded",
+            "upload_status": "processed",
+            "privacy_status": "private",
+            "title_match": True,
+            "description_match": True,
+            "privacy_match": True,
+            "duration_present": True,
+            "thumbnail_present": True,
+            "playback_ready": True,
+        }
+        with (
+            patch.object(scheduler, "_now", return_value=now),
+            patch.object(
+                scheduler,
+                "auto_upload_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                scheduler,
+                "_upload_runtime_block_reason",
+                return_value="",
+            ),
+            patch.object(
+                scheduler,
+                "voice_attribution_status",
+                return_value={"resolved": True, "credit": ""},
+            ),
+            patch.object(
+                scheduler,
+                "publish_gate",
+                return_value={"allowed": True, "risks": []},
+            ),
+            patch.object(
+                scheduler,
+                "find_recent_matching_upload",
+                return_value="youtube-recovered-due",
+            ),
+            patch.object(
+                scheduler,
+                "upload_video",
+            ) as upload,
+            patch.object(
+                scheduler,
+                "verify_uploaded_video",
+                return_value=verified,
+            ),
+            patch.object(
+                scheduler,
+                "cleanup_uploaded_media",
+            ),
+        ):
+            scheduler.run_due()
+
+        upload.assert_not_called()
+        row = storage.video_by_id(video_id)
+        self.assertEqual(
+            row["youtube_video_id"],
+            "youtube-recovered-due",
+        )
+        queue = storage.queue_item_for_video(video_id)
+        self.assertEqual(queue["status"], "uploaded")
+
+
+
 if __name__ == "__main__":
     unittest.main()
