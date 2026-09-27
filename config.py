@@ -66,6 +66,9 @@ class Settings:
     cloud_autonomy_runner: bool = (
         os.getenv("CLOUD_AUTONOMY_RUNNER", "false").lower() == "true"
     )
+    cloud_autonomy_poll_seconds: int = int(
+        os.getenv("CLOUD_AUTONOMY_POLL_SECONDS", "60")
+    )
     character_file: str = os.getenv("CHARACTER_FILE", "character/character.json")
     youtube_client_secret_file: str = os.getenv("YOUTUBE_CLIENT_SECRET_FILE", "client_secret.json")
     youtube_token_file: str = os.getenv("YOUTUBE_TOKEN_FILE", "token.json")
