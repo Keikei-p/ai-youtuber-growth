@@ -104,6 +104,15 @@ class Settings:
     )
     auto_upload_enabled: bool = os.getenv("AUTO_UPLOAD_ENABLED", "false").lower() == "true"
     auto_upload_privacy: str = os.getenv("AUTO_UPLOAD_PRIVACY", "private")
+    youtube_upload_chunk_mb: int = int(
+        os.getenv("YOUTUBE_UPLOAD_CHUNK_MB", "8")
+    )
+    youtube_reconcile_lookback_minutes: int = int(
+        os.getenv("YOUTUBE_RECONCILE_LOOKBACK_MINUTES", "30")
+    )
+    youtube_reconcile_grace_minutes: int = int(
+        os.getenv("YOUTUBE_RECONCILE_GRACE_MINUTES", "3")
+    )
 
     cleanup_after_upload: bool = os.getenv("CLEANUP_AFTER_UPLOAD", "true").lower() == "true"
 
@@ -138,6 +147,9 @@ class Settings:
         "FFMPEG_VIDEO_ENCODER",
         "auto",
     ).strip().lower()
+    media_render_fps: int = int(
+        os.getenv("MEDIA_RENDER_FPS", "24")
+    )
 
     # Visual Evolution v1。GTX 1070で落ちにくい範囲で候補比較する。
     visual_candidate_count: int = int(os.getenv("VISUAL_CANDIDATE_COUNT", "2"))
