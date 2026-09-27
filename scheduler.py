@@ -1060,6 +1060,14 @@ def _verify_receipt_and_finalize(
         f"metadata_sanitize_requested_{video_id}",
         "false",
     )
+    set_channel_state(
+        f"publish_guard_attention_{video_id}",
+        "",
+    )
+    set_channel_state(
+        f"upload_recovery_attention_{video_id}",
+        "",
+    )
     _clear_upload_intent(video_id)
     return {
         "youtube_video_id": youtube_id,
