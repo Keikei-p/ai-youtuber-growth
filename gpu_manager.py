@@ -14,6 +14,7 @@ import requests
 from config import settings
 
 _GPU_LOCK = threading.RLock()
+_GPU_LOCAL = threading.local()
 
 
 def _loaded_ollama_models() -> list[str]:
@@ -171,20 +172,31 @@ def gpu_snapshot() -> dict:
 @contextmanager
 def exclusive_gpu_task(label: str):
     """
-    ミライ内のGPU重処理を直列化し、画像処理前にはOllamaのVRAMを解放する。
-    外部アプリは強制終了しない。
+    ミライ内のGPU重処理を直列化する。
+
+    ネストされたGPU処理では、Ollama解放・CUDAキャッシュ整理を
+    外側の1回だけにまとめる。以前は画像候補ごとに同じ準備処理を
+    繰り返しており、生成そのもの以外の待ち時間が大きかった。
     """
     with _GPU_LOCK:
-        print(f"[GPU] {label}: GPU使用権を取得")
-        released = unload_ollama_model()
-        print(
-            f"[GPU] {label}: Ollama VRAM解放 "
-            + ("OK" if released else "未確認")
-        )
-        release_torch_cuda_cache()
-        time.sleep(0.5)
+        depth = int(getattr(_GPU_LOCAL, "depth", 0) or 0)
+        outermost = depth == 0
+        _GPU_LOCAL.depth = depth + 1
+        if outermost:
+            print(f"[GPU] {label}: GPU使用権を取得")
+            released = unload_ollama_model()
+            print(
+                f"[GPU] {label}: Ollama VRAM解放 "
+                + ("OK" if released else "未確認")
+            )
+            release_torch_cuda_cache()
         try:
             yield
         finally:
-            release_torch_cuda_cache()
-            print(f"[GPU] {label}: GPU使用権を解放")
+            _GPU_LOCAL.depth = max(
+                int(getattr(_GPU_LOCAL, "depth", 1) or 1) - 1,
+                0,
+            )
+            if outermost:
+                release_torch_cuda_cache()
+                print(f"[GPU] {label}: GPU使用権を解放")
