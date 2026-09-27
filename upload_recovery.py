@@ -320,6 +320,11 @@ def _failure_knowledge(code: str) -> dict[str, str]:
             "fix": "タイトル/説明/タグを安全化して再試行",
             "prevention": "文字数とタグ総量を投稿前に制限",
         },
+        "publish_guard": {
+            "cause": "公開前確認ルールで人間の承認待ち",
+            "fix": "新規投稿せず一定時間後に承認状態を再確認",
+            "prevention": "承認待ち中の毎分再試行を避ける",
+        },
     }
     return mapping.get(code, {
         "cause": "未知の失敗",
@@ -391,6 +396,7 @@ def recover_upload_failure(
         "metadata": 4,
         "quota": 3,
         "oauth": 2,
+        "publish_guard": 9999,
         "unknown": 4,
     }
     limit = int(limits.get(code, 5))
@@ -562,7 +568,21 @@ def recover_upload_failure(
             scheduled_for=retry_at.isoformat(timespec="minutes"),
         )
     elif code == "publish_guard":
-        result["handled"] = True
+        retry_at = now + timedelta(minutes=30)
+        set_queue_recovery(
+            queue_id,
+            scheduled_for=retry_at.isoformat(timespec="minutes"),
+            error=f"[ACTION-REQUIRED:publish_guard] {message}",
+            increment_attempt=False,
+        )
+        set_channel_state(
+            f"publish_guard_attention_{video_id}",
+            message[:1000],
+        )
+        result.update(
+            handled=True,
+            scheduled_for=retry_at.isoformat(timespec="minutes"),
+        )
 
     _record(
         video_id=video_id or None,
