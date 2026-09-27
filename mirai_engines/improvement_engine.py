@@ -4,6 +4,7 @@ from collections import Counter
 from typing import Any
 
 from storage import analytics_history, get_channel_state
+from resilience_learning import resilience_snapshot
 from .debug_engine import MiraiDebugEngine
 from .quality_engine import MiraiQualityEngine
 from .visual_learning import VisualLearningMemory
@@ -20,6 +21,7 @@ class MiraiImprovementEngine:
         debug = MiraiDebugEngine().recent(20)
         analytics = analytics_history(20)
         visual = VisualLearningMemory().dashboard_state()
+        resilience = resilience_snapshot(12)
 
         recommendations: list[dict[str, str]] = []
         actions: list[dict[str, Any]] = []
@@ -202,6 +204,30 @@ class MiraiImprovementEngine:
                         }
                     )
 
+        unresolved = [
+            row
+            for row in resilience.get("playbooks") or []
+            if row.get("status") in {"learning", "regressed"}
+        ]
+        for row in unresolved[:3]:
+            if int(row.get("occurrences") or 0) < 2:
+                continue
+            recommendations.append(
+                {
+                    "area": "reliability",
+                    "priority": "high",
+                    "action": str(
+                        row.get("preferred_next_action")
+                        or "既知の復旧手順を優先する"
+                    ),
+                    "reason": (
+                        f"{row.get('stage')}で同じ失敗が"
+                        f"{int(row.get('occurrences') or 0)}回発生。"
+                        "過去の成功/失敗履歴を使って次の復旧順を固定します。"
+                    ),
+                }
+            )
+
         if not recommendations and not actions:
             summary = "明確な再発パターンはまだありません。現設定を維持してデータを蓄積します。"
         else:
@@ -221,4 +247,5 @@ class MiraiImprovementEngine:
                 "planner": get_channel_state("autonomous_planner_guidance", ""),
                 "visual": visual,
             },
+            "resilience": resilience,
         }
