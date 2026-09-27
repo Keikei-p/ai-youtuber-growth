@@ -141,6 +141,7 @@ def _save_autonomy_event(
 
 
 def autonomy_status() -> dict:
+    init_db()
     from runtime_control import (
         automation_enabled,
         auto_upload_enabled,
@@ -692,6 +693,7 @@ def run(
             "CLOUD_EXECUTION_TOKENが必須です。"
         )
     ensure_runtime_dirs()
+    init_db()
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
     ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
     recovered = _recover_stale_jobs()
