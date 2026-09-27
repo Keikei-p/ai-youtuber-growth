@@ -100,24 +100,26 @@ def self_heal_delivery_controls() -> dict[str, Any]:
     # 本番arm済みなのに片方だけOFFへ崩れた時だけ自己修復する。
     # 夜間テスト等の「自動運転ON / 投稿OFF」は意図した状態なので触らない。
     if (
-        first_pending
-        and production_armed
+        production_armed
         and not runtime_cancel_requested()
         and automation_enabled()
         and not auto_upload_enabled()
     ):
         set_auto_upload_enabled(True)
-        repairs.append("本番arm済み第1話の自動投稿OFF不整合をONへ復旧")
+        repairs.append(
+            "本番arm済みの自動投稿OFF不整合をONへ復旧"
+        )
 
     if (
-        first_pending
-        and production_armed
+        production_armed
         and not runtime_cancel_requested()
         and not automation_enabled()
     ):
         set_automation_enabled(True)
         set_auto_upload_enabled(True)
-        repairs.append("本番自動運転の配送途中で設定OFFを検出しONへ復旧")
+        repairs.append(
+            "本番arm済み自動運転の設定OFFを検出しONへ復旧"
+        )
 
     refreshed = inspect_delivery_state()
     refreshed["repairs"] = repairs
