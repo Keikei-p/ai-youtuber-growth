@@ -200,6 +200,11 @@ class PipelineFlowTests(unittest.TestCase):
             "idea": {"idea": "test", "angle": "test"},
         }
         with (
+            patch.object(
+                production_pipeline,
+                "ai_video_backend_name",
+                return_value="animatediff",
+            ),
             patch.object(production_pipeline, "ai_video_enabled", return_value=True),
             patch.object(
                 production_pipeline,

@@ -131,7 +131,7 @@ class Settings:
     ai_video_enabled: bool = (
         os.getenv("AI_VIDEO_ENABLED", "false").lower() == "true"
     )
-    ai_video_backend: str = os.getenv("AI_VIDEO_BACKEND", "google")
+    ai_video_backend: str = os.getenv("AI_VIDEO_BACKEND", "native")
     ai_video_license_confirmed: bool = (
         os.getenv("AI_VIDEO_LICENSE_CONFIRMED", "false").lower() == "true"
     )
@@ -145,6 +145,9 @@ class Settings:
     google_ai_api_key: str = os.getenv(
         "GEMINI_API_KEY",
         os.getenv("GOOGLE_API_KEY", ""),
+    )
+    google_video_enabled: bool = (
+        os.getenv("GOOGLE_VIDEO_ENABLED", "false").lower() == "true"
     )
     google_video_model: str = os.getenv(
         "GOOGLE_VIDEO_MODEL",

@@ -82,9 +82,13 @@ def google_video_status() -> dict[str, Any]:
     aspect = str(
         getattr(settings, "google_video_aspect_ratio", "9:16")
     )
+    enabled = bool(
+        getattr(settings, "google_video_enabled", False)
+    )
     return {
-        "available": bool(key) and model in SUPPORTED_MODELS,
+        "available": enabled and bool(key) and model in SUPPORTED_MODELS,
         "api_key_configured": bool(key),
+        "google_video_enabled": enabled,
         "backend": "google",
         "provider": "Gemini API / Veo",
         "model": model,
@@ -93,9 +97,13 @@ def google_video_status() -> dict[str, Any]:
         "aspect_ratio": aspect,
         "uses_paid_api": True,
         "reason": (
-            ""
-            if key
-            else "GEMINI_API_KEY または GOOGLE_API_KEY が未設定です"
+            "初期運用ではGoogle有料動画生成を停止中です"
+            if not enabled
+            else (
+                ""
+                if key
+                else "GEMINI_API_KEY または GOOGLE_API_KEY が未設定です"
+            )
         ),
     }
 
@@ -190,6 +198,14 @@ def generate_google_veo_clip(
     - long-running operationをpoll
     - 完成した動画は2日以内に必ずローカル保存
     """
+    if not bool(getattr(settings, "google_video_enabled", False)):
+        raise GoogleVideoGenerationError(
+            "Google有料動画生成は初期運用で無効です。"
+            " GOOGLE_VIDEO_ENABLED=true を明示設定した時だけ利用できます。",
+            code="google_video_disabled",
+            retryable=False,
+        )
+
     api_key = _api_key()
     if not api_key:
         raise GoogleVideoGenerationError(
