@@ -1269,11 +1269,14 @@ def _reconcile_upload_intent(
 
     started_raw = str(intent.get("started_at") or "").strip()
     try:
+        now_value = _now()
         started = datetime.fromisoformat(started_raw)
         if started.tzinfo is None:
-            started = started.replace(tzinfo=_tz())
+            started = started.replace(tzinfo=now_value.tzinfo)
+        elif now_value.tzinfo is not None:
+            started = started.astimezone(now_value.tzinfo)
         age_minutes = (
-            _now() - started.astimezone(_tz())
+            now_value - started
         ).total_seconds() / 60
     except Exception:
         age_minutes = 999.0
