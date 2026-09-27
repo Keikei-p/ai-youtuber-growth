@@ -20,6 +20,7 @@ from gpu_manager import (
     release_torch_cuda_cache,
 )
 from self_improvement import record_failure
+from runtime_control import ai_video_backend_name
 from studio.asset_store import GENERATED_ROOT, ensure_dirs, record_asset
 from studio.google_video_generator import (
     generate_google_veo_clip,
@@ -29,7 +30,7 @@ from studio.models import NEGATIVE_PROMPT
 
 
 def ai_video_status() -> dict:
-    backend = str(settings.ai_video_backend or "google").strip().lower()
+    backend = ai_video_backend_name()
     native = native_video_status()
 
     if backend == "google":
@@ -246,7 +247,7 @@ def generate_animatediff_clip(
     短いAI動画素材を1本だけ生成。
     GTX 1070向けに低解像度・少フレーム・CPUオフロードを前提にする。
     """
-    backend = str(settings.ai_video_backend or "google").strip().lower()
+    backend = ai_video_backend_name()
     if backend == "google":
         return generate_google_veo_clip(
             prompt,
