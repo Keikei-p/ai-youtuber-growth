@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import cloud_worker
 import execution_provider
 import runtime_control
 import storage
@@ -238,6 +240,114 @@ class LocalCloudExecutionTests(unittest.TestCase):
         self.assertEqual(event["status"], "succeeded")
         self.assertFalse(event["fallback"])
 
+    def test_real_http_cloud_worker_roundtrip_returns_artifacts(self) -> None:
+        video_id, items = self._video()
+        runtime_control.set_execution_mode("cloud")
+        runtime_control.set_cloud_execution_fallback_local(True)
+
+        worker_jobs = self.root / "worker-jobs"
+        worker_artifacts = self.root / "worker-artifacts"
+        client_videos = self.root / "client-videos"
+        client_generated = self.root / "client-generated"
+
+        def fake_produce(remote_items, character):
+            self.assertEqual(character["name"], "Mirai")
+            for item in remote_items:
+                output = self.root / f"remote-{item['id']}.mp4"
+                output.write_bytes(b"remote-video")
+                thumb = self.root / f"remote-{item['id']}.jpg"
+                thumb.write_bytes(b"remote-thumbnail")
+                item["output_path"] = str(output)
+                item["thumbnail_path"] = str(thumb)
+                item["status"] = "rendered"
+                item["quality_passed"] = True
+                item["quality"] = {"score": 93}
+
+        worker_settings = SimpleNamespace(
+            cloud_execution_token="test-token",
+        )
+
+        with (
+            patch.object(
+                cloud_worker,
+                "JOB_ROOT",
+                worker_jobs,
+            ),
+            patch.object(
+                cloud_worker,
+                "ARTIFACT_ROOT",
+                worker_artifacts,
+            ),
+            patch.object(
+                cloud_worker,
+                "produce_media",
+                side_effect=fake_produce,
+            ),
+            patch.object(
+                cloud_worker,
+                "settings",
+                worker_settings,
+            ),
+        ):
+            server = cloud_worker.ThreadingHTTPServer(
+                ("127.0.0.1", 0),
+                cloud_worker.CloudWorkerHandler,
+            )
+            thread = threading.Thread(
+                target=server.serve_forever,
+                daemon=True,
+            )
+            thread.start()
+            port = int(server.server_address[1])
+            client_settings = SimpleNamespace(
+                cloud_execution_url=f"http://127.0.0.1:{port}",
+                cloud_execution_token="test-token",
+                cloud_execution_timeout_seconds=15,
+                cloud_execution_poll_seconds=1,
+            )
+            try:
+                with (
+                    patch.object(
+                        execution_provider,
+                        "settings",
+                        client_settings,
+                    ),
+                    patch.object(
+                        execution_provider,
+                        "VIDEO_DIR",
+                        client_videos,
+                    ),
+                    patch.object(
+                        execution_provider,
+                        "GENERATED_ROOT",
+                        client_generated,
+                    ),
+                ):
+                    execution_provider.execute_media(
+                        items,
+                        {"name": "Mirai"},
+                    )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        self.assertTrue(items[0]["quality_passed"])
+        self.assertEqual(items[0]["quality"]["score"], 93)
+        self.assertTrue(Path(items[0]["output_path"]).is_file())
+        self.assertTrue(Path(items[0]["thumbnail_path"]).is_file())
+        row = storage.video_by_id(video_id)
+        self.assertEqual(row["status"], "rendered")
+        event = json.loads(
+            storage.get_channel_state(
+                "execution_last_event",
+                "{}",
+            )
+        )
+        self.assertEqual(event["location"], "cloud")
+        self.assertEqual(event["status"], "succeeded")
+        self.assertFalse(event["fallback"])
+
     def test_execution_status_never_exposes_cloud_token(self) -> None:
         fake_settings = SimpleNamespace(
             cloud_execution_url="https://worker.example.com",
@@ -295,7 +405,7 @@ class ExecutionDashboardStaticTests(unittest.TestCase):
         self.assertIn('id="executionMode"', source)
         self.assertIn('id="cloudFallback"', source)
         self.assertIn('id="executionStatus"', source)
-        self.assertIn('"execution": execution_status()', source)
+        self.assertIn('"execution": execution,', source)
         self.assertIn(
             "set_execution_mode",
             source,
