@@ -98,6 +98,7 @@ CLOUD_EXECUTION_TOKEN=十分に長いランダム文字列
 - `CLOUD_AUTONOMY_RUNNER=false` が初期値なので、既存PC運用は勝手に変わりません。
 - サーバー常駐時も既存のscheduler runtime lock / upload lock / safety stopをそのまま使います。
 - 自動運転OFFならランナーは待機し、明示的にarmされた時だけ自動処理を進めます。
+- 投稿時刻の確認は `CLOUD_AUTONOMY_POLL_SECONDS`（初期60秒）で軽量に回し、生成・分析など重いフルサイクルは既存の自動運転間隔で実行します。
 - `GET /v1/runtime/status` で常駐状態を確認できます。
 - 認証済み `POST /v1/runtime/control` に `{"action":"arm"}` / `{"action":"disarm"}` を送るとサーバー側の本番自動運転を切り替えられます。
 - 同じサーバーでメディア制作も行う場合は `EXECUTION_MODE=local`。制御サーバーとGPU制作サーバーを分離する場合だけ `EXECUTION_MODE=cloud` を使います。
