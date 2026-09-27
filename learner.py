@@ -246,6 +246,15 @@ def build_success_pattern_memory(
         comments = int(row.get("comments") or 0)
         shares = int(row.get("shares") or 0)
         subscribers = int(row.get("subscribers_gained") or 0)
+        retention_3 = float(row.get("retention_at_3_seconds") or 0) * 100
+        retention_15 = float(row.get("retention_at_15_seconds") or 0) * 100
+
+        if retention_3 >= 85:
+            signals.append("冒頭3秒フックが強い")
+        elif 0 < retention_3 < 65:
+            signals.append("冒頭3秒の離脱改善が必要")
+        if retention_15 >= 70:
+            signals.append("5〜15秒の展開が強い")
 
         if retention >= 70:
             signals.append("強い視聴維持: 冒頭とテンポの型を再利用")
