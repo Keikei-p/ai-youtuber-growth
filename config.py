@@ -146,7 +146,9 @@ class Settings:
         "GEMINI_API_KEY",
         os.getenv("GOOGLE_API_KEY", ""),
     )
-    google_video_enabled: bool = _env_bool("GOOGLE_VIDEO_ENABLED", False)
+    google_video_enabled: bool = (
+        os.getenv("GOOGLE_VIDEO_ENABLED", "false").lower() == "true"
+    )
     google_video_model: str = os.getenv(
         "GOOGLE_VIDEO_MODEL",
         "veo-3.1-fast-generate-preview",
