@@ -184,7 +184,20 @@ def exclusive_gpu_task(label: str):
         _GPU_LOCAL.depth = depth + 1
         if outermost:
             print(f"[GPU] {label}: GPU使用権を取得")
-            released = unload_ollama_model()
+            wait_seconds = (
+                3.0
+                if bool(
+                    getattr(
+                        settings,
+                        "media_fast_mode",
+                        True,
+                    )
+                )
+                else 12.0
+            )
+            released = unload_ollama_model(
+                wait_seconds=wait_seconds,
+            )
             print(
                 f"[GPU] {label}: Ollama VRAM解放 "
                 + ("OK" if released else "未確認")
