@@ -9,7 +9,7 @@ from guest_manager import select_guest_for_next_video
 from legal_guard import publish_gate
 from voice.provider import voice_attribution_status
 from gpu_manager import unload_ollama_model, release_torch_cuda_cache
-from production_pipeline import produce_media
+from execution_provider import execute_media
 from metadata import build_metadata
 from runtime_control import (
     posts_per_day,
@@ -46,7 +46,7 @@ def render_results(results: list[dict], character: dict) -> None:
     実処理は production_pipeline で
     画像 → 音声 → 字幕付き編集の順に直列実行する。
     """
-    produce_media(results, character)
+    execute_media(results, character)
 
 def upload_results(
     results: list[dict],
