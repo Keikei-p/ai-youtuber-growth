@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import re
 
 from googleapiclient.discovery import build
 
@@ -21,6 +22,26 @@ def _date_range(days: int) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
+def _duration_seconds(value: str) -> float:
+    text = str(value or "").upper()
+    match = re.fullmatch(
+        r"P(?:(?P<days>\d+)D)?T"
+        r"(?:(?P<hours>\d+)H)?"
+        r"(?:(?P<minutes>\d+)M)?"
+        r"(?:(?P<seconds>[\d.]+)S)?",
+        text,
+    )
+    if not match:
+        return 0.0
+    parts = match.groupdict()
+    return (
+        float(parts.get("days") or 0) * 86400
+        + float(parts.get("hours") or 0) * 3600
+        + float(parts.get("minutes") or 0) * 60
+        + float(parts.get("seconds") or 0)
+    )
+
+
 def _fetch_live_statistics(video_id: str) -> dict:
     youtube = build(
         "youtube",
@@ -28,7 +49,7 @@ def _fetch_live_statistics(video_id: str) -> dict:
         credentials=get_credentials(interactive=False),
     )
     response = youtube.videos().list(
-        part="statistics",
+        part="statistics,contentDetails",
         id=video_id,
     ).execute()
 
@@ -41,10 +62,14 @@ def _fetch_live_statistics(video_id: str) -> dict:
         }
 
     stats = items[0].get("statistics") or {}
+    content = items[0].get("contentDetails") or {}
     return {
         "views": int(stats.get("viewCount") or 0),
         "likes": int(stats.get("likeCount") or 0),
         "comments": int(stats.get("commentCount") or 0),
+        "durationSeconds": _duration_seconds(
+            str(content.get("duration") or "")
+        ),
     }
 
 
@@ -150,6 +175,80 @@ def _fetch_traffic(video_id: str, days: int = 28) -> dict:
     return {"trafficSources": rows}
 
 
+def _fetch_retention_curve(
+    video_id: str,
+    *,
+    days: int = 28,
+    duration_seconds: float = 0.0,
+) -> dict:
+    analytics = _analytics_service()
+    start, end = _date_range(days)
+    response = analytics.reports().query(
+        ids="channel==MINE",
+        startDate=start,
+        endDate=end,
+        metrics=(
+            "audienceWatchRatio,relativeRetentionPerformance,"
+            "startedWatching,stoppedWatching,totalSegmentImpressions"
+        ),
+        dimensions="elapsedVideoTimeRatio",
+        filters=f"video=={video_id}",
+        sort="elapsedVideoTimeRatio",
+        maxResults=200,
+    ).execute()
+
+    headers = [
+        h["name"]
+        for h in response.get("columnHeaders") or []
+    ]
+    curve: list[dict] = []
+    for raw in response.get("rows") or []:
+        row = dict(zip(headers, raw))
+        curve.append({
+            "ratio": float(
+                row.get("elapsedVideoTimeRatio") or 0
+            ),
+            "audienceWatchRatio": float(
+                row.get("audienceWatchRatio") or 0
+            ),
+            "relativeRetentionPerformance": float(
+                row.get("relativeRetentionPerformance") or 0
+            ),
+            "startedWatching": float(
+                row.get("startedWatching") or 0
+            ),
+            "stoppedWatching": float(
+                row.get("stoppedWatching") or 0
+            ),
+            "totalSegmentImpressions": float(
+                row.get("totalSegmentImpressions") or 0
+            ),
+        })
+
+    def at_second(second: float) -> float:
+        if not curve or duration_seconds <= 0:
+            return 0.0
+        target = max(
+            0.01,
+            min(1.0, float(second) / duration_seconds),
+        )
+        nearest = min(
+            curve,
+            key=lambda row: abs(
+                float(row["ratio"]) - target
+            ),
+        )
+        return float(
+            nearest.get("audienceWatchRatio") or 0
+        )
+
+    return {
+        "retentionCurve": curve,
+        "retentionAt3Seconds": at_second(3),
+        "retentionAt15Seconds": at_second(15),
+    }
+
+
 def fetch_video_metrics(video_id: str, days: int = 28) -> dict:
     metrics = _fetch_live_statistics(video_id)
     warnings: list[str] = []
@@ -182,6 +281,24 @@ def fetch_video_metrics(video_id: str, days: int = 28) -> dict:
     except Exception as exc:
         metrics["trafficSources"] = []
         warnings.append("traffic: " + str(exc))
+
+    try:
+        metrics.update(
+            _fetch_retention_curve(
+                video_id,
+                days=days,
+                duration_seconds=float(
+                    metrics.get("durationSeconds") or 0
+                ),
+            )
+        )
+    except Exception as exc:
+        metrics.update({
+            "retentionCurve": [],
+            "retentionAt3Seconds": 0.0,
+            "retentionAt15Seconds": 0.0,
+        })
+        warnings.append("retention_curve: " + str(exc))
 
     if warnings:
         metrics["analytics_warning"] = " | ".join(warnings)
