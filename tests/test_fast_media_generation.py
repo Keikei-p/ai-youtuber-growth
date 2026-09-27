@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +12,7 @@ from PIL import Image
 
 import gpu_manager
 import self_improvement
+import storage
 from studio import image_generator
 from studio.models import ImagePreset
 from video import ffmpeg_encoder
@@ -66,6 +69,16 @@ class FastGpuSessionTests(unittest.TestCase):
 
 
 class FastVisualModeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_db = storage.DB_PATH
+        storage.DB_PATH = Path(self.tmp.name) / "fast-media.db"
+        storage.init_db()
+
+    def tearDown(self) -> None:
+        storage.DB_PATH = self.old_db
+        self.tmp.cleanup()
+
     def test_fast_mode_accepts_first_good_candidate(self) -> None:
         image = Image.effect_noise(
             (512, 768),
