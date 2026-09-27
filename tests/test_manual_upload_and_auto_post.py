@@ -189,6 +189,61 @@ class ManualUploadAndAutoPostTests(unittest.TestCase):
         )
         self.assertEqual(upload.call_count, 1)
 
+    def test_pending_receipt_is_verified_without_reupload(self) -> None:
+        video_id, _ = self._rendered_video()
+        storage.record_upload_receipt(
+            video_id,
+            "youtube-pending-1",
+            source="auto_schedule",
+            expected_title="Manual upload test",
+            expected_description="safe description",
+            expected_privacy="private",
+        )
+
+        with (
+            patch.object(
+                scheduler,
+                "upload_video",
+            ) as upload,
+            patch.object(
+                scheduler,
+                "verify_uploaded_video",
+                return_value={
+                    "verified": True,
+                    "exists": True,
+                    "processing_status": "succeeded",
+                    "upload_status": "processed",
+                    "privacy_status": "private",
+                    "title_match": True,
+                    "description_match": True,
+                    "privacy_match": True,
+                    "duration_present": True,
+                    "thumbnail_present": True,
+                    "playback_ready": True,
+                },
+            ) as verify,
+        ):
+            result = scheduler.upload_saved_video_now(
+                video_id,
+                "private",
+            )
+
+        upload.assert_not_called()
+        verify.assert_called_once()
+        self.assertEqual(
+            result["status"],
+            "verified_existing_upload",
+        )
+        self.assertEqual(
+            storage.video_by_id(video_id)["youtube_video_id"],
+            "youtube-pending-1",
+        )
+        receipt = storage.upload_receipt(video_id)
+        self.assertEqual(
+            receipt["verification_status"],
+            "verified",
+        )
+
     def test_due_queue_never_returns_already_uploaded_video(self) -> None:
         video_id, _ = self._rendered_video()
         storage.queue_video(
