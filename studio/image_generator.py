@@ -1111,6 +1111,8 @@ def _asset_visual_meta(selection: dict, meta: dict | None = None) -> dict:
         "base_quality_score": selection.get(
             "base_quality_score"
         ),
+        "inference_steps": selection.get("inference_steps"),
+        "fast_pass": bool(selection.get("fast_pass")),
         "final_width": int(selection["image"].width),
         "final_height": int(selection["image"].height),
     }
