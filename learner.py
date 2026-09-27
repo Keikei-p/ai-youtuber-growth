@@ -186,6 +186,75 @@ def _fallback_strategy(history: list[dict]) -> str:
     )
     return " ".join(parts)
 
+def build_success_pattern_memory(
+    history: list[dict],
+) -> dict:
+    latest_by_video: dict[int, dict] = {}
+    for row in history:
+        video_id = int(row.get("video_id") or 0)
+        if video_id <= 0:
+            continue
+        current = latest_by_video.get(video_id)
+        if (
+            current is None
+            or int(row.get("checkpoint_hours") or 0)
+            > int(current.get("checkpoint_hours") or 0)
+        ):
+            latest_by_video[video_id] = row
+
+    ranked = sorted(
+        latest_by_video.values(),
+        key=lambda row: float(row.get("score") or 0),
+        reverse=True,
+    )
+    top = ranked[:5]
+    patterns: list[dict] = []
+    for row in top:
+        signals: list[str] = []
+        retention = float(row.get("avg_view_percentage") or 0)
+        ctr = float(row.get("ctr") or 0)
+        comments = int(row.get("comments") or 0)
+        shares = int(row.get("shares") or 0)
+        subscribers = int(row.get("subscribers_gained") or 0)
+
+        if retention >= 70:
+            signals.append("強い視聴維持: 冒頭とテンポの型を再利用")
+        elif retention > 0:
+            signals.append("維持率改善余地: 導入を短くする")
+        if ctr >= 6:
+            signals.append("タイトル/サムネイル訴求が比較的強い")
+        if comments > 0:
+            signals.append("視聴者参加につながった")
+        if shares > 0:
+            signals.append("共有される要素があった")
+        if subscribers > 0:
+            signals.append("シリーズ/キャラクター転換に寄与")
+
+        patterns.append({
+            "video_id": int(row.get("video_id") or 0),
+            "title": str(row.get("title") or ""),
+            "idea": str(row.get("idea") or ""),
+            "angle": str(row.get("angle") or ""),
+            "checkpoint_hours": int(row.get("checkpoint_hours") or 0),
+            "score": float(row.get("score") or 0),
+            "views": int(row.get("views") or 0),
+            "retention": retention,
+            "ctr": ctr,
+            "comments": comments,
+            "signals": signals,
+            "note": str(row.get("note") or ""),
+        })
+
+    return {
+        "sample_size": len(latest_by_video),
+        "top_patterns": patterns,
+        "instruction": (
+            "上位動画のタイトルや内容をコピーせず、"
+            "signalsにある構成・冒頭・参加性の型だけを別企画へ転用する。"
+        ),
+    }
+
+
 def build_channel_strategy(history: list[dict]) -> str:
     fallback = _fallback_strategy(history)
     if not history:
