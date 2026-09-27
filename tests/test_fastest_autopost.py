@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import delivery_supervisor
 import scheduler
@@ -225,6 +226,120 @@ class FastestAutopostTests(unittest.TestCase):
     def test_gradient_builder_keeps_full_resolution(self) -> None:
         image = renderer._gradient_background(999)
         self.assertEqual(image.size, (1080, 1920))
+
+
+    def test_metadata_recovery_uses_stricter_safe_limits(self) -> None:
+        video_id = self._video()
+        storage.set_channel_state(
+            f"metadata_sanitize_requested_{video_id}",
+            "true",
+        )
+        row = storage.video_by_id(video_id)
+        row["title"] = ("長いタイトル" * 30) + "\x00"
+        row["description"] = ("説明文" * 2000) + "\x00"
+        row["tags_json"] = json.dumps(
+            [f"タグ{i}" * 20 for i in range(30)],
+            ensure_ascii=False,
+        )
+
+        title, description, tags = scheduler._safe_upload_metadata(
+            row
+        )
+
+        self.assertLessEqual(len(title), 90)
+        self.assertLessEqual(len(description), 4500)
+        self.assertLessEqual(len(tags), 15)
+        self.assertNotIn("\x00", title)
+        self.assertNotIn("\x00", description)
+        self.assertTrue(all(len(tag) <= 40 for tag in tags))
+
+    def test_publish_guard_waits_thirty_minutes_not_every_minute(self) -> None:
+        video_id = self._video()
+        storage.queue_video(
+            video_id,
+            "2026-09-28T12:00+09:00",
+        )
+        row = storage.queue_item_for_video(video_id)
+        now = datetime(2026, 9, 28, 12, 1, tzinfo=JST)
+
+        result = upload_recovery.recover_upload_failure(
+            row,
+            RuntimeError(
+                "公開前確認待ちのため投稿を停止しました。"
+            ),
+            now=now,
+        )
+
+        self.assertEqual(result["code"], "publish_guard")
+        self.assertTrue(result["handled"])
+        queue = storage.queue_item_for_video(video_id)
+        self.assertEqual(queue["status"], "queued")
+        self.assertEqual(
+            queue["scheduled_for"],
+            "2026-09-28T12:31+09:00",
+        )
+        self.assertIn(
+            "ACTION-REQUIRED:publish_guard",
+            str(queue.get("error") or ""),
+        )
+
+    def test_remote_reconciliation_cutoff_prefers_intent_time(self) -> None:
+        fake_settings = SimpleNamespace(
+            youtube_reconcile_lookback_minutes=30,
+        )
+        channel_call = MagicMock()
+        channel_call.list.return_value.execute.return_value = {
+            "items": [
+                {
+                    "contentDetails": {
+                        "relatedPlaylists": {
+                            "uploads": "UPLOADS",
+                        }
+                    }
+                }
+            ]
+        }
+        playlist_call = MagicMock()
+        playlist_call.list.return_value.execute.return_value = {
+            "items": [
+                {
+                    "snippet": {
+                        "title": "Same",
+                        "description": "Desc",
+                        "publishedAt": "2026-09-28T02:40:00Z",
+                    },
+                    "contentDetails": {
+                        "videoId": "old-duplicate",
+                    },
+                }
+            ]
+        }
+        youtube = SimpleNamespace(
+            channels=lambda: channel_call,
+            playlistItems=lambda: playlist_call,
+        )
+        with (
+            patch.object(uploader, "settings", fake_settings),
+            patch.object(
+                uploader,
+                "get_credentials",
+                return_value=object(),
+            ),
+            patch.object(uploader, "build", return_value=youtube),
+            patch.object(uploader, "datetime") as dt,
+        ):
+            dt.now.return_value = datetime(
+                2026, 9, 28, 3, 0,
+                tzinfo=timezone.utc,
+            )
+            dt.fromisoformat.side_effect = datetime.fromisoformat
+            result = uploader.find_recent_matching_upload(
+                title="Same",
+                description="Desc",
+                started_at="2026-09-28T03:00:00+00:00",
+            )
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
