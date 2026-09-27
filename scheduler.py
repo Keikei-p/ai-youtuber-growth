@@ -1336,32 +1336,56 @@ def run_due() -> None:
 
             privacy = upload_privacy()
             title, description, tags = _safe_upload_metadata(row)
-            youtube_id = upload_video(
-                video_path=Path(output_path),
-                title=title,
-                description=description,
-                tags=tags,
-                privacy_status=privacy,
-                category_id=settings.youtube_category_id,
-                default_language=settings.youtube_default_language,
-                contains_synthetic_media=True,
-            )
-            uploaded_at = _now().isoformat(timespec="seconds")
-            mark_uploaded(
-                video_id,
-                youtube_id,
-                uploaded_at,
-                privacy_status=privacy,
+            receipt = pending_upload_receipt(video_id)
+
+            if receipt:
+                print(
+                    f"[AUTO-UPLOAD] #{video_id} 既存YouTubeレシート "
+                    f"{receipt['youtube_video_id']} を再確認します。"
+                )
+            else:
+                youtube_id = upload_video(
+                    video_path=Path(output_path),
+                    title=title,
+                    description=description,
+                    tags=tags,
+                    privacy_status=privacy,
+                    category_id=settings.youtube_category_id,
+                    default_language=settings.youtube_default_language,
+                    contains_synthetic_media=True,
+                )
+                record_upload_receipt(
+                    video_id,
+                    youtube_id,
+                    source="auto_schedule",
+                    expected_title=title,
+                    expected_description=description,
+                    expected_privacy=privacy,
+                    thumbnail_path=str(
+                        row.get("thumbnail_path") or ""
+                    ) or None,
+                )
+                receipt = pending_upload_receipt(video_id)
+                if not receipt:
+                    raise RuntimeError(
+                        "YouTube ID取得後の投稿レシート保存に失敗しました。"
+                    )
+
+            finalized = _verify_receipt_and_finalize(
+                video_id=video_id,
+                row=row,
+                receipt=receipt,
                 source="auto_schedule",
             )
+            uploaded_at = finalized["uploaded_at"]
+            youtube_id = finalized["youtube_video_id"]
             mark_queue_uploaded(
                 row["queue_id"],
                 uploaded_at,
             )
-            set_channel_state("youtube_auth_attention", "false")
             print(
                 f"[AUTO-UPLOAD] #{video_id} -> {youtube_id} "
-                f"[{privacy}]"
+                f"[{finalized['privacy']}] verified"
             )
             active_test = _full_test_state()
             test_ids = {
