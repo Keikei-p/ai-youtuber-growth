@@ -203,6 +203,31 @@ def set_voice_provider_name(value: str) -> None:
     set_channel_state("mirai_voice_provider", value)
 
 
+def ai_video_backend_name() -> str:
+    value = get_channel_state(
+        "ai_video_backend",
+        "",
+    ).strip().lower()
+    if value in {"google", "animatediff", "native"}:
+        return value
+
+    configured = str(
+        settings.ai_video_backend or "google"
+    ).strip().lower()
+    if configured in {"google", "animatediff", "native"}:
+        return configured
+    return "google"
+
+
+def set_ai_video_backend_name(value: str) -> None:
+    selected = str(value or "").strip().lower()
+    if selected not in {"google", "animatediff", "native"}:
+        raise ValueError(
+            "AI video backend must be google, animatediff, or native"
+        )
+    set_channel_state("ai_video_backend", selected)
+
+
 def ai_video_enabled() -> bool:
     return _bool_state("ai_video_enabled", settings.ai_video_enabled)
 
