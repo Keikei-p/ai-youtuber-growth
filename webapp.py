@@ -26,6 +26,13 @@ from automation_health import (
 from native_models.lab import migration_summary
 from mirai_engines.evolution_controller import evolution_status
 from autonomy_policy import autonomy_state, resolve_approval
+from autopilot_controller import (
+    autopilot_status,
+    heal_autopilot,
+    production_autonomy_armed,
+    start_autopilot,
+    stop_autopilot,
+)
 from config import settings
 from execution_provider import execution_status
 from delivery_supervisor import (
@@ -144,6 +151,7 @@ _native_voice_cache: dict = {}
 _process_git_sha = ""
 _auto_post_health_cache_at = 0.0
 _auto_post_health_cache: dict = {}
+_last_platform_autonomy_heal_at = 0.0
 
 
 def _cached_auto_post_health(*, force: bool = False) -> dict:
