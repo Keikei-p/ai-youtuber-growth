@@ -898,6 +898,47 @@ def _generate_best_image(
     meta: dict | None = None,
     generator_fn=None,
 ) -> dict:
+    fast_mode = bool(
+        getattr(settings, "media_fast_mode", True)
+    )
+    fast_steps = (
+        int(
+            getattr(
+                settings,
+                "studio_fast_background_steps",
+                14,
+            )
+        )
+        if asset_type == "background"
+        else int(
+            getattr(
+                settings,
+                "studio_fast_image_steps",
+                18,
+            )
+        )
+    )
+    fast_steps = max(
+        4,
+        min(fast_steps, int(preset.steps)),
+    )
+    fast_quality_margin = 8
+
+    def preset_for_attempt(attempt_index: int) -> ImagePreset:
+        if (
+            not fast_mode
+            or attempt_index != 0
+            or fast_steps >= int(preset.steps)
+        ):
+            return preset
+        return ImagePreset(
+            width=preset.width,
+            height=preset.height,
+            steps=fast_steps,
+            guidance_scale=preset.guidance_scale,
+            sampler_name=preset.sampler_name,
+        )
+
     memory = VisualLearningMemory()
     quality_engine = MiraiVisualQualityEngine()
     preferred = memory.recommended_profile(asset_type)
@@ -922,9 +963,10 @@ def _generate_best_image(
         )
         try:
             generator = generator_fn or _generate
+            active_preset = preset_for_attempt(attempt_index)
             generated, backend = generator(
                 evolved_prompt,
-                preset,
+                active_preset,
                 seed=seed_base + attempt_index * 9973,
             )
             report = quality_engine.inspect_image(
@@ -938,13 +980,16 @@ def _generate_best_image(
                 "prompt": evolved_prompt,
                 "profile": profile,
                 "candidate_index": attempt_index,
+                "inference_steps": int(active_preset.steps),
+                "fast_pass": (
+                    int(active_preset.steps) < int(preset.steps)
+                ),
             })
         except Exception as exc:
             last_error = exc
 
-    # Fast modeでは最初の候補が品質基準を通った時点で採用候補にする。
-    # 基準未満の場合だけ2枚目以降を生成するため、通常時のGPU推論回数を削減。
-    fast_mode = bool(getattr(settings, "media_fast_mode", True))
+    # Fast modeでは低stepの最初の候補が品質基準を十分上回れば即採用。
+    # 境界付近なら従来stepで自動再生成して品質を守る。
     for candidate_index in range(candidate_count):
         run_candidate(candidate_index)
         if (
@@ -952,7 +997,7 @@ def _generate_best_image(
             and candidates
             and bool(candidates[-1]["quality"].get("passed"))
             and int(candidates[-1]["quality"].get("score") or 0)
-            >= threshold
+            >= min(95, threshold + fast_quality_margin)
         ):
             break
 
@@ -963,8 +1008,17 @@ def _generate_best_image(
 
     best = max(candidates, key=lambda row: int(row["quality"].get("score") or 0))
     for retry_index in range(retry_rounds):
-        if int(best["quality"].get("score") or 0) >= threshold:
+        best_score_now = int(
+            best["quality"].get("score") or 0
+        )
+        fast_borderline = (
+            bool(best.get("fast_pass"))
+            and best_score_now
+            < min(95, threshold + fast_quality_margin)
+        )
+        if best_score_now >= threshold and not fast_borderline:
             break
+        # retryは必ずattempt_index>0なので従来stepへ戻る。
         run_candidate(candidate_count + retry_index)
         best = max(candidates, key=lambda row: int(row["quality"].get("score") or 0))
 
