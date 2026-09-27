@@ -47,7 +47,7 @@ if ($task) {
 
         $resultObject.registered = $true
         $resultObject.state = [string]$task.State
-        $resultObject.enabled = [bool]$task.Settings.Enabled
+        $resultObject.enabled = ([string]$task.State -ne "Disabled")
         $resultObject.wake_to_run = [bool]$task.Settings.WakeToRun
         $resultObject.start_when_available = [bool]$task.Settings.StartWhenAvailable
         $resultObject.triggers_count = @($task.Triggers).Count
