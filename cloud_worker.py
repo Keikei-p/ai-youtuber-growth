@@ -208,9 +208,10 @@ class CloudWorkerHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _body(self) -> dict:
-        raw = self.rfile.read(
-            int(self.headers.get("Content-Length") or 0)
-        )
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > 5 * 1024 * 1024:
+            raise ValueError("request body size is invalid")
+        raw = self.rfile.read(length)
         value = json.loads(
             raw.decode("utf-8") or "{}"
         )
@@ -328,7 +329,33 @@ class CloudWorkerHandler(BaseHTTPRequestHandler):
                 )
                 return
             _, job_id, filename = parts
+            if (
+                len(job_id) != 32
+                or any(
+                    ch not in "0123456789abcdef"
+                    for ch in job_id.lower()
+                )
+            ):
+                self._json(
+                    {"message": "invalid job id"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            if Path(filename).name != filename:
+                self._json(
+                    {"message": "invalid artifact name"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
             root = (ARTIFACT_ROOT / job_id).resolve()
+            try:
+                root.relative_to(ARTIFACT_ROOT.resolve())
+            except ValueError:
+                self._json(
+                    {"message": "invalid artifact path"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
             candidate = (root / filename).resolve()
             try:
                 candidate.relative_to(root)
