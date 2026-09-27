@@ -19,6 +19,10 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from ai_client import OllamaClient, text_ai_status
+from automation_health import (
+    collect_auto_post_health,
+    windows_task_status,
+)
 from native_models.lab import migration_summary
 from mirai_engines.evolution_controller import evolution_status
 from autonomy_policy import autonomy_state, resolve_approval
@@ -134,6 +138,21 @@ _storage_cache: dict = {}
 _native_voice_cache_at = 0.0
 _native_voice_cache: dict = {}
 _process_git_sha = ""
+_auto_post_health_cache_at = 0.0
+_auto_post_health_cache: dict = {}
+
+
+def _cached_auto_post_health(*, force: bool = False) -> dict:
+    global _auto_post_health_cache_at, _auto_post_health_cache
+    now = time.time()
+    if (
+        force
+        or not _auto_post_health_cache
+        or now - _auto_post_health_cache_at >= 30
+    ):
+        _auto_post_health_cache = collect_auto_post_health(ROOT)
+        _auto_post_health_cache_at = now
+    return dict(_auto_post_health_cache)
 
 
 def _cached_storage_snapshot() -> dict:
@@ -480,6 +499,8 @@ def _queue_status() -> list[dict]:
             "scheduled_for": row["scheduled_for"],
             "title": row["title"],
             "attempts": row["attempts"],
+            "status": row.get("status"),
+            "error": row.get("error"),
         }
         for row in rows[:20]
     ]
@@ -604,6 +625,7 @@ def _status_payload() -> dict:
         current_job_started_at = _current_job_started_at
 
     services = _service_status()
+    auto_post_health = _cached_auto_post_health()
 
     return {
         "automation_enabled": automation_enabled(),
@@ -649,16 +671,30 @@ def _status_payload() -> dict:
         "guests": _guest_status(),
         "growth": _growth_status(),
         "full_test": full_test_status(),
+        "auto_post_health": auto_post_health,
         "last_cycle_at": last_cycle_at,
         "last_cycle_result": last_cycle_result,
         "current_job": current_job,
         "current_job_started_at": current_job_started_at,
         "autostart_enabled": _windows_autostart_enabled(),
         "wake_task_enabled": (
-            get_channel_state("wake_task_enabled", "false")
-            .strip()
-            .lower()
-            == "true"
+            bool(
+                (auto_post_health.get("windows_task") or {}).get(
+                    "registered"
+                )
+            )
+            and bool(
+                (auto_post_health.get("windows_task") or {}).get(
+                    "wake_to_run"
+                )
+            )
+            if os.name == "nt"
+            else (
+                get_channel_state("wake_task_enabled", "false")
+                .strip()
+                .lower()
+                == "true"
+            )
         ),
         "remote_access_status": get_channel_state(
             "remote_access_status",
@@ -751,8 +787,32 @@ def _install_wake_task(interval_minutes: int = 60) -> str:
         "-IntervalMinutes",
         str(max(15, int(interval_minutes))),
     )
+    diagnostic = windows_task_status(ROOT)
+    if not diagnostic.get("registered"):
+        set_channel_state("wake_task_enabled", "false")
+        raise RuntimeError(
+            "Windowsタスク登録後の確認でタスクを検出できません。"
+            + str(diagnostic.get("error") or "")
+        )
+    if not diagnostic.get("wake_to_run"):
+        set_channel_state("wake_task_enabled", "false")
+        raise RuntimeError(
+            "WindowsタスクはありますがWakeToRunが無効です。"
+        )
+    if not diagnostic.get("start_when_available"):
+        set_channel_state("wake_task_enabled", "false")
+        raise RuntimeError(
+            "WindowsタスクのStartWhenAvailableが無効です。"
+        )
     set_channel_state("wake_task_enabled", "true")
-    return output
+    _cached_auto_post_health(force=True)
+    note = ""
+    if not diagnostic.get("wake_timer_present"):
+        note = (
+            "\n[WARN] powercfgでは現在Wake Timerを確認できません。"
+            " PC/BIOS側のWake Timer設定も確認対象です。"
+        )
+    return output + note
 
 
 def _remove_wake_task() -> str:
@@ -1380,6 +1440,25 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
     </section>
 
     <section class="card full">
+      <h2>自動投稿・スリープ診断</h2>
+      <div id="autoPostOverall" class="studio-status small"></div>
+      <div id="autoPostProblems"></div>
+      <div id="autoPostDetails" class="studio-status small" style="margin-top:12px"></div>
+      <div class="actions">
+        <button class="primary" onclick="runAction('wake_task_check')">診断を更新</button>
+        <button onclick="runAction('wake_task_on')">WakeToRunを再登録</button>
+        <button onclick="runAction('due')">今すぐ投稿判定</button>
+      </div>
+      <details style="margin-top:12px">
+        <summary>スリープ復帰・自動投稿ログを見る</summary>
+        <pre id="automationLogs"></pre>
+      </details>
+      <div class="small" style="margin-top:8px">
+        WakeToRunはWindows/PCの対応範囲でスリープ解除を試みます。BIOS/UEFIやModern Standbyの仕様でOSから起床できないPCは、この画面に警告を出します。
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>ログ</h2>
       <div class="actions" style="margin-bottom:10px">
         <button onclick="runAction('cleanup')">投稿済み動画をPCから掃除</button>
@@ -1491,6 +1570,44 @@ async function refresh(){
     autostartStatus.className='badge '+(state.autostart_enabled?'ok':'');
     wakeTaskStatus.textContent=state.wake_task_enabled?'登録済み':'未登録';
     wakeTaskStatus.className='badge '+(state.wake_task_enabled?'ok':'');
+    const aph=state.auto_post_health||{};
+    const overallLabels={ready:'準備OK',warning:'警告あり',running:'実行中',attention:'要確認'};
+    const overall=overallLabels[aph.overall]||aph.overall||'未確認';
+    autoPostOverall.innerHTML='<b>総合: '+escapeHtml(overall)+'</b>'
+      +' / 自動運転 '+(aph.automation_enabled?'ON':'OFF')
+      +' / 自動投稿 '+(aph.auto_upload_enabled?'ON':'OFF')
+      +' / 本番arm '+(aph.production_armed?'ON':'OFF')
+      +' / 投稿時刻 '+escapeHtml(aph.post_times||'');
+    const healthRows=[
+      ...(aph.problems||[]).map(x=>({level:'NG',...x})),
+      ...(aph.warnings||[]).map(x=>({level:'WARN',...x}))
+    ];
+    autoPostProblems.innerHTML=healthRows.length
+      ? healthRows.map(x=>
+          '<div class="row"><span><b>'+escapeHtml(x.level)+'</b> '+escapeHtml(x.detail||'')+'</span><span class="small">'+escapeHtml(x.code||'')+'</span></div>'
+        ).join('')
+      : '<div class="row"><span>自動投稿を止める既知の問題はありません。</span>'+badge(true)+'</div>';
+    const task=aph.windows_task||{};
+    const cycle=aph.cycle||{};
+    const postEvent=aph.last_post_event||{};
+    const next=aph.next_queue||{};
+    autoPostDetails.innerHTML=
+      '<b>Windowsタスク</b>: '+escapeHtml(task.registered?'登録済み':'未登録')
+      +' / WakeToRun '+escapeHtml(task.wake_to_run?'ON':'OFF')
+      +' / StartWhenAvailable '+escapeHtml(task.start_when_available?'ON':'OFF')
+      +' / 最終実行 '+escapeHtml(task.last_run_time||'未実行')
+      +' / 次回 '+escapeHtml(task.next_run_time||'不明')
+      +' / result '+escapeHtml(task.last_task_result===null||task.last_task_result===undefined?'-':task.last_task_result)
+      +'<br><b>直近Wakeサイクル</b>: '+escapeHtml(cycle.status||'未実行')
+      +' / '+escapeHtml(cycle.stage||'-')
+      +' / '+escapeHtml(cycle.updated_at||'-')
+      +(cycle.detail?' / '+escapeHtml(cycle.detail):'')
+      +'<br><b>直近YouTube判定</b>: '+escapeHtml(postEvent.status||'未実行')
+      +(postEvent.video_id?' / #'+Number(postEvent.video_id):'')
+      +(postEvent.code?' / '+escapeHtml(postEvent.code):'')
+      +(postEvent.detail?' / '+escapeHtml(postEvent.detail):'')
+      +'<br><b>次のキュー</b>: '+(next.video_id?('#'+Number(next.video_id)+' / '+escapeHtml(next.scheduled_for||'')+' / '+escapeHtml(next.title||'')):'なし');
+    automationLogs.textContent=aph.automation_log_tail||'まだスリープ復帰ログはありません。';
     const remoteOn=state.remote_access_status==='enabled';
     remoteAccessStatus.textContent=remoteOn?'有効':(state.remote_access_status||'未確認');
     remoteAccessStatus.className='badge '+(remoteOn?'ok':'');
@@ -1501,7 +1618,7 @@ async function refresh(){
     const ft=state.full_test||{};
     const ftSlots=(ft.slots||[]).map(x=>String(x).slice(11,16)).join(' / ');
     fullTestStatus.textContent='状態: '+(ft.status||'未実行')+' / 投稿 '+(ft.uploaded||0)+'/'+(ft.target||3)+(ftSlots?' / 予定 '+ftSlots:'')+(ft.end_at?' / 終了 '+String(ft.end_at).slice(11,16):'');
-    queue.innerHTML=state.queue.length?state.queue.map(x=>'<div class="q"><b>'+escapeHtml(x.title)+'</b><div class="small">'+x.scheduled_for+' / #'+x.video_id+' / retry '+x.attempts+'</div></div>').join(''):'<div class="small">キューなし</div>';
+    queue.innerHTML=state.queue.length?state.queue.map(x=>'<div class="q"><b>'+escapeHtml(x.title)+'</b><div class="small">'+x.scheduled_for+' / #'+x.video_id+' / retry '+x.attempts+' / '+escapeHtml(x.status||'queued')+'</div>'+(x.error?'<div class="small" style="color:#ff9aa8;margin-top:6px">エラー: '+escapeHtml(x.error)+'</div>':'')+'</div>').join(''):'<div class="small">キューなし</div>';
     guests.innerHTML=state.guests.length?state.guests.map(x=>'<div class="row"><span>'+escapeHtml(x.name)+'</span><span class="small">'+x.appearances+'回 '+(x.has_image?'画像あり':'画像未生成')+'</span></div>').join(''):'<div class="small">まだゲストなし</div>';
     guestImageAutoBtn.textContent=state.guest_image_auto_enabled?'ON':'OFF';
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
@@ -2465,6 +2582,14 @@ class Handler(BaseHTTPRequestHandler):
                     "wake_task_on": (
                         "スリープ復帰自動運転登録",
                         lambda: print(_install_wake_task(60)),
+                    ),
+                    "wake_task_check": (
+                        "自動投稿・スリープ診断",
+                        lambda: print(json.dumps(
+                            _cached_auto_post_health(force=True),
+                            ensure_ascii=False,
+                            indent=2,
+                        )),
                     ),
                     "wake_task_off": (
                         "スリープ復帰自動運転解除",
