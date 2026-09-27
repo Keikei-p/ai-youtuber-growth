@@ -6,6 +6,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from config import settings
+from video.ffmpeg_encoder import run_video_encode
 
 WIDTH = 1080
 HEIGHT = 1920
@@ -364,7 +365,7 @@ def _render_motion_segment(
         "format=yuv420p"
     )
 
-    subprocess.run(
+    run_video_encode(
         [
             "ffmpeg",
             "-y",
@@ -379,17 +380,13 @@ def _render_motion_segment(
             "-t",
             f"{duration:.4f}",
             "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "18",
+        ],
+        [
             "-pix_fmt",
             "yuv420p",
             str(output_path),
         ],
-        check=True,
+        crf=18,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -415,7 +412,7 @@ def _render_ai_background_segment(
         "[bg][fg]overlay=0:0:shortest=1,format=yuv420p[outv]"
     )
 
-    subprocess.run(
+    run_video_encode(
         [
             "ffmpeg",
             "-y",
@@ -436,17 +433,13 @@ def _render_ai_background_segment(
             "-t",
             f"{duration:.4f}",
             "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "18",
+        ],
+        [
             "-pix_fmt",
             "yuv420p",
             str(output_path),
         ],
-        check=True,
+        crf=18,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

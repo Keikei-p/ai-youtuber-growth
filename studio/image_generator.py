@@ -7,6 +7,7 @@ import io
 import os
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -54,6 +55,7 @@ _PIPELINE_MODEL = None
 _PIPELINE_DEVICE = None
 _PIPELINE_DTYPE = None
 _PIPELINE_LOCK = threading.RLock()
+_BATCH_LOCAL = threading.local()
 
 
 def _configured_backend() -> str:
@@ -209,6 +211,39 @@ def _park_pipeline() -> None:
     else:
         gc.collect()
         release_torch_cuda_cache()
+
+
+def _image_batch_active() -> bool:
+    return int(getattr(_BATCH_LOCAL, "depth", 0) or 0) > 0
+
+
+@contextmanager
+def image_generation_session():
+    """
+    1本分/複数本分の画像工程ではStable DiffusionをGPUに載せたまま再利用する。
+
+    以前は候補1枚ごとに GPU -> CPU -> GPU と移動していたため、
+    モデル転送が生成時間に上乗せされていた。セッション終了時だけ
+    CPUへ退避し、動画生成や音声処理へVRAMを返す。
+    """
+    depth = int(getattr(_BATCH_LOCAL, "depth", 0) or 0)
+    _BATCH_LOCAL.depth = depth + 1
+    if depth > 0:
+        try:
+            yield
+        finally:
+            _BATCH_LOCAL.depth = max(
+                int(getattr(_BATCH_LOCAL, "depth", 1) or 1) - 1,
+                0,
+            )
+        return
+
+    with exclusive_gpu_task("AI Studio画像バッチ"):
+        try:
+            yield
+        finally:
+            _BATCH_LOCAL.depth = 0
+            _park_pipeline()
 
 
 def _load_diffusers_pipeline(device: str):
@@ -452,8 +487,10 @@ def _generate(
         try:
             return _generate_diffusers(prompt, preset, seed=seed)
         finally:
-            # Ollama/VOICEVOXへGPUを返すため、画像生成後は必ず退避。
-            _park_pipeline()
+            # バッチ中はモデルをGPUに残して次の画像へ再利用。
+            # 単発生成だけ従来どおり終了時に退避する。
+            if not _image_batch_active():
+                _park_pipeline()
     return _generate_webui(prompt, preset, seed=seed), backend
 
 
@@ -560,7 +597,6 @@ def _generate_reference_diffusers(
     )
 
     with exclusive_gpu_task("ミライ固定キャラ参照生成"):
-        unload_ollama_model(wait_seconds=2)
         for attempt in range(1, attempts + 1):
             pipe = None
             try:
@@ -610,8 +646,9 @@ def _generate_reference_diffusers(
                         del pipe
                     except Exception:
                         pass
-                _park_pipeline()
-                release_torch_cuda_cache()
+                if not _image_batch_active():
+                    _park_pipeline()
+                    release_torch_cuda_cache()
 
     raise RuntimeError(
         "ミライ参照生成をGPU再試行しても復旧できませんでした: "
@@ -673,7 +710,6 @@ def _refine_diffusers(
     )
 
     with exclusive_gpu_task("AI Studio High-Res Refine"):
-        unload_ollama_model(wait_seconds=2)
         pipe = _load_diffusers_pipeline("cuda")
         img2img = StableDiffusionImg2ImgPipeline(**pipe.components)
         img2img.enable_attention_slicing()
@@ -701,8 +737,9 @@ def _refine_diffusers(
             return result.images[0].convert("RGB")
         finally:
             del img2img
-            _park_pipeline()
-            release_torch_cuda_cache()
+            if not _image_batch_active():
+                _park_pipeline()
+                release_torch_cuda_cache()
 
 
 def _refine_webui(
@@ -894,8 +931,19 @@ def _generate_best_image(
         except Exception as exc:
             last_error = exc
 
+    # Fast modeでは最初の候補が品質基準を通った時点で採用候補にする。
+    # 基準未満の場合だけ2枚目以降を生成するため、通常時のGPU推論回数を削減。
+    fast_mode = bool(getattr(settings, "media_fast_mode", True))
     for candidate_index in range(candidate_count):
         run_candidate(candidate_index)
+        if (
+            fast_mode
+            and candidates
+            and bool(candidates[-1]["quality"].get("passed"))
+            and int(candidates[-1]["quality"].get("score") or 0)
+            >= threshold
+        ):
+            break
 
     if not candidates and last_error is not None:
         raise last_error
@@ -945,11 +993,17 @@ def _generate_best_image(
             f"Visual Quality {best_score}/100で基準{threshold}点未満のため採用しません。"
         )
 
-    best = _highres_refine_selection(
-        best,
-        asset_type=asset_type,
-        seed=seed_base + 500_003,
-    )
+    # Fast modeでは基準を十分上回る画像へ追加のimg2imgをかけない。
+    # ギリギリ合格の画像だけHigh-Res Refineで底上げする。
+    if not (
+        bool(getattr(settings, "media_fast_mode", True))
+        and int(best["quality"].get("score") or 0) >= threshold + 10
+    ):
+        best = _highres_refine_selection(
+            best,
+            asset_type=asset_type,
+            seed=seed_base + 500_003,
+        )
     return best
 
 

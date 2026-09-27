@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import json
+import time
 import wave
 
 from config import settings
@@ -36,6 +38,7 @@ from studio.image_generator import (
     generate_background_image,
     generate_guest_image,
     generate_mirai_image,
+    image_generation_session,
 )
 from studio.video_generator import (
     generate_animatediff_clip,
@@ -606,17 +609,68 @@ def _save_video_visual_profile(item: dict) -> None:
 
 def prepare_visuals(results: list[dict]) -> None:
     """
-    画像工程だけを直列実行する。
-    Ollama文章モデルは先にVRAMから降ろし、同時に複数画像を生成しない。
-    Visual Evolutionは候補比較・品質ゲート・学習保存を直列で行う。
+    画像工程をGPUバッチ化して直列実行する。
+
+    画像候補ごとのモデルGPU<->CPU移動を避け、全画像が終わった時点で
+    一度だけVRAMを返す。その後にAI動画工程へ移るため、8GB GPUでも
+    画像モデルと動画モデルを同時常駐させない。
     """
     if not results:
         return
 
     print("[PIPELINE] STEP 2/4 画像工程開始")
-    unload_ollama_model()
-    release_torch_cuda_cache()
+    started = time.perf_counter()
 
+    performance: dict = {
+        "started_at": datetime.now().astimezone().isoformat(
+            timespec="seconds"
+        ),
+        "fast_mode": bool(
+            getattr(settings, "media_fast_mode", True)
+        ),
+        "items": [],
+    }
+
+    # まず画像だけをまとめて生成。Stable DiffusionをGPUへ載せたまま
+    # キャラ/ゲスト/背景を処理し、モデル転送の往復を削減する。
+    with image_generation_session():
+        for index, item in enumerate(results, start=1):
+            item_perf = {
+                "video_id": int(item.get("id") or 0),
+            }
+            item_start = time.perf_counter()
+            print(
+                f"[PIPELINE][IMAGE] {index}/{len(results)} "
+                f"#{item['id']}"
+            )
+
+            stage = time.perf_counter()
+            _ensure_mirai_visual(item)
+            item_perf["mirai_seconds"] = round(
+                time.perf_counter() - stage,
+                3,
+            )
+
+            stage = time.perf_counter()
+            _ensure_guest_visual(item)
+            item_perf["guest_seconds"] = round(
+                time.perf_counter() - stage,
+                3,
+            )
+
+            stage = time.perf_counter()
+            _generate_backgrounds(item)
+            item_perf["background_seconds"] = round(
+                time.perf_counter() - stage,
+                3,
+            )
+            item_perf["image_seconds"] = round(
+                time.perf_counter() - item_start,
+                3,
+            )
+            performance["items"].append(item_perf)
+
+    # 画像モデルを退避した後だけ動画素材を作る。
     google_generated = 0
     google_limit = max(
         0,
@@ -625,13 +679,12 @@ def prepare_visuals(results: list[dict]) -> None:
     google_backend = (
         ai_video_backend_name() == "google"
     )
+    perf_by_id = {
+        int(row.get("video_id") or 0): row
+        for row in performance["items"]
+    }
 
-    for index, item in enumerate(results, start=1):
-        print(f"[PIPELINE][IMAGE] {index}/{len(results)} #{item['id']}")
-        _ensure_mirai_visual(item)
-        _ensure_guest_visual(item)
-        _generate_backgrounds(item)
-
+    for item in results:
         if (
             google_backend
             and google_generated >= google_limit
@@ -643,10 +696,49 @@ def prepare_visuals(results: list[dict]) -> None:
                 "自作フォールバックを使います。"
             )
 
+        stage = time.perf_counter()
         _generate_ai_video_asset(item)
+        video_seconds = round(
+            time.perf_counter() - stage,
+            3,
+        )
+        row = perf_by_id.get(int(item.get("id") or 0))
+        if row is not None:
+            row["ai_video_seconds"] = video_seconds
+
         if item.get("google_video_used"):
             google_generated += 1
         _save_video_visual_profile(item)
+
+    performance["total_seconds"] = round(
+        time.perf_counter() - started,
+        3,
+    )
+    try:
+        set_channel_state(
+            "media_performance_last",
+            json.dumps(
+                performance,
+                ensure_ascii=False,
+            ),
+        )
+    except Exception:
+        pass
+
+    print(
+        "[PERF][MEDIA] visual total="
+        f"{performance['total_seconds']:.3f}s / "
+        f"fast={performance['fast_mode']}"
+    )
+    for row in performance["items"]:
+        print(
+            "[PERF][MEDIA] "
+            f"#{row['video_id']} "
+            f"mirai={row.get('mirai_seconds', 0):.3f}s "
+            f"guest={row.get('guest_seconds', 0):.3f}s "
+            f"background={row.get('background_seconds', 0):.3f}s "
+            f"ai_video={row.get('ai_video_seconds', 0):.3f}s"
+        )
 
     release_torch_cuda_cache()
     print("[PIPELINE] STEP 2/4 画像工程完了")
@@ -727,8 +819,11 @@ def render_videos(results: list[dict], character: dict) -> None:
     stamp = datetime.now().strftime("%Y%m%d")
     composer = MiraiComposer()
     quality_engine = MiraiQualityEngine()
+    render_batch_started = time.perf_counter()
+    render_performance: list[dict] = []
 
     for index, item in enumerate(results, start=1):
+        item_render_started = time.perf_counter()
         print(f"[PIPELINE][EDIT] {index}/{len(results)} #{item['id']}")
         audio_raw = item.get("audio_path")
         if not audio_raw:
@@ -930,7 +1025,49 @@ def render_videos(results: list[dict], character: dict) -> None:
                 {"video_id": item.get("id")},
             )
             print(f"[PIPELINE][EDIT] #{item['id']} 失敗: {exc}")
+        finally:
+            render_seconds = round(
+                time.perf_counter() - item_render_started,
+                3,
+            )
+            render_performance.append(
+                {
+                    "video_id": int(item.get("id") or 0),
+                    "render_seconds": render_seconds,
+                    "quality_passed": bool(
+                        item.get("quality_passed")
+                    ),
+                }
+            )
+            print(
+                f"[PERF][RENDER] #{item['id']} "
+                f"{render_seconds:.3f}s"
+            )
 
+    render_summary = {
+        "recorded_at": datetime.now().astimezone().isoformat(
+            timespec="seconds"
+        ),
+        "total_seconds": round(
+            time.perf_counter() - render_batch_started,
+            3,
+        ),
+        "items": render_performance,
+    }
+    try:
+        set_channel_state(
+            "media_render_performance_last",
+            json.dumps(
+                render_summary,
+                ensure_ascii=False,
+            ),
+        )
+    except Exception:
+        pass
+    print(
+        "[PERF][RENDER] total="
+        f"{render_summary['total_seconds']:.3f}s"
+    )
     print("[PIPELINE] STEP 4/5 Composer/Quality工程完了")
 
 
