@@ -2446,6 +2446,62 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
 
+            if path == "/api/autopilot":
+                action = str(
+                    body.get("action") or ""
+                ).strip().lower()
+                if action == "start":
+                    try:
+                        result = _start_full_autopilot()
+                    except RuntimeError as exc:
+                        self._json(
+                            {
+                                "ok": False,
+                                "message": str(exc),
+                                "autopilot": autopilot_status(),
+                            },
+                            400,
+                        )
+                        return
+                    status = result["status"]
+                    notes = [
+                        value
+                        for value in (result.get("notes") or [])
+                        if value
+                    ]
+                    self._json({
+                        "ok": True,
+                        "message": (
+                            "完全自動運用を開始しました。"
+                            f" 毎日{status['posts_per_day']}本 / "
+                            f"{status['post_times']} / "
+                            f"公開設定={status['privacy']}。"
+                            + (
+                                "\n" + "\n".join(notes)
+                                if notes else ""
+                            )
+                        ),
+                        "autopilot": status,
+                    })
+                    return
+                if action == "stop":
+                    result = _stop_full_autopilot()
+                    self._json({
+                        "ok": True,
+                        "message": "完全自動運用を停止しました。",
+                        "autopilot": result["status"],
+                    })
+                    return
+                self._json(
+                    {
+                        "message": (
+                            "action must be start or stop"
+                        )
+                    },
+                    400,
+                )
+                return
+
             if path == "/api/daily-auto":
                 count = int(body.get("count") or 0)
                 if count == 0:
