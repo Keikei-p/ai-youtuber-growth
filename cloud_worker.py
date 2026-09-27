@@ -6,6 +6,7 @@ import mimetypes
 import os
 import shutil
 import threading
+import time
 import traceback
 from datetime import datetime
 import uuid
@@ -25,6 +26,7 @@ ARTIFACT_ROOT = OUTPUT_DIR / "cloud_worker_artifacts"
 _STORE_LOCK = threading.Lock()
 _AUTONOMY_STOP_EVENT = threading.Event()
 _AUTONOMY_WAKE_EVENT = threading.Event()
+_AUTONOMY_FORCE_FULL_EVENT = threading.Event()
 _AUTONOMY_LOCK = threading.Lock()
 _AUTONOMY_THREAD: threading.Thread | None = None
 
@@ -165,12 +167,28 @@ def autonomy_status() -> dict:
             ).strip().lower()
             == "true"
         ),
-        "interval_seconds": web_interval_seconds(),
+        "full_cycle_seconds": web_interval_seconds(),
+        "poll_seconds": max(
+            30,
+            min(
+                int(
+                    getattr(
+                        settings,
+                        "cloud_autonomy_poll_seconds",
+                        60,
+                    )
+                ),
+                300,
+            ),
+        ),
         "last_event": _autonomy_last_event(),
     }
 
 
-def _run_autonomy_cycle() -> dict:
+def _run_autonomy_cycle(
+    *,
+    full_cycle: bool = True,
+) -> dict:
     from delivery_supervisor import self_heal_delivery_controls
     from runtime_control import (
         automation_enabled,
@@ -185,23 +203,45 @@ def _run_autonomy_cycle() -> dict:
         return _save_autonomy_event(
             "blocked",
             detail="安全停止が有効なためCloud自動サイクルを実行しません。",
-            extra={"repairs": repairs},
+            extra={
+                "repairs": repairs,
+                "cycle": "full" if full_cycle else "due",
+            },
         )
 
     if not automation_enabled():
         return _save_autonomy_event(
             "idle",
             detail="自動運転がOFFのためCloudランナーは待機中です。",
-            extra={"repairs": repairs},
+            extra={
+                "repairs": repairs,
+                "cycle": "full" if full_cycle else "due",
+            },
         )
 
-    from scheduler import tick
+    if full_cycle:
+        from scheduler import tick
 
-    tick()
+        tick()
+        return _save_autonomy_event(
+            "succeeded",
+            detail="Cloud側で生成・投稿・分析の自動サイクルを完了しました。",
+            extra={
+                "repairs": repairs,
+                "cycle": "full",
+            },
+        )
+
+    from scheduler import run_due
+
+    run_due()
     return _save_autonomy_event(
-        "succeeded",
-        detail="Cloud側で自動サイクルを完了しました。",
-        extra={"repairs": repairs},
+        "due_checked",
+        detail="Cloud側で投稿時刻を確認しました。",
+        extra={
+            "repairs": repairs,
+            "cycle": "due",
+        },
     )
 
 
@@ -210,26 +250,62 @@ def _autonomy_loop() -> None:
         "started",
         detail="Cloud常駐ランナーを開始しました。",
     )
+    next_full_at = 0.0
+
     while not _AUTONOMY_STOP_EVENT.is_set():
         _AUTONOMY_WAKE_EVENT.clear()
+        force_full = _AUTONOMY_FORCE_FULL_EVENT.is_set()
+        if force_full:
+            _AUTONOMY_FORCE_FULL_EVENT.clear()
+
+        full_cycle = force_full or time.monotonic() >= next_full_at
+        event: dict | None = None
         try:
-            _run_autonomy_cycle()
+            event = _run_autonomy_cycle(
+                full_cycle=full_cycle,
+            )
         except Exception as exc:
             _save_autonomy_event(
                 "failed",
                 detail=str(exc),
+                extra={
+                    "cycle": "full" if full_cycle else "due",
+                },
+            )
+
+        if (
+            full_cycle
+            and event
+            and event.get("status") == "succeeded"
+        ):
+            try:
+                from runtime_control import web_interval_seconds
+
+                full_wait = web_interval_seconds()
+            except Exception:
+                full_wait = 600
+            next_full_at = (
+                time.monotonic()
+                + max(60, int(full_wait))
             )
 
         if _AUTONOMY_STOP_EVENT.is_set():
             break
 
-        try:
-            from runtime_control import web_interval_seconds
-
-            wait_for = web_interval_seconds()
-        except Exception:
-            wait_for = 600
-        _AUTONOMY_WAKE_EVENT.wait(max(60, int(wait_for)))
+        poll_seconds = max(
+            30,
+            min(
+                int(
+                    getattr(
+                        settings,
+                        "cloud_autonomy_poll_seconds",
+                        60,
+                    )
+                ),
+                300,
+            ),
+        )
+        _AUTONOMY_WAKE_EVENT.wait(poll_seconds)
 
     _save_autonomy_event(
         "stopped",
@@ -254,6 +330,7 @@ def _start_autonomy_runner() -> threading.Thread | None:
 
         _AUTONOMY_STOP_EVENT.clear()
         _AUTONOMY_WAKE_EVENT.clear()
+        _AUTONOMY_FORCE_FULL_EVENT.set()
         _AUTONOMY_THREAD = threading.Thread(
             target=_autonomy_loop,
             name="mirai-cloud-autonomy",
@@ -451,6 +528,7 @@ class CloudWorkerHandler(BaseHTTPRequestHandler):
                     )
 
                     delivery = arm_production_autonomy()
+                    _AUTONOMY_FORCE_FULL_EVENT.set()
                     _AUTONOMY_WAKE_EVENT.set()
                     self._json(
                         {
