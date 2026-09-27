@@ -137,6 +137,12 @@ class Settings:
     studio_scene_images_per_video: int = int(
         os.getenv("STUDIO_SCENE_IMAGES_PER_VIDEO", "2")
     )
+    studio_fast_image_steps: int = int(
+        os.getenv("STUDIO_FAST_IMAGE_STEPS", "18")
+    )
+    studio_fast_background_steps: int = int(
+        os.getenv("STUDIO_FAST_BACKGROUND_STEPS", "14")
+    )
     # 速度優先モード。品質ゲートは維持しつつ、
     # 背景生成数・候補生成数・GPUのモデル移動を抑える。
     media_fast_mode: bool = (
