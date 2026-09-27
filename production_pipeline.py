@@ -620,8 +620,6 @@ def prepare_visuals(results: list[dict]) -> None:
 
     print("[PIPELINE] STEP 2/4 画像工程開始")
     started = time.perf_counter()
-    unload_ollama_model()
-    release_torch_cuda_cache()
 
     performance: dict = {
         "started_at": datetime.now().astimezone().isoformat(
