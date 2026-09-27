@@ -1146,7 +1146,7 @@ HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ミライ AI YouTuber 管理</title>
+<title>ミライ</title>
 <style>
 :root{font-family:Inter,"Yu Gothic UI",Meiryo,sans-serif;color:#eef5ff;background:#08111f}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(135deg,#07111f,#10223c 55%,#151a36);min-height:100vh}
@@ -1163,18 +1163,49 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
 .toggle{display:flex;align-items:center;gap:8px}.hero{display:flex;gap:12px;align-items:center}.orb{width:52px;height:52px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#c4dcff,#6598ef 45%,#243c7c);box-shadow:0 0 30px #4c82e855}
 .studio-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px}.asset{background:#0b1b30;border-radius:12px;overflow:hidden;border:1px solid #20344e}.asset img{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:#06101c}.asset video{display:block;width:100%;aspect-ratio:9/16;object-fit:contain;background:#000}.asset .meta{padding:9px}.studio-status{margin:8px 0 14px;padding:10px;border-radius:12px;background:#0b1b30}
 .library-list{display:grid;gap:12px}.library-item{background:#0b1b30;border:1px solid #20344e;border-radius:14px;padding:14px}.library-head{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}.library-meta{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.library-item details{margin-top:12px}.library-item summary{cursor:pointer;font-weight:700;color:#dcecff}.library-item video{display:block;width:min(100%,360px);max-height:640px;margin-top:10px;border-radius:12px;background:#000}.library-images{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:12px}.library-images img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:10px;background:#06101c}.linkbtn{display:inline-block;text-decoration:none;border:1px solid #355275;background:#102844;color:#fff;border-radius:10px;padding:8px 10px;font-size:12px;font-weight:700}
-@media(max-width:900px){.card,.card.wide,.card.half{grid-column:span 12}.wrap{padding:12px}h1{font-size:22px}button,select,input{max-width:100%}.actions input,.actions select{min-width:0!important;flex:1 1 180px}}
+.app-nav{display:flex;gap:8px;position:sticky;top:10px;z-index:30;margin:14px 0 6px;padding:7px;background:rgba(7,17,31,.9);border:1px solid #263d5d;border-radius:16px;backdrop-filter:blur(14px)}
+.app-nav button{flex:1;background:transparent;border:0;color:#9cb0c9;padding:10px 8px}
+.app-nav button.active{background:#1c5fb3;color:#fff;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+.app-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
+.app-stat{background:rgba(14,27,48,.88);border:1px solid #263d5d;border-radius:16px;padding:14px;min-height:88px}
+.app-stat b{display:block;font-size:20px;margin-top:6px}.app-stat .small{line-height:1.45}
+body.app-ready .grid>.card{display:none}
+body.app-ready .grid>.card.app-active{display:block}
+.page-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:14px 0 0}.page-title h2{font-size:14px;color:#9cb0c9;margin:0;font-weight:600}
+.resilience-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0}.resilience-box{background:#0b1b30;border-radius:12px;padding:10px}
+@media(max-width:900px){
+  .card,.card.wide,.card.half{grid-column:span 12}.wrap{padding:12px 12px 94px}h1{font-size:22px}button,select,input{max-width:100%}.actions input,.actions select{min-width:0!important;flex:1 1 180px}
+  .app-nav{position:fixed;left:8px;right:8px;top:auto;bottom:8px;margin:0;border-radius:18px}.app-nav button{font-size:12px;padding:11px 4px}
+  .app-overview{grid-template-columns:repeat(2,minmax(0,1fr))}.app-stat{min-height:82px}.resilience-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="top">
-    <div class="hero"><div class="orb"></div><div><h1>ミライ AI YouTuber 管理</h1><div class="sub">企画 → 制作 → 投稿 → 分析 → 改善を自動運転</div></div></div>
+    <div class="hero"><div class="orb"></div><div><h1>ミライ</h1><div class="sub">AI YouTuber 自動運営</div></div></div>
     <div class="actions">
-      <button class="primary" onclick="runAction('cycle')">今すぐ1サイクル実行</button>
+      <button class="primary" onclick="runAction('cycle')">今すぐ実行</button>
       <button onclick="refresh()">更新</button>
     </div>
   </div>
+
+  <nav class="app-nav" aria-label="メインメニュー">
+    <button type="button" data-app-tab="home" onclick="showAppPage('home')">ホーム</button>
+    <button type="button" data-app-tab="posts" onclick="showAppPage('posts')">投稿</button>
+    <button type="button" data-app-tab="create" onclick="showAppPage('create')">制作</button>
+    <button type="button" data-app-tab="growth" onclick="showAppPage('growth')">成長</button>
+    <button type="button" data-app-tab="settings" onclick="showAppPage('settings')">設定</button>
+  </nav>
+
+  <section id="homeOverview" class="app-overview">
+    <div class="app-stat"><span class="small">自動運転</span><b id="homeAutoState">-</b><div id="homeAutoDetail" class="small"></div></div>
+    <div class="app-stat"><span class="small">次の投稿</span><b id="homeNextPost">-</b><div id="homeNextPostDetail" class="small"></div></div>
+    <div class="app-stat"><span class="small">直近の投稿</span><b id="homeLastPost">-</b><div id="homeLastPostDetail" class="small"></div></div>
+    <div class="app-stat"><span class="small">失敗からの学習</span><b id="homeLearning">-</b><div id="homeLearningDetail" class="small"></div></div>
+  </section>
+
+  <div class="page-title"><h2 id="currentPageTitle">ホーム</h2></div>
 
   <div class="grid">
     <section class="card">
@@ -1392,6 +1423,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         <button class="primary" onclick="runImprovementReview()">失敗と成績をAI分析</button>
       </div>
       <div id="resourceStatus" class="studio-status small"></div>
+      <div id="resilienceSummary" class="resilience-grid"></div>
+      <div id="resiliencePlaybooks"></div>
       <div id="improvementReport" class="strategy"></div>
       <h3 style="font-size:14px;margin:18px 0 8px">確認が必要な変更だけ</h3>
       <div id="approvalList"></div>
@@ -1470,6 +1503,54 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
 
 <script>
 let state=null;
+let currentAppPage='home';
+const appPageMap={
+  '自動運転':'home',
+  '毎日自動投稿':'home',
+  'システム状態':'home',
+  '自動投稿・スリープ診断':'settings',
+  '今日18時まで3本・完全自動テスト':'posts',
+  '投稿キュー':'posts',
+  '生成ライブラリ':'posts',
+  'ゲストAI':'create',
+  'AIスタジオ':'create',
+  'Mirai Native Model Lab':'create',
+  'Mirai 自作エンジン':'growth',
+  'AI改善センター':'growth',
+  'ミライの成長戦略':'growth',
+  '権利・公開安全':'settings',
+  '運用設定':'settings',
+  '軽量・再起動なし運用':'settings',
+  'スマホ・外出先リモート管理':'settings',
+  'PC自動起動':'settings',
+  'ログ':'settings'
+};
+const appPageLabels={home:'ホーム',posts:'投稿',create:'制作',growth:'成長',settings:'設定'};
+function assignAppPages(){
+  document.querySelectorAll('.grid > section.card').forEach(card=>{
+    const title=(card.querySelector('h2')?.textContent||'').trim();
+    card.dataset.appPage=appPageMap[title]||'settings';
+  });
+}
+function showAppPage(page){
+  currentAppPage=appPageLabels[page]?page:'home';
+  localStorage.setItem('mirai-app-page',currentAppPage);
+  document.querySelectorAll('.grid > section.card').forEach(card=>{
+    card.classList.toggle('app-active',card.dataset.appPage===currentAppPage);
+  });
+  document.querySelectorAll('[data-app-tab]').forEach(btn=>{
+    btn.classList.toggle('active',btn.dataset.appTab===currentAppPage);
+  });
+  homeOverview.style.display=currentAppPage==='home'?'grid':'none';
+  currentPageTitle.textContent=appPageLabels[currentAppPage]||'ホーム';
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function initAppShell(){
+  assignAppPages();
+  document.body.classList.add('app-ready');
+  const saved=localStorage.getItem('mirai-app-page')||'home';
+  showAppPage(saved);
+}
 async function api(path, body=null){
   const opt=body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{};
   const r=await fetch(path,opt);
@@ -1488,7 +1569,20 @@ async function refresh(){
     privacy.value=state.privacy;
     interval.value=String(state.interval_seconds);
     lastCycle.textContent='最終サイクル: '+(state.last_cycle_at||'未実行')+' / '+state.last_cycle_result;
-    document.title=(state.system_ready?'✓ ':'⚠ ')+'ミライ AI YouTuber 管理';
+    const aphHome=state.auto_post_health||{};
+    const nextHome=aphHome.next_queue||{};
+    const lastHome=aphHome.last_post_event||{};
+    const resilience=((state.improvement||{}).resilience)||{};
+    homeAutoState.textContent=(state.automation_enabled&&state.auto_upload_enabled)?'稼働中':'確認必要';
+    homeAutoDetail.textContent='自動運転 '+(state.automation_enabled?'ON':'OFF')+' / 投稿 '+(state.auto_upload_enabled?'ON':'OFF');
+    homeNextPost.textContent=nextHome.scheduled_for?String(nextHome.scheduled_for).replace('T',' ').slice(5,16):'予定なし';
+    homeNextPostDetail.textContent=nextHome.video_id?('#'+Number(nextHome.video_id)+' '+String(nextHome.title||'')):'投稿キューは空です';
+    const lastLabels={verified:'成功',recovery_wait:'再試行待ち',attention:'要確認',blocked:'停止中',attempting:'投稿中',idle:'待機'};
+    homeLastPost.textContent=lastLabels[lastHome.status]||lastHome.status||'未実行';
+    homeLastPostDetail.textContent=lastHome.video_id?('#'+Number(lastHome.video_id)+' '+String(lastHome.detail||'')):String(lastHome.detail||'');
+    homeLearning.textContent=Number(resilience.learned_patterns||0)+'件 学習済み';
+    homeLearningDetail.textContent='未解決 '+Number(resilience.unresolved_patterns||0)+' / 復旧成功 '+Number(resilience.learned_successes||0);
+    document.title=(state.system_ready?'✓ ':'⚠ ')+'ミライ';
     services.innerHTML=[
       ['文章AI',state.services.ollama],
       ['Voice '+escapeHtml((state.voice_provider||{}).name||''),state.services.voicevox],
@@ -1756,6 +1850,22 @@ async function refresh(){
     approvalList.innerHTML=pending.length?pending.map(x=>{
       return '<div class="library-item"><div class="library-head"><div><b>'+escapeHtml(x.title||x.action_type)+'</b><div class="small">'+escapeHtml(x.action_type)+' / '+escapeHtml(x.created_at||'')+'</div></div></div><div class="small" style="margin-top:8px">'+escapeHtml(x.reason||'')+'</div><div class="actions" style="margin-top:10px"><button class="primary" onclick="resolveApproval('+x.id+',true)">承認</button><button onclick="resolveApproval('+x.id+',false)">却下</button></div></div>';
     }).join(''):'<div class="small">承認待ちはありません。安全な学習・生成・話し方改善は自動で進みます。</div>';
+    const rz=((state.improvement||{}).resilience)||{};
+    resilienceSummary.innerHTML=[
+      ['失敗パターン',Number(rz.total_patterns||0)],
+      ['復旧成功',Number(rz.learned_successes||0)],
+      ['学習済み',Number(rz.learned_patterns||0)],
+      ['未解決',Number(rz.unresolved_patterns||0)]
+    ].map(x=>'<div class="resilience-box"><div class="small">'+escapeHtml(x[0])+'</div><b>'+x[1]+'</b></div>').join('');
+    const playbooks=(rz.playbooks||[]).slice(0,6);
+    resiliencePlaybooks.innerHTML=playbooks.length
+      ? '<h3 style="font-size:14px;margin:14px 0 8px">復旧プレイブック</h3>'+
+        playbooks.map(x=>
+          '<div class="row"><span><b>'+escapeHtml(x.stage||x.category||'失敗')+'</b>'+
+          '<div class="small">'+escapeHtml(x.status||'learning')+' / '+Number(x.occurrences||0)+'回発生 / 成功 '+Number(x.success_count||0)+'回</div>'+
+          '<div class="small">次回優先: '+escapeHtml(x.preferred_next_action||'追加ログを収集')+'</div></span></div>'
+        ).join('')
+      : '<div class="small">まだ復旧プレイブックはありません。失敗と復旧を経験すると自動で育ちます。</div>';
     const report=(state.improvement&&state.improvement.report)||{};
     const recs=(report.recommendations||[]).map(x=>'・['+escapeHtml(x.priority||'')+'] '+escapeHtml(x.action||'')+' — '+escapeHtml(x.reason||'')).join('\n');
     improvementReport.textContent=(report.summary||'まだAI改善分析を実行していません。')+(recs?'\n\n'+recs:'')+(report.requires_code_change?'\n\n※コード変更候補あり。自動適用はせず、承認後に更新します。':'');
@@ -2021,6 +2131,7 @@ async function runAction(action){
 }
 refresh();
 setInterval(refresh,15000);
+initAppShell();
 </script>
 </body></html>"""
 

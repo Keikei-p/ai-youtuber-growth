@@ -24,6 +24,7 @@ from storage import (
     update_video_thumbnail,
 )
 from self_improvement import effective_scene_image_count, record_failure
+from resilience_learning import record_stage_success
 from mirai_engines.composer import MiraiComposer
 from mirai_engines.editorial_quality_engine import MiraiEditorialQualityEngine
 from mirai_engines.quality_engine import MiraiQualityEngine
@@ -101,6 +102,15 @@ def _ensure_mirai_visual(item: dict) -> str | None:
         path = generate_mirai_image(expression)
         item["character_image_path"] = path
         item["mirai_visual"] = VisualLearningMemory().find_by_path(path)
+        record_stage_success(
+            "image.mirai",
+            action="画像生成を再実行しVisual Quality基準を満たした",
+            context={
+                "video_id": item.get("id"),
+                "expression": expression,
+                "path": path,
+            },
+        )
         return path
     except Exception as exc:
         item["visual_warning"] = (
@@ -159,6 +169,15 @@ def _generate_backgrounds(item: dict) -> list[str]:
                 _background_theme(item, scene_index, total)
             )
             paths.append(path)
+            record_stage_success(
+                "image.background",
+                action="背景生成を再実行し正常な画像を取得",
+                context={
+                    "video_id": item.get("id"),
+                    "scene_index": scene_index,
+                    "path": path,
+                },
+            )
             item.setdefault("background_visuals", []).append(
                 VisualLearningMemory().find_by_path(path)
             )
@@ -364,6 +383,14 @@ def _generate_ai_video_asset(item: dict) -> str | None:
                 item["ai_video_path"] = path
                 item["ai_video_backend"] = "ffmpeg-identity-motion"
                 item["ai_video_identity_locked"] = True
+                record_stage_success(
+                    "ai_video.identity_motion",
+                    action="固定ミライ画像の軽量モーションへフォールバックして品質基準を通過",
+                    context={
+                        "video_id": item.get("id"),
+                        "path": path,
+                    },
+                )
                 return path
             print(
                 "[PIPELINE][AI-VIDEO] 固定キャラ動画が品質基準未満。"
@@ -661,6 +688,15 @@ def synthesize_audio(results: list[dict]) -> None:
             )
             item["audio_path"] = str(audio_path)
             item["voice_plan"] = voice_result
+            record_stage_success(
+                "voice.synthesis",
+                action="音声providerを正常化して音声生成完了",
+                context={
+                    "video_id": item.get("id"),
+                    "provider": voice_result.get("provider"),
+                    "audio_path": str(audio_path),
+                },
+            )
             print(
                 f"[PIPELINE][VOICE] #{item['id']} "
                 f"{len(voice_result.get('segments') or [])}セグメント / "
@@ -723,6 +759,12 @@ def render_videos(results: list[dict], character: dict) -> None:
                     ",".join(plan_issues),
                     {"video_id": item.get("id")},
                 )
+            else:
+                record_stage_success(
+                    "composer.plan_validation",
+                    action="構成ルールを再適用して検証を通過",
+                    context={"video_id": item.get("id")},
+                )
 
             render_short(
                 title=item["title"],
@@ -749,6 +791,22 @@ def render_videos(results: list[dict], character: dict) -> None:
             item["output_path"] = str(video_path)
 
             if item["quality_passed"]:
+                record_stage_success(
+                    "quality.validation",
+                    action="再生成/再編集後にTechnical Quality基準を通過",
+                    context={
+                        "video_id": item.get("id"),
+                        "score": quality.get("score"),
+                    },
+                )
+                record_stage_success(
+                    "video.render",
+                    action="FFmpegレンダリングと品質検査まで正常完了",
+                    context={
+                        "video_id": item.get("id"),
+                        "output_path": str(video_path),
+                    },
+                )
                 item["status"] = "rendered"
                 update_video_output(
                     item["id"],
@@ -765,6 +823,15 @@ def render_videos(results: list[dict], character: dict) -> None:
                     update_video_thumbnail(
                         int(item["id"]),
                         str(thumbnail.get("path") or "") or None,
+                    )
+                    record_stage_success(
+                        "thumbnail.generate",
+                        action="複数候補から品質スコア上位のサムネイルを採用",
+                        context={
+                            "video_id": item.get("id"),
+                            "score": thumbnail.get("score"),
+                            "path": thumbnail.get("path"),
+                        },
                     )
                     print(
                         f"[PIPELINE][THUMBNAIL] #{item['id']} "
@@ -794,7 +861,16 @@ def render_videos(results: list[dict], character: dict) -> None:
                     f"{editorial.get('score')}/100 / "
                     f"{editorial.get('dimensions')}"
                 )
-                if not editorial.get("passed"):
+                if editorial.get("passed"):
+                    record_stage_success(
+                        "quality.editorial",
+                        action="編集品質ルールを反映してEditorial Quality基準を通過",
+                        context={
+                            "video_id": item.get("id"),
+                            "score": editorial.get("score"),
+                        },
+                    )
+                else:
                     item["quality_passed"] = False
                     item["status"] = "editorial_failed"
                     update_video_output(

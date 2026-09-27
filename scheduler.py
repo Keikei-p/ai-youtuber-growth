@@ -15,6 +15,7 @@ from legal_guard import publish_gate
 from main import load_character, render_results, run_generation
 from native_models.auto_train import maybe_run_native_retraining
 from resource_governor import background_production_decision
+from resilience_learning import record_stage_success
 from self_improvement import (
     maybe_run_improvement_review,
     record_failure,
@@ -1469,6 +1470,19 @@ def run_due() -> None:
                     "youtube_video_id": youtube_id,
                     "privacy": finalized["privacy"],
                     "uploaded_at": uploaded_at,
+                },
+            )
+            record_stage_success(
+                "youtube.upload",
+                action=(
+                    "投稿レシートを保持して同じvideoIdを検証し、"
+                    "YouTube上の処理完了確認まで待って成功"
+                ),
+                context={
+                    "video_id": video_id,
+                    "queue_id": int(row["queue_id"]),
+                    "youtube_video_id": youtube_id,
+                    "privacy": finalized["privacy"],
                 },
             )
             print(
