@@ -226,6 +226,11 @@ class NativeModelTests(unittest.TestCase):
             patch.object(video_generator, "settings", fake_settings),
             patch.object(
                 video_generator,
+                "ai_video_backend_name",
+                return_value="native",
+            ),
+            patch.object(
+                video_generator,
                 "_generate_native_clip",
                 return_value="native.mp4",
             ) as native_clip,
