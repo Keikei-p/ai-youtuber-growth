@@ -24,6 +24,7 @@ from storage import (
 )
 from self_improvement import effective_scene_image_count, record_failure
 from mirai_engines.composer import MiraiComposer
+from mirai_engines.editorial_quality_engine import MiraiEditorialQualityEngine
 from mirai_engines.quality_engine import MiraiQualityEngine
 from mirai_engines.visual_learning import VisualLearningMemory
 from mirai_engines.visual_quality_engine import MiraiVisualQualityEngine
@@ -616,9 +617,41 @@ def render_videos(results: list[dict], character: dict) -> None:
                         f"生成失敗。YouTube自動サムネイルで継続: {thumb_exc}"
                     )
 
+                editorial = MiraiEditorialQualityEngine().inspect(
+                    item,
+                    technical_quality=quality,
+                )
+                item["editorial_quality"] = editorial
+                print(
+                    f"[PIPELINE][EDITORIAL] #{item['id']} "
+                    f"{'PASS' if editorial.get('passed') else 'FAIL'} "
+                    f"{editorial.get('score')}/100 / "
+                    f"{editorial.get('dimensions')}"
+                )
+                if not editorial.get("passed"):
+                    item["quality_passed"] = False
+                    item["status"] = "editorial_failed"
+                    update_video_output(
+                        item["id"],
+                        str(video_path),
+                        status="editorial_failed",
+                    )
+                    record_failure(
+                        "quality.editorial",
+                        "投稿前編集品質ゲート不合格",
+                        {
+                            "video_id": item.get("id"),
+                            "score": editorial.get("score"),
+                            "dimensions": editorial.get("dimensions"),
+                            "notes": editorial.get("notes"),
+                        },
+                    )
+
                 print(
                     f"[PIPELINE][QUALITY] #{item['id']} "
-                    f"PASS {quality.get('score')}/100"
+                    f"{'PASS' if item.get('quality_passed') else 'FAIL'} "
+                    f"technical={quality.get('score')}/100 "
+                    f"editorial={editorial.get('score')}/100"
                 )
             else:
                 item["status"] = "quality_failed"
