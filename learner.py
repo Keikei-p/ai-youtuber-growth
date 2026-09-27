@@ -12,9 +12,18 @@ def build_learning_note(
     likes = float(metrics.get("likes") or 0)
     comments = float(metrics.get("comments") or 0)
     retention = float(metrics.get("averageViewPercentage") or 0)
+    avg_duration = float(metrics.get("averageViewDuration") or 0)
+    watch_minutes = float(metrics.get("estimatedMinutesWatched") or 0)
+    shares = float(metrics.get("shares") or 0)
+    subscribers = float(metrics.get("subscribersGained") or 0)
+    impressions = float(metrics.get("impressions") or 0)
+    ctr = float(metrics.get("ctr") or 0)
+    traffic = list(metrics.get("trafficSources") or [])
 
     like_rate = (likes / views * 100) if views else 0.0
     comment_rate = (comments / views * 100) if views else 0.0
+    share_rate = (shares / views * 100) if views else 0.0
+    sub_rate = (subscribers / views * 100) if views else 0.0
 
     notes: list[str] = [
         f"{checkpoint_hours}時間時点の分析。"
@@ -37,6 +46,16 @@ def build_learning_note(
         notes.append(
             "視聴維持率はまだ取得できていないため、維持率だけで良し悪しを決めない。"
         )
+
+    if impressions > 0:
+        if ctr >= 8:
+            notes.append(
+                "CTRが強い。タイトルとサムネイルの構造を別テーマでも再利用する。"
+            )
+        elif ctr < 3:
+            notes.append(
+                "CTRが弱い。タイトルを短くし、サムネイルの主役と訴求を1つに絞る。"
+            )
 
     if views < 20:
         notes.append(
@@ -61,6 +80,44 @@ def build_learning_note(
                 "コメント誘導は短くし、答えやすい具体的な質問にする。"
             )
 
+        if share_rate >= 0.5:
+            notes.append(
+                "共有率が良い。人に見せたくなる驚き・共感の型を残す。"
+            )
+        if sub_rate >= 0.5:
+            notes.append(
+                "登録転換が良い。キャラクター性と次話予告を維持する。"
+            )
+        elif views >= 100 and subscribers <= 0:
+            notes.append(
+                "視聴はあるが登録増が弱い。シリーズ性と次話を見る理由を強める。"
+            )
+
+    if traffic:
+        ranked = sorted(
+            traffic,
+            key=lambda row: int(row.get("views") or 0),
+            reverse=True,
+        )
+        top_source = str((ranked[0] or {}).get("source") or "")
+        if top_source == "SHORTS":
+            notes.append(
+                "Shortsフィード流入が中心。最初の1〜3秒とループ感を優先する。"
+            )
+        elif top_source == "YT_SEARCH":
+            notes.append(
+                "検索流入が中心。タイトル・説明文で検索意図との一致を維持する。"
+            )
+        elif top_source:
+            notes.append(
+                f"主な流入は{top_source}。流入面に合う導入と見せ方を次回検証する。"
+            )
+
+    if avg_duration > 0 and watch_minutes > 0:
+        notes.append(
+            f"平均視聴{avg_duration:.1f}秒・総視聴{watch_minutes:.1f}分も判断材料にする。"
+        )
+
     if checkpoint_hours >= 168:
         notes.append(
             "7日データなので、一時的な伸びより再現できる型を優先して判断する。"
@@ -70,10 +127,22 @@ def build_learning_note(
             "72時間データなので、24時間時点との差も見て伸び続ける企画か判断する。"
         )
 
-    retention_score = retention * 0.65 if retention > 0 else 32.5
-    engagement_score = min(like_rate, 10) * 2.0 + min(comment_rate, 5) * 1.5
-    volume_score = min(math.log10(max(views, 1) + 1) * 4.0, 12.0)
-    score = min(100.0, retention_score + engagement_score + volume_score)
+    retention_score = retention * 0.58 if retention > 0 else 29.0
+    engagement_score = (
+        min(like_rate, 10) * 1.8
+        + min(comment_rate, 5) * 1.5
+        + min(share_rate, 3) * 1.8
+        + min(sub_rate, 3) * 2.0
+    )
+    reach_score = min(max(ctr, 0), 15) * 1.0 if impressions > 0 else 0.0
+    volume_score = min(
+        math.log10(max(views, 1) + 1) * 4.0,
+        10.0,
+    )
+    score = min(
+        100.0,
+        retention_score + engagement_score + reach_score + volume_score,
+    )
 
     return " ".join(notes), round(score, 2)
 
