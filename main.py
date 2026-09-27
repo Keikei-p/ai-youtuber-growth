@@ -24,9 +24,13 @@ from storage import (
     init_db,
     get_channel_state,
     mark_uploaded,
+    pending_upload_receipt,
+    record_upload_receipt,
     recent_videos,
     save_video,
     set_channel_state,
+    set_upload_receipt_thumbnail,
+    update_upload_receipt_verification,
     update_video_output,
     video_by_id,
 )
@@ -56,6 +60,8 @@ def upload_results(
         print("[UPLOAD] DRY_RUN=true のためYouTube投稿は実行しません。")
         return
 
+    from youtube.post_verifier import verify_uploaded_video
+    from youtube.thumbnail import set_custom_thumbnail
     from youtube.uploader import upload_video
 
     effective_privacy = privacy_status or settings.youtube_privacy_status
@@ -89,19 +95,85 @@ def upload_results(
                 )
                 continue
 
-            youtube_id = upload_video(
-                video_path=Path(item["output_path"]),
-                title=item["title"],
-                description=item.get("description", ""),
-                tags=item.get("tags", []),
-                privacy_status=effective_privacy,
-                category_id=settings.youtube_category_id,
-                default_language=settings.youtube_default_language,
-                # ミライはAI音声・AI画像/映像を用いるため安全側で常時開示。
-                contains_synthetic_media=True,
+            receipt = pending_upload_receipt(int(item["id"]))
+            if receipt:
+                youtube_id = str(receipt["youtube_video_id"])
+                title = str(receipt.get("expected_title") or item["title"])
+                description = str(
+                    receipt.get("expected_description")
+                    or item.get("description", "")
+                )
+            else:
+                title = str(item["title"])
+                description = str(item.get("description", ""))
+                youtube_id = upload_video(
+                    video_path=Path(item["output_path"]),
+                    title=title,
+                    description=description,
+                    tags=item.get("tags", []),
+                    privacy_status=effective_privacy,
+                    category_id=settings.youtube_category_id,
+                    default_language=settings.youtube_default_language,
+                    contains_synthetic_media=True,
+                )
+                record_upload_receipt(
+                    int(item["id"]),
+                    youtube_id,
+                    source="direct_upload",
+                    expected_title=title,
+                    expected_description=description,
+                    expected_privacy=effective_privacy,
+                    thumbnail_path=str(
+                        item.get("thumbnail_path") or ""
+                    ) or None,
+                )
+                receipt = pending_upload_receipt(int(item["id"]))
+                if not receipt:
+                    raise RuntimeError(
+                        "YouTube ID取得後の投稿レシート保存に失敗しました。"
+                    )
+
+            thumbnail_path = str(
+                receipt.get("thumbnail_path")
+                or item.get("thumbnail_path")
+                or ""
+            ).strip()
+            if thumbnail_path and not bool(receipt.get("thumbnail_set")):
+                try:
+                    thumb_result = set_custom_thumbnail(
+                        youtube_id,
+                        thumbnail_path,
+                    )
+                    if thumb_result.get("ok"):
+                        set_upload_receipt_thumbnail(
+                            int(item["id"]),
+                            thumbnail_set=True,
+                        )
+                except Exception as thumb_exc:
+                    record_failure(
+                        "youtube.thumbnail",
+                        thumb_exc,
+                        {
+                            "video_id": item.get("id"),
+                            "youtube_video_id": youtube_id,
+                        },
+                    )
+
+            verification = verify_uploaded_video(
+                youtube_id,
+                expected_title=title,
+                expected_description=description,
+                expected_privacy=effective_privacy,
             )
+            update_upload_receipt_verification(
+                int(item["id"]),
+                status="verified",
+                detail=verification,
+            )
+
             item["youtube_video_id"] = youtube_id
             item["status"] = "uploaded"
+            item["post_verification"] = verification
             mark_uploaded(
                 item["id"],
                 youtube_id,
@@ -110,7 +182,7 @@ def upload_results(
             )
             print(
                 f"[UPLOAD] #{item['id']} -> YouTube ID {youtube_id} "
-                f"[{effective_privacy}]"
+                f"[{effective_privacy}] verified"
             )
             if cleanup_local:
                 try:
@@ -126,67 +198,18 @@ def upload_results(
                     ):
                         item["output_path"] = None
                 except Exception as cleanup_exc:
-                    print(f"[CLEANUP] 投稿は成功済みですが削除処理でエラー: {cleanup_exc}")
-            else:
-                print("[TEST-UPLOAD] 確認用にローカル動画を残します。")
+                    print(
+                        "[CLEANUP] 投稿は確認済みですが削除処理でエラー: "
+                        f"{cleanup_exc}"
+                    )
         except Exception as exc:
             item["upload_error"] = str(exc)
-            print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
-
-def _make_valid_script(character: dict, idea: dict, recent: list[dict]) -> dict | None:
-    try:
-        written = write_script(character, idea, recent)
-    except Exception as exc:
-        print(f"[WRITE] 初回生成失敗: {exc}")
-        written = fallback_script(character, idea)
-
-    for retry in range(settings.max_script_retries + 1):
-        ok, issues = review_script(written["title"], written["script"], recent)
-        if ok:
-            if retry:
-                print(f"[REPAIR] {retry}回の修正で品質チェックOK")
-            return written
-
-        print(f"[REPAIR] 品質チェックNG: {issues} / 修正 {retry + 1}/{settings.max_script_retries}")
-
-        if retry >= settings.max_script_retries:
-            break
-
-        try:
-            written = rewrite_script(
-                character=character,
-                idea=idea,
-                recent=recent,
-                previous=written,
-                issues=issues,
+            record_failure(
+                "youtube.direct_upload",
+                exc,
+                {"video_id": item.get("id")},
             )
-        except Exception as exc:
-            print(f"[REPAIR] AI修正失敗: {exc}")
-            written = fallback_script(character, idea)
-
-    fallback = fallback_script(character, idea)
-    ok, issues = review_script(fallback["title"], fallback["script"], recent)
-    if ok:
-        print("[REPAIR] 安全テンプレートへ切り替えて品質チェックOK")
-        return fallback
-
-    print(f"[SKIP] 安全テンプレートも品質チェックNG: {issues}")
-    try:
-        record_failure(
-            "text.script_quality",
-            ",".join(issues) or "script_quality_failed",
-            {
-                "idea": str(idea.get("idea") or ""),
-                "angle": str(idea.get("angle") or ""),
-                "title": str(fallback.get("title") or ""),
-            },
-        )
-    except Exception as exc:
-        print(f"[IMPROVEMENT] 台本失敗記録をスキップ: {exc}")
-    return None
-
-FIRST_EPISODE_STATE_KEY = "mirai_first_episode_completed"
-
+            print(f"[UPLOAD] #{item['id']} 失敗: {exc}")
 
 def _first_episode_package() -> dict:
     """初回だけ使う固定の自己紹介。2本目以降は通常の学習型企画へ戻す。"""
