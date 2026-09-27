@@ -1291,6 +1291,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
 .app-nav{display:flex;gap:8px;position:sticky;top:10px;z-index:30;margin:14px 0 6px;padding:7px;background:rgba(7,17,31,.9);border:1px solid #263d5d;border-radius:16px;backdrop-filter:blur(14px)}
 .app-nav button{flex:1;background:transparent;border:0;color:#9cb0c9;padding:10px 8px}
 .app-nav button.active{background:#1c5fb3;color:#fff;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+.autopilot-panel{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-top:14px;padding:20px;border:1px solid #2d5f8f;border-radius:20px;background:linear-gradient(135deg,rgba(21,62,103,.94),rgba(13,35,62,.94));box-shadow:0 16px 45px rgba(0,0,0,.2)}
+.autopilot-copy{min-width:0}.autopilot-copy b{display:block;font-size:22px;margin:5px 0}.autopilot-main{min-width:260px;font-size:16px;padding:14px 18px}
 .app-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
 .app-stat{background:rgba(14,27,48,.88);border:1px solid #263d5d;border-radius:16px;padding:14px;min-height:88px}
 .app-stat b{display:block;font-size:20px;margin-top:6px}.app-stat .small{line-height:1.45}
@@ -1301,6 +1303,7 @@ body.app-ready .grid>.card.app-active{display:block}
 @media(max-width:900px){
   .card,.card.wide,.card.half{grid-column:span 12}.wrap{padding:12px 12px 94px}h1{font-size:22px}button,select,input{max-width:100%}.actions input,.actions select{min-width:0!important;flex:1 1 180px}
   .app-nav{position:fixed;left:8px;right:8px;top:auto;bottom:8px;margin:0;border-radius:18px}.app-nav button{font-size:12px;padding:11px 4px}
+  .autopilot-panel{align-items:stretch;flex-direction:column}.autopilot-main{width:100%;min-width:0;font-size:16px}
   .app-overview{grid-template-columns:repeat(2,minmax(0,1fr))}.app-stat{min-height:82px}.resilience-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 </style>
@@ -1310,7 +1313,6 @@ body.app-ready .grid>.card.app-active{display:block}
   <div class="top">
     <div class="hero"><div class="orb"></div><div><h1>ミライ</h1><div class="sub">AI YouTuber 自動運営</div></div></div>
     <div class="actions">
-      <button class="primary" onclick="runAction('cycle')">今すぐ実行</button>
       <button onclick="refresh()">更新</button>
     </div>
   </div>
@@ -1322,6 +1324,16 @@ body.app-ready .grid>.card.app-active{display:block}
     <button type="button" data-app-tab="growth" onclick="showAppPage('growth')">成長</button>
     <button type="button" data-app-tab="settings" onclick="showAppPage('settings')">設定</button>
   </nav>
+
+  <section id="autopilotPanel" class="autopilot-panel">
+    <div class="autopilot-copy">
+      <span class="small">普段はここだけでOK</span>
+      <b id="autopilotTitle">完全自動運用を確認中...</b>
+      <div id="autopilotDetail" class="small">企画・制作・品質確認・投稿・分析・改善を自動で続けます。</div>
+      <div id="autopilotAttention" class="small" style="margin-top:6px"></div>
+    </div>
+    <button id="autopilotMainBtn" class="primary autopilot-main" onclick="toggleFullAutopilot()">▶ 完全自動運用開始</button>
+  </section>
 
   <section id="homeOverview" class="app-overview">
     <div class="app-stat"><span class="small">自動運転</span><b id="homeAutoState">-</b><div id="homeAutoDetail" class="small"></div></div>
@@ -1643,8 +1655,8 @@ body.app-ready .grid>.card.app-active{display:block}
 let state=null;
 let currentAppPage='home';
 const appPageMap={
-  '自動運転':'home',
-  '毎日自動投稿':'home',
+  '自動運転':'settings',
+  '毎日自動投稿':'settings',
   'システム状態':'home',
   '自動投稿・スリープ診断':'settings',
   '今日18時まで3本・完全自動テスト':'posts',
@@ -1680,6 +1692,7 @@ function showAppPage(page){
     btn.classList.toggle('active',btn.dataset.appTab===currentAppPage);
   });
   homeOverview.style.display=currentAppPage==='home'?'grid':'none';
+  autopilotPanel.style.display=currentAppPage==='home'?'flex':'none';
   currentPageTitle.textContent=appPageLabels[currentAppPage]||'ホーム';
   window.scrollTo({top:0,behavior:'smooth'});
 }
