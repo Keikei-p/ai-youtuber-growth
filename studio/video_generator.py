@@ -4,6 +4,7 @@ import gc
 import shutil
 import subprocess
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +29,73 @@ from studio.google_video_generator import (
 )
 from studio.models import NEGATIVE_PROMPT
 from video.ffmpeg_encoder import run_video_encode
+
+
+_ANIMATEDIFF_PIPELINE = None
+_ANIMATEDIFF_MODEL = None
+_ANIMATEDIFF_LOCK = threading.RLock()
+
+
+def _load_animatediff_pipeline(torch):
+    global _ANIMATEDIFF_PIPELINE, _ANIMATEDIFF_MODEL
+
+    from diffusers import (
+        AnimateDiffPipeline,
+        DDIMScheduler,
+        MotionAdapter,
+    )
+
+    model_id = str(settings.studio_diffusers_model)
+    with _ANIMATEDIFF_LOCK:
+        if (
+            _ANIMATEDIFF_PIPELINE is not None
+            and _ANIMATEDIFF_MODEL == model_id
+        ):
+            return _ANIMATEDIFF_PIPELINE
+
+        dtype = torch.float16
+        adapter = MotionAdapter.from_pretrained(
+            "guoyww/animatediff-motion-adapter-v1-5-2",
+            torch_dtype=dtype,
+        )
+        pipe = AnimateDiffPipeline.from_pretrained(
+            model_id,
+            motion_adapter=adapter,
+            torch_dtype=dtype,
+        )
+        pipe.scheduler = DDIMScheduler.from_config(
+            pipe.scheduler.config,
+            clip_sample=False,
+            timestep_spacing="linspace",
+            beta_schedule="linear",
+            steps_offset=1,
+        )
+        if hasattr(pipe, "vae"):
+            pipe.vae.enable_slicing()
+            if hasattr(pipe.vae, "enable_tiling"):
+                pipe.vae.enable_tiling()
+        pipe.enable_model_cpu_offload()
+
+        _ANIMATEDIFF_PIPELINE = pipe
+        _ANIMATEDIFF_MODEL = model_id
+        return pipe
+
+
+def _drop_animatediff_pipeline() -> None:
+    global _ANIMATEDIFF_PIPELINE, _ANIMATEDIFF_MODEL
+    with _ANIMATEDIFF_LOCK:
+        pipe = _ANIMATEDIFF_PIPELINE
+        _ANIMATEDIFF_PIPELINE = None
+        _ANIMATEDIFF_MODEL = None
+    if pipe is not None:
+        try:
+            if hasattr(pipe, "maybe_free_model_hooks"):
+                pipe.maybe_free_model_hooks()
+        except Exception:
+            pass
+        del pipe
+    gc.collect()
+    release_torch_cuda_cache()
 
 
 def ai_video_status() -> dict:
@@ -105,6 +173,8 @@ def _frames_to_mp4(
             frame.convert("RGB").save(
                 tmp_dir / f"frame_{index:03d}.png",
                 "PNG",
+                compress_level=1,
+                optimize=False,
             )
 
         run_video_encode(
@@ -260,11 +330,7 @@ def generate_animatediff_clip(
 
     try:
         import torch
-        from diffusers import (
-            AnimateDiffPipeline,
-            DDIMScheduler,
-            MotionAdapter,
-        )
+        from diffusers import AnimateDiffPipeline, MotionAdapter  # noqa: F401
     except Exception as exc:
         raise RuntimeError(
             "AnimateDiffを利用できません。AI Studio依存関係を確認してください。"
@@ -285,30 +351,9 @@ def generate_animatediff_clip(
 
     with exclusive_gpu_task("AI動画生成"):
         try:
-            dtype = torch.float16
-            adapter = MotionAdapter.from_pretrained(
-                "guoyww/animatediff-motion-adapter-v1-5-2",
-                torch_dtype=dtype,
-            )
-            pipe = AnimateDiffPipeline.from_pretrained(
-                settings.studio_diffusers_model,
-                motion_adapter=adapter,
-                torch_dtype=dtype,
-            )
-            pipe.scheduler = DDIMScheduler.from_config(
-                pipe.scheduler.config,
-                clip_sample=False,
-                timestep_spacing="linspace",
-                beta_schedule="linear",
-                steps_offset=1,
-            )
-            if hasattr(pipe, "vae"):
-                pipe.vae.enable_slicing()
-                if hasattr(pipe.vae, "enable_tiling"):
-                    pipe.vae.enable_tiling()
-
-            # 8GB環境ではモデルを必要な時だけGPUへ移す。
-            pipe.enable_model_cpu_offload()
+            # Fast modeではAnimateDiff本体を毎回from_pretrainedし直さず、
+            # CPU側に保持して次回生成で再利用する。
+            pipe = _load_animatediff_pipeline(torch)
 
             result = pipe(
                 prompt=prompt,
@@ -358,8 +403,13 @@ def generate_animatediff_clip(
         finally:
             if pipe is not None:
                 try:
-                    del pipe
+                    if hasattr(pipe, "maybe_free_model_hooks"):
+                        pipe.maybe_free_model_hooks()
                 except Exception:
                     pass
-            gc.collect()
-            release_torch_cuda_cache()
+            if not bool(getattr(settings, "media_fast_mode", True)):
+                _drop_animatediff_pipeline()
+            else:
+                # パイプライン本体はCPU側に温存し、VRAMだけ次工程へ返す。
+                gc.collect()
+                release_torch_cuda_cache()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import math
 import random
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,14 @@ from native_models.common import (
     read_json,
     write_json,
 )
+
+
+_INFERENCE_LOCK = threading.RLock()
+_INFERENCE_MODEL = None
+_INFERENCE_CONFIG = None
+_INFERENCE_DEVICE = None
+_INFERENCE_STAMP = None
+_INFERENCE_SCHEDULE = None
 
 
 @dataclass
@@ -282,6 +291,54 @@ def train(
     return meta
 
 
+def _inference_bundle(torch, paths: dict, meta: dict):
+    global _INFERENCE_MODEL, _INFERENCE_CONFIG
+    global _INFERENCE_DEVICE, _INFERENCE_STAMP
+    global _INFERENCE_SCHEDULE
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    stamp = (
+        int(paths["weights"].stat().st_mtime_ns),
+        device,
+    )
+    with _INFERENCE_LOCK:
+        if (
+            _INFERENCE_MODEL is not None
+            and _INFERENCE_STAMP == stamp
+        ):
+            return (
+                _INFERENCE_MODEL,
+                _INFERENCE_CONFIG,
+                _INFERENCE_DEVICE,
+                _INFERENCE_SCHEDULE,
+            )
+
+        cfg = meta.get("architecture") or {}
+        config = ImageConfig(
+            **{
+                key: cfg[key]
+                for key in asdict(ImageConfig()).keys()
+                if key in cfg
+            }
+        )
+        model = build_model(config).to(device)
+        model.load_state_dict(
+            torch.load(
+                paths["weights"],
+                map_location=device,
+                weights_only=True,
+            )
+        )
+        model.eval()
+        schedule = _schedule(config, device)
+        _INFERENCE_MODEL = model
+        _INFERENCE_CONFIG = config
+        _INFERENCE_DEVICE = device
+        _INFERENCE_STAMP = stamp
+        _INFERENCE_SCHEDULE = schedule
+        return model, config, device, schedule
+
+
 def generate(
     prompt: str,
     *,
@@ -293,21 +350,12 @@ def generate(
     meta = read_json(paths["meta"])
     if not paths["weights"].is_file() or not meta.get("ready"):
         raise RuntimeError("Mirai Native Image v0の学習済み重みがありません。")
-    cfg = meta.get("architecture") or {}
-    config = ImageConfig(
-        **{
-            key: cfg[key]
-            for key in asdict(ImageConfig()).keys()
-            if key in cfg
-        }
+    model, config, device, schedule = _inference_bundle(
+        torch,
+        paths,
+        meta,
     )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = build_model(config).to(device)
-    model.load_state_dict(
-        torch.load(paths["weights"], map_location=device, weights_only=True)
-    )
-    model.eval()
-    betas, alphas, alpha_bar = _schedule(config, device)
+    betas, alphas, alpha_bar = schedule
     generator = torch.Generator(device=device).manual_seed(int(seed))
     x = torch.randn(
         1, 3, config.size, config.size,
@@ -319,7 +367,7 @@ def generate(
         dtype=torch.long,
         device=device,
     )
-    with torch.no_grad():
+    with torch.inference_mode():
         for index in reversed(range(config.timesteps)):
             t = torch.tensor(
                 [index / max(config.timesteps - 1, 1)],

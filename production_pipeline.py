@@ -342,6 +342,24 @@ def _generate_ai_video_asset(item: dict) -> str | None:
     if (
         mirai_identity_video_enabled()
         and identity_ready
+        and backend != "google"
+        and bool(getattr(settings, "media_fast_mode", True))
+    ):
+        # 本編renderer自身が同じ固定ミライ画像へカメラモーションを
+        # 付けられるため、中間2.8秒MP4の生成+ffprobe+frame検査を省略。
+        # 見た目のidentity-safe motionは維持し、二重エンコードだけ消す。
+        item["ai_video_backend"] = "renderer-identity-motion"
+        item["ai_video_identity_locked"] = True
+        item["renderer_identity_motion"] = True
+        print(
+            f"[PIPELINE][AI-VIDEO] #{item['id']} "
+            "中間モーションMP4を省略し本編rendererで直接動かします。"
+        )
+        return None
+
+    if (
+        mirai_identity_video_enabled()
+        and identity_ready
     ):
         try:
             print(

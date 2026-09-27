@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from config import settings
 from runtime_control import post_times
 from storage import (
     connect,
@@ -41,6 +42,15 @@ def classify_upload_failure(error: Exception | str) -> dict[str, Any]:
             "code": "rate_limit",
             "retryable": True,
             "safe_action": "retry_later",
+        }
+    if any(x in text for x in (
+        "youtube_upload_reconcile_pending",
+        "直前の投稿結果をyoutube側で確認中",
+    )):
+        return {
+            "code": "upload_reconcile_pending",
+            "retryable": True,
+            "safe_action": "verify_same_video_later",
         }
     if any(x in text for x in (
         "youtube_processing_pending",
@@ -285,6 +295,11 @@ def _failure_knowledge(code: str) -> dict[str, str]:
             "fix": "保存済み台本から動画再生成",
             "prevention": "投稿確認前にローカル動画を削除しない",
         },
+        "upload_reconcile_pending": {
+            "cause": "投稿完了直後の中断でlocal receipt有無が不明",
+            "fix": "新規投稿せずYouTube直近投稿を再照合",
+            "prevention": "upload intentを送信前に永続化して二重投稿を防ぐ",
+        },
         "youtube_processing_pending": {
             "cause": "YouTube側エンコード処理が未完了",
             "fix": "新規投稿せず同じvideoIdを再確認",
@@ -304,6 +319,11 @@ def _failure_knowledge(code: str) -> dict[str, str]:
             "cause": "YouTubeメタデータ制約違反",
             "fix": "タイトル/説明/タグを安全化して再試行",
             "prevention": "文字数とタグ総量を投稿前に制限",
+        },
+        "publish_guard": {
+            "cause": "公開前確認ルールで人間の承認待ち",
+            "fix": "新規投稿せず一定時間後に承認状態を再確認",
+            "prevention": "承認待ち中の毎分再試行を避ける",
         },
     }
     return mapping.get(code, {
@@ -369,12 +389,14 @@ def recover_upload_failure(
         "youtube_transient": 6,
         "rate_limit": 5,
         "youtube_processing_pending": 12,
+        "upload_reconcile_pending": 12,
         "youtube_metadata_mismatch": 4,
         "youtube_processing_failed": 4,
         "missing_file": 4,
         "metadata": 4,
         "quota": 3,
         "oauth": 2,
+        "publish_guard": 9999,
         "unknown": 4,
     }
     limit = int(limits.get(code, 5))
@@ -420,6 +442,23 @@ def recover_upload_failure(
         )
         return result
 
+    if (
+        video_id > 0
+        and code in {
+            "oauth",
+            "quota",
+            "metadata",
+            "publish_guard",
+            "missing_file",
+        }
+    ):
+        # これらはYouTube側で投稿完了している曖昧状態ではない。
+        # 古いintentを残すと次回に不要なremote照合が走るため消す。
+        set_channel_state(
+            f"youtube_upload_intent_{video_id}",
+            "",
+        )
+
     if queue_id <= 0:
         _record(
             video_id=video_id or None,
@@ -437,8 +476,26 @@ def recover_upload_failure(
         "rate_limit",
         "youtube_processing_pending",
         "youtube_metadata_mismatch",
+        "upload_reconcile_pending",
     }:
-        delay = 20 if code == "rate_limit" else 10
+        if code == "rate_limit":
+            delay = 20
+        elif code == "upload_reconcile_pending":
+            delay = max(
+                2,
+                min(
+                    int(
+                        getattr(
+                            settings,
+                            "youtube_reconcile_grace_minutes",
+                            3,
+                        )
+                    ),
+                    10,
+                ),
+            )
+        else:
+            delay = 10
         retry_at = now + timedelta(minutes=delay)
         set_queue_recovery(
             queue_id,
@@ -528,7 +585,21 @@ def recover_upload_failure(
             scheduled_for=retry_at.isoformat(timespec="minutes"),
         )
     elif code == "publish_guard":
-        result["handled"] = True
+        retry_at = now + timedelta(minutes=30)
+        set_queue_recovery(
+            queue_id,
+            scheduled_for=retry_at.isoformat(timespec="minutes"),
+            error=f"[ACTION-REQUIRED:publish_guard] {message}",
+            increment_attempt=False,
+        )
+        set_channel_state(
+            f"publish_guard_attention_{video_id}",
+            message[:1000],
+        )
+        result.update(
+            handled=True,
+            scheduled_for=retry_at.isoformat(timespec="minutes"),
+        )
 
     _record(
         video_id=video_id or None,
