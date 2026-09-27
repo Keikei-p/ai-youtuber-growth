@@ -228,7 +228,15 @@ class VisualEvolutionTests(unittest.TestCase):
             "issues": [],
             "metrics": {},
         }
+        legacy_settings = SimpleNamespace(
+            media_fast_mode=False,
+        )
         with (
+            patch.object(
+                production_pipeline,
+                "settings",
+                legacy_settings,
+            ),
             patch.object(
                 production_pipeline,
                 "mirai_identity_video_enabled",
@@ -270,6 +278,55 @@ class VisualEvolutionTests(unittest.TestCase):
         self.assertTrue(item["ai_video_identity_locked"])
         motion_gen.assert_called_once()
         animatediff.assert_not_called()
+
+
+    def test_fast_mode_uses_renderer_motion_without_intermediate_mp4(self) -> None:
+        source = Path(self.tmp.name) / "mirai-fast.png"
+        source.write_bytes(b"image")
+        item = {
+            "id": 102,
+            "character_image_path": str(source),
+            "title": "fast identity",
+            "idea": {"idea": "test", "angle": "test"},
+        }
+        fake_settings = SimpleNamespace(
+            media_fast_mode=True,
+        )
+        with (
+            patch.object(
+                production_pipeline,
+                "settings",
+                fake_settings,
+            ),
+            patch.object(
+                production_pipeline,
+                "mirai_identity_video_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                production_pipeline,
+                "ai_video_enabled",
+                return_value=False,
+            ),
+            patch.object(
+                production_pipeline,
+                "generate_motion_clip",
+            ) as motion_gen,
+            patch.object(
+                production_pipeline,
+                "generate_animatediff_clip",
+            ) as ai_gen,
+        ):
+            result = production_pipeline._generate_ai_video_asset(item)
+
+        self.assertIsNone(result)
+        self.assertTrue(item["renderer_identity_motion"])
+        self.assertEqual(
+            item["ai_video_backend"],
+            "renderer-identity-motion",
+        )
+        motion_gen.assert_not_called()
+        ai_gen.assert_not_called()
 
     def test_highres_refine_keeps_original_when_score_drops(self) -> None:
         original = Image.effect_noise((512, 768), 70).convert("RGB")
