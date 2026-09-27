@@ -7,6 +7,7 @@ import wave
 from config import settings
 from gpu_manager import release_torch_cuda_cache, unload_ollama_model
 from runtime_control import (
+    ai_video_backend_name,
     ai_video_enabled,
     ai_video_license_confirmed,
     guest_image_auto_enabled,
@@ -199,13 +200,126 @@ def _ai_video_prompt(item: dict) -> str:
 
 
 def _generate_ai_video_asset(item: dict) -> str | None:
+    backend = ai_video_backend_name()
     identity_source = str(
         item.get("character_image_path") or ""
     ).strip()
+    identity_ready = bool(
+        identity_source
+        and Path(identity_source).is_file()
+    )
+
+    # Google Veoは本番品質providerとして最優先。
+    # ミライ固定画像を開始フレームへ渡し、失敗時だけ既存の
+    # ローカル軽量モーションへ安全にフォールバックする。
+    if (
+        backend == "google"
+        and ai_video_enabled()
+        and not item.get("skip_google_video")
+    ):
+        if not ai_video_license_confirmed():
+            print(
+                "[LEGAL][GOOGLE-VIDEO] Google Veo利用条件の確認が"
+                "未完了のため、有料API生成をスキップします。"
+            )
+        elif get_channel_state(
+            "runtime_resource_mode",
+            "",
+        ).strip() == "urgent":
+            print(
+                "[PIPELINE][GOOGLE-VIDEO] 投稿が近いためVeo待機を省略し、"
+                "軽量モーションへ切り替えます。"
+            )
+        else:
+            try:
+                prompt = _ai_video_prompt(item)
+                print(
+                    f"[PIPELINE][GOOGLE-VIDEO] #{item['id']} "
+                    f"{settings.google_video_model} で縦動画素材を生成"
+                )
+                path = generate_animatediff_clip(
+                    prompt,
+                    image_path=(
+                        identity_source
+                        if identity_ready
+                        else None
+                    ),
+                )
+                report = MiraiVisualQualityEngine().inspect_video_asset(
+                    path,
+                    asset_type="ai_video",
+                )
+                item["ai_video_visual"] = report
+                threshold = visual_video_min_score()
+                accepted = (
+                    bool(report.get("passed"))
+                    and int(report.get("score") or 0) >= threshold
+                )
+                VisualLearningMemory().record_result(
+                    asset_type="ai_video",
+                    path=path,
+                    prompt=prompt,
+                    backend=str(settings.google_video_model),
+                    profile="google-veo",
+                    score=int(report.get("score") or 0),
+                    passed=bool(report.get("passed")),
+                    accepted=accepted,
+                    metrics=report.get("metrics") or {},
+                    meta={
+                        "video_id": item.get("id"),
+                        "provider": "google",
+                        "identity_source": (
+                            identity_source if identity_ready else None
+                        ),
+                        "aspect_ratio": settings.google_video_aspect_ratio,
+                        "duration_seconds": settings.google_video_duration_seconds,
+                        "resolution": settings.google_video_resolution,
+                    },
+                )
+                if accepted:
+                    item["ai_video_path"] = path
+                    item["ai_video_backend"] = "google"
+                    item["google_video_used"] = True
+                    item["ai_video_identity_locked"] = identity_ready
+                    return path
+
+                record_failure(
+                    "google_video.visual_quality",
+                    (
+                        "Google Veo素材が品質基準未満: "
+                        f"{report.get('score')}/100"
+                    ),
+                    {
+                        "video_id": item.get("id"),
+                        "quality": report,
+                    },
+                )
+                print(
+                    "[PIPELINE][GOOGLE-VIDEO] 品質基準未満のため"
+                    "自作軽量モーションへフォールバックします。"
+                )
+            except Exception as exc:
+                item["visual_warning"] = (
+                    str(item.get("visual_warning") or "")
+                    + f" Google Veo生成失敗: {exc}"
+                ).strip()
+                record_failure(
+                    "google_video.generate",
+                    exc,
+                    {
+                        "video_id": item.get("id"),
+                        "title": item.get("title"),
+                        "model": settings.google_video_model,
+                    },
+                )
+                print(
+                    "[PIPELINE][GOOGLE-VIDEO] 生成失敗。"
+                    f"自作軽量モーションへ継続: {exc}"
+                )
+
     if (
         mirai_identity_video_enabled()
-        and identity_source
-        and Path(identity_source).is_file()
+        and identity_ready
     ):
         try:
             print(
@@ -241,10 +355,14 @@ def _generate_ai_video_asset(item: dict) -> str | None:
                     "video_id": item.get("id"),
                     "source": identity_source,
                     "identity_locked": True,
+                    "fallback_from": (
+                        "google" if backend == "google" else None
+                    ),
                 },
             )
             if accepted:
                 item["ai_video_path"] = path
+                item["ai_video_backend"] = "ffmpeg-identity-motion"
                 item["ai_video_identity_locked"] = True
                 return path
             print(
@@ -269,8 +387,13 @@ def _generate_ai_video_asset(item: dict) -> str | None:
 
     if not ai_video_enabled():
         return None
+
+    if backend == "google":
+        # Google失敗後にidentity素材もない場合、静止画編集へ戻す。
+        return None
+
     if (
-        str(settings.ai_video_backend or "").strip().lower() != "native"
+        backend != "native"
         and not ai_video_license_confirmed()
     ):
         print(
@@ -293,30 +416,46 @@ def _generate_ai_video_asset(item: dict) -> str | None:
         )
         item["ai_video_visual"] = report
         threshold = visual_video_min_score()
-        accepted = bool(report.get("passed")) and int(report.get("score") or 0) >= threshold
-        ai_backend = str(settings.ai_video_backend or "").strip().lower()
+        accepted = (
+            bool(report.get("passed"))
+            and int(report.get("score") or 0) >= threshold
+        )
         learned_backend = (
             "mirai-native-video-v0"
-            if ai_backend == "native"
-            else ai_backend
+            if backend == "native"
+            else backend
         )
         VisualLearningMemory().record_result(
-            asset_type="ai_video", path=path, prompt=prompt,
-            backend=learned_backend, profile=learned_backend,
+            asset_type="ai_video",
+            path=path,
+            prompt=prompt,
+            backend=learned_backend,
+            profile=learned_backend,
             score=int(report.get("score") or 0),
-            passed=bool(report.get("passed")), accepted=accepted,
+            passed=bool(report.get("passed")),
+            accepted=accepted,
             metrics=report.get("metrics") or {},
             meta={"video_id": item.get("id")},
         )
         if not accepted:
             record_failure(
                 "ai_video.visual_quality",
-                f"AI動画素材のVisual Quality {report.get('score')}/100で不採用",
-                {"video_id": item.get("id"), "quality": report},
+                (
+                    "AI動画素材のVisual Quality "
+                    f"{report.get('score')}/100で不採用"
+                ),
+                {
+                    "video_id": item.get("id"),
+                    "quality": report,
+                },
             )
-            print("[PIPELINE][AI-VIDEO] 品質基準未満のため画像ベースへフォールバックします。")
+            print(
+                "[PIPELINE][AI-VIDEO] 品質基準未満のため"
+                "画像ベースへフォールバックします。"
+            )
             return None
         item["ai_video_path"] = path
+        item["ai_video_backend"] = learned_backend
         return path
     except Exception as exc:
         item["visual_warning"] = (
@@ -326,11 +465,15 @@ def _generate_ai_video_asset(item: dict) -> str | None:
         record_failure(
             "pipeline.ai_video",
             exc,
-            {"video_id": item.get("id"), "title": item.get("title")},
+            {
+                "video_id": item.get("id"),
+                "title": item.get("title"),
+            },
         )
-        print(f"[PIPELINE][AI-VIDEO] 失敗しても本編は継続: {exc}")
+        print(
+            f"[PIPELINE][AI-VIDEO] 失敗しても本編は継続: {exc}"
+        )
         return None
-
 
 def _ensure_guest_visual(item: dict) -> str | None:
     guest = item.get("guest") or {}
@@ -447,12 +590,35 @@ def prepare_visuals(results: list[dict]) -> None:
     unload_ollama_model()
     release_torch_cuda_cache()
 
+    google_generated = 0
+    google_limit = max(
+        0,
+        min(int(settings.google_video_max_per_batch), 10),
+    )
+    google_backend = (
+        ai_video_backend_name() == "google"
+    )
+
     for index, item in enumerate(results, start=1):
         print(f"[PIPELINE][IMAGE] {index}/{len(results)} #{item['id']}")
         _ensure_mirai_visual(item)
         _ensure_guest_visual(item)
         _generate_backgrounds(item)
+
+        if (
+            google_backend
+            and google_generated >= google_limit
+        ):
+            item["skip_google_video"] = True
+            print(
+                f"[COST-GUARD][GOOGLE-VIDEO] batch上限 "
+                f"{google_limit}本に到達。#{item['id']} は"
+                "自作フォールバックを使います。"
+            )
+
         _generate_ai_video_asset(item)
+        if item.get("google_video_used"):
+            google_generated += 1
         _save_video_visual_profile(item)
 
     release_torch_cuda_cache()

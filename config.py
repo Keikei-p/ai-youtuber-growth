@@ -131,7 +131,7 @@ class Settings:
     ai_video_enabled: bool = (
         os.getenv("AI_VIDEO_ENABLED", "false").lower() == "true"
     )
-    ai_video_backend: str = os.getenv("AI_VIDEO_BACKEND", "animatediff")
+    ai_video_backend: str = os.getenv("AI_VIDEO_BACKEND", "google")
     ai_video_license_confirmed: bool = (
         os.getenv("AI_VIDEO_LICENSE_CONFIRMED", "false").lower() == "true"
     )
@@ -139,6 +139,37 @@ class Settings:
     ai_video_steps: int = int(os.getenv("AI_VIDEO_STEPS", "12"))
     ai_video_width: int = int(os.getenv("AI_VIDEO_WIDTH", "384"))
     ai_video_height: int = int(os.getenv("AI_VIDEO_HEIGHT", "576"))
+
+    # Google Veo 3.1。本番品質のAI動画素材provider。
+    # APIキーは.envのみ。Gitへ保存しない。
+    google_ai_api_key: str = os.getenv(
+        "GEMINI_API_KEY",
+        os.getenv("GOOGLE_API_KEY", ""),
+    )
+    google_video_model: str = os.getenv(
+        "GOOGLE_VIDEO_MODEL",
+        "veo-3.1-fast-generate-preview",
+    )
+    google_video_duration_seconds: int = int(
+        os.getenv("GOOGLE_VIDEO_DURATION_SECONDS", "4")
+    )
+    google_video_resolution: str = os.getenv(
+        "GOOGLE_VIDEO_RESOLUTION",
+        "720p",
+    )
+    google_video_aspect_ratio: str = os.getenv(
+        "GOOGLE_VIDEO_ASPECT_RATIO",
+        "9:16",
+    )
+    google_video_timeout_seconds: int = int(
+        os.getenv("GOOGLE_VIDEO_TIMEOUT_SECONDS", "480")
+    )
+    google_video_poll_seconds: int = int(
+        os.getenv("GOOGLE_VIDEO_POLL_SECONDS", "10")
+    )
+    google_video_max_per_batch: int = int(
+        os.getenv("GOOGLE_VIDEO_MAX_PER_BATCH", "3")
+    )
 
     # 省負荷自動運転。手動実行時はユーザー操作を優先。
     resource_min_idle_seconds: int = int(

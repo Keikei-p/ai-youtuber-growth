@@ -20,22 +20,38 @@ from gpu_manager import (
     release_torch_cuda_cache,
 )
 from self_improvement import record_failure
+from runtime_control import ai_video_backend_name
 from studio.asset_store import GENERATED_ROOT, ensure_dirs, record_asset
+from studio.google_video_generator import (
+    generate_google_veo_clip,
+    google_video_status,
+)
 from studio.models import NEGATIVE_PROMPT
 
 
 def ai_video_status() -> dict:
-    backend = str(settings.ai_video_backend or "animatediff").strip().lower()
+    backend = ai_video_backend_name()
+    native = native_video_status()
+
+    if backend == "google":
+        google = google_video_status()
+        return {
+            **google,
+            "enabled": bool(settings.ai_video_enabled),
+            "native_status": native,
+            "cuda": False,
+            "fallback": "ffmpeg-identity-motion",
+        }
+
     available = False
     cuda = False
     reason = ""
-    native = native_video_status()
     if backend == "native":
         available = bool(native.get("ready"))
         cuda = bool(native.get("cuda_available"))
         if not available:
             reason = "Mirai Native Video v0の学習済み重みがありません"
-    else:
+    elif backend == "animatediff":
         try:
             import torch
             from diffusers import AnimateDiffPipeline, MotionAdapter  # noqa: F401
@@ -46,6 +62,8 @@ def ai_video_status() -> dict:
                 reason = "CUDA未検出"
         except Exception as exc:
             reason = str(exc)
+    else:
+        reason = f"未対応backend: {backend}"
 
     return {
         "available": available,
@@ -61,7 +79,6 @@ def ai_video_status() -> dict:
         ],
         "reason": reason,
     }
-
 
 def _output_path(prefix: str = "ai_video") -> Path:
     ensure_dirs()
@@ -223,12 +240,20 @@ def generate_animatediff_clip(
     prompt: str,
     *,
     negative_prompt: str | None = None,
+    image_path: str | Path | None = None,
+    reference_images: list[str | Path] | None = None,
 ) -> str:
     """
     短いAI動画素材を1本だけ生成。
     GTX 1070向けに低解像度・少フレーム・CPUオフロードを前提にする。
     """
-    backend = str(settings.ai_video_backend or "animatediff").strip().lower()
+    backend = ai_video_backend_name()
+    if backend == "google":
+        return generate_google_veo_clip(
+            prompt,
+            image_path=image_path,
+            reference_images=reference_images,
+        )
     if backend == "native":
         return _generate_native_clip(prompt)
     if backend != "animatediff":

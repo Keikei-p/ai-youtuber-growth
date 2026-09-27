@@ -36,6 +36,7 @@ from maintenance import compact_runtime_storage, rotate_log, storage_snapshot
 from quick_test import run_quick_diagnostics
 from paths import VIDEO_DIR
 from runtime_control import (
+    ai_video_backend_name,
     ai_video_enabled,
     ai_video_license_confirmed,
     apply_daily_auto_preset,
@@ -48,6 +49,7 @@ from runtime_control import (
     guest_new_every,
     post_times,
     posts_per_day,
+    set_ai_video_backend_name,
     set_ai_video_enabled,
     set_ai_video_license_confirmed,
     set_auto_upload_enabled,
@@ -1246,6 +1248,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         <button id="studioInstallBtn" onclick="runAction('studio_install')">AIスタジオをPCへ導入</button>
       </div>
       <div class="row"><span>ゲスト画像を自動生成</span><button id="guestImageAutoBtn" onclick="toggleGuestImageAuto()"></button></div>
+      <div class="row"><span>AI動画provider</span>
+        <select id="aiVideoBackend" onchange="saveAiVideoBackend()">
+          <option value="google">Google Veo 3.1</option>
+          <option value="animatediff">AnimateDiff（ローカル）</option>
+          <option value="native">Mirai Native Video（自作）</option>
+        </select>
+      </div>
       <div class="row"><span>AI動画素材を自動生成</span><button id="aiVideoBtn" onclick="toggleAiVideo()"></button></div>
       <div class="row" id="aiVideoLicenseRow">
         <span>AI動画モデルの利用条件</span>
@@ -1258,11 +1267,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:#06101c;padding:14px;b
         AI動画をONにするには、使用モデルの利用条件を確認して「確認済み」にチェックしてください。
       </div>
       <div class="small" style="margin:6px 0">
-        移行用モデル:
-        <a href="https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2" target="_blank" rel="noopener">AnimateDiff Motion Adapter</a>
-        /
-        <a href="https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5" target="_blank" rel="noopener">Stable Diffusion v1.5</a>
-        <br>Native backend選択時は上記の学習済み重みを使用しません。
+        Google VeoはGemini Developer APIを使用します。APIキーはローカル.envのみで管理し、Gitへ保存しません。
+        <br>Google失敗時はミライ固定画像の自作軽量モーションへ自動フォールバックします。
       </div>
       <div id="aiVideoStatus" class="small" style="margin:8px 0 12px"></div>
       <div class="actions" style="margin-top:12px">
@@ -1501,6 +1507,9 @@ async function refresh(){
     guestImageAutoBtn.className=state.guest_image_auto_enabled?'primary':'';
     aiVideoBtn.textContent=state.ai_video_enabled?'ON':'OFF';
     aiVideoBtn.className=state.ai_video_enabled?'primary':'';
+    if(document.activeElement!==aiVideoBackend){
+      aiVideoBackend.value=(state.ai_video||{}).backend||'google';
+    }
     const nativeVideoBackend=(state.ai_video||{}).backend==='native';
     aiVideoLicenseRow.style.display=nativeVideoBackend?'none':'flex';
     aiVideoHint.style.display=nativeVideoBackend?'none':'block';
@@ -1509,11 +1518,28 @@ async function refresh(){
     }
     aiVideoLicenseRow.style.outline=(!nativeVideoBackend&&!state.ai_video_enabled&&!state.ai_video_license_confirmed)?'1px solid #8b6b30':'none';
     aiVideoHint.textContent=state.ai_video_enabled
-      ? 'AI動画の自動生成はONです。'
+      ? ((state.ai_video||{}).backend==='google'
+        ? 'Google Veoの自動生成はONです。生成失敗時は自作モーションへ自動フォールバックします。'
+        : 'AI動画の自動生成はONです。')
       : (state.ai_video_license_confirmed
-        ? '利用条件確認済みです。AI動画ボタンでON/OFFできます。'
+        ? (((state.ai_video||{}).backend==='google' && !(state.ai_video||{}).available)
+          ? '利用条件は確認済みですが、GEMINI_API_KEY / GOOGLE_API_KEY が未設定です。'
+          : '利用条件確認済みです。AI動画ボタンでON/OFFできます。')
         : 'AI動画をONにするには、使用モデルの利用条件を確認して「確認済み」にチェックしてください。');
-    aiVideoStatus.textContent='AI動画: '+(state.ai_video.available?'利用可能':'未準備')+' / '+escapeHtml(state.ai_video.backend||'')+' / '+state.ai_video.frames+' frames / '+state.ai_video.steps+' steps / '+state.ai_video.size.join('x')+(state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF')+(state.ai_video_license_confirmed?' / 利用条件確認済み':' / 利用条件未確認');
+    const av=state.ai_video||{};
+    if(av.backend==='google'){
+      aiVideoStatus.textContent='AI動画: '+(av.available?'Google APIキー設定済み':'Google API未準備')+
+        ' / '+escapeHtml(av.model||'Veo')+
+        ' / '+escapeHtml(av.aspect_ratio||'9:16')+
+        ' / '+Number(av.duration_seconds||4)+'秒'+
+        ' / '+escapeHtml(av.resolution||'720p')+
+        ' / 有料API'+
+        (state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF')+
+        (state.ai_video_license_confirmed?' / 利用条件確認済み':' / 利用条件未確認')+
+        (av.reason?' / '+escapeHtml(av.reason):'');
+    }else{
+      aiVideoStatus.textContent='AI動画: '+(av.available?'利用可能':'未準備')+' / '+escapeHtml(av.backend||'')+' / '+Number(av.frames||0)+' frames / '+Number(av.steps||0)+' steps / '+((av.size||[]).join('x'))+(state.ai_video_enabled?' / 自動生成ON':' / 自動生成OFF')+(state.ai_video_license_confirmed?' / 利用条件確認済み':' / 利用条件未確認');
+    }
     const backend=state.studio.selected||'未接続';
     const gpu=state.studio.gpu_name||state.gpu.name||'CPU';
     const cuda=state.studio.cuda_available?('CUDA '+(state.studio.cuda_version||'')):'CUDA未検出';
@@ -1671,6 +1697,17 @@ async function toggleGuestImageAuto(){
   await api('/api/settings',{guest_image_auto_enabled:!state.guest_image_auto_enabled});
   refresh();
 }
+async function saveAiVideoBackend(){
+  const backend=String(aiVideoBackend.value||'google');
+  try{
+    const data=await api('/api/settings',{ai_video_backend:backend});
+    await refresh();
+    alert(data.message);
+  }catch(e){
+    alert(e.message);
+    await refresh();
+  }
+}
 async function toggleAiVideoLicense(){
   const next=Boolean(aiVideoLicenseConfirmed.checked);
   if(next){
@@ -1700,7 +1737,13 @@ async function toggleAiVideoLicense(){
   }
 }
 async function toggleAiVideo(){
-  const nativeVideo=(state.ai_video||{}).backend==='native';
+  const videoState=state.ai_video||{};
+  const nativeVideo=videoState.backend==='native';
+  const googleVideo=videoState.backend==='google';
+  if(googleVideo && !state.ai_video_enabled && !videoState.available){
+    alert('Google VeoをONにするには、ローカル.envへ GEMINI_API_KEY または GOOGLE_API_KEY を設定してください。APIキーはGitへ保存しません。');
+    return;
+  }
   if(!nativeVideo && !state.ai_video_enabled && !state.ai_video_license_confirmed){
     aiVideoLicenseRow.scrollIntoView({behavior:'smooth',block:'center'});
     aiVideoLicenseRow.style.outline='2px solid #d6a23d';
@@ -1711,7 +1754,12 @@ async function toggleAiVideo(){
     );
     return;
   }
-  if(!state.ai_video_enabled && !confirm('AI動画はGTX 1070では重い処理です。1本ずつ直列生成でONにしますか？')) return;
+  if(!state.ai_video_enabled){
+    const msg=googleVideo
+      ? 'Google Veoは有料APIです。Fast/720p/4秒を基本に、batch上限付きで自動生成します。失敗時は自作モーションへ戻します。ONにしますか？'
+      : 'AI動画はGTX 1070では重い処理です。1本ずつ直列生成でONにしますか？';
+    if(!confirm(msg)) return;
+  }
   try{
     await api('/api/settings',{ai_video_enabled:!state.ai_video_enabled});
     await refresh();
@@ -1747,7 +1795,15 @@ async function runStudioBackground(){
 async function runStudioAiVideo(){
   const prompt=aiVideoPrompt.value.trim();
   if(!prompt){alert('AI動画の内容を入力してください');return;}
-  if(!confirm('短いAI動画を1本だけ生成します。GTX 1070では時間がかかる場合があります。実行しますか？')) return;
+  const googleVideo=(state.ai_video||{}).backend==='google';
+  if(googleVideo && !(state.ai_video||{}).available){
+    alert('Google Veo APIキーが未設定です。GEMINI_API_KEY または GOOGLE_API_KEY を.envへ設定してください。');
+    return;
+  }
+  const msg=googleVideo
+    ? 'Google Veoで短い縦動画を1本生成します。有料APIです。実行しますか？'
+    : '短いAI動画を1本だけ生成します。GTX 1070では時間がかかる場合があります。実行しますか？';
+  if(!confirm(msg)) return;
   const data=await api('/api/action',{action:'studio_ai_video',prompt});
   alert(data.message);
   setTimeout(refresh,1200);
@@ -2108,18 +2164,22 @@ class Handler(BaseHTTPRequestHandler):
                     set_guest_image_auto_enabled(
                         bool(body["guest_image_auto_enabled"])
                     )
+                if "ai_video_backend" in body:
+                    selected_backend = str(body["ai_video_backend"])
+                    set_ai_video_backend_name(selected_backend)
+                    if (
+                        selected_backend.strip().lower() == "google"
+                        and ai_video_enabled()
+                        and not bool(ai_video_status().get("available"))
+                    ):
+                        set_ai_video_enabled(False)
                 if "ai_video_license_confirmed" in body:
                     set_ai_video_license_confirmed(
                         bool(body["ai_video_license_confirmed"])
                     )
                 if "ai_video_enabled" in body:
                     enabled = bool(body["ai_video_enabled"])
-                    native_backend = (
-                        str(settings.ai_video_backend or "")
-                        .strip()
-                        .lower()
-                        == "native"
-                    )
+                    native_backend = ai_video_backend_name() == "native"
                     if (
                         enabled
                         and not native_backend
@@ -2128,6 +2188,17 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError(
                             "AI動画モデルの利用条件が未確認です。"
                             " 管理画面で利用条件を確認後、「確認済み」をチェックしてください。"
+                        )
+                    google_backend = ai_video_backend_name() == "google"
+                    if (
+                        enabled
+                        and google_backend
+                        and not bool(ai_video_status().get("available"))
+                    ):
+                        raise ValueError(
+                            "Google Veo APIキーが未設定です。"
+                            " ローカル.envへ GEMINI_API_KEY または "
+                            "GOOGLE_API_KEY を設定してください。"
                         )
                     set_ai_video_enabled(enabled)
                 if "visual_candidate_count" in body:
@@ -2275,7 +2346,18 @@ class Handler(BaseHTTPRequestHandler):
                         self._json({"message": "AI動画プロンプトが必要です"}, 400)
                         return
                     label = "AI動画テスト生成"
-                    func = lambda: print(generate_animatediff_clip(prompt))
+                    reference = Path(settings.mirai_reference_image)
+                    func = lambda: print(
+                        generate_animatediff_clip(
+                            prompt,
+                            image_path=(
+                                str(reference)
+                                if reference.is_file()
+                                and ai_video_backend_name() == "google"
+                                else None
+                            ),
+                        )
+                    )
                 elif action == "studio_guest":
                     guest_id = int(body.get("guest_id") or 0)
                     row = next(
