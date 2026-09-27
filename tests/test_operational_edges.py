@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import storage
+from youtube import uploader
 from youtube.uploader import upload_video
 
 
@@ -57,7 +58,7 @@ class OperationalEdgeTests(unittest.TestCase):
             media_mock.assert_called_once_with(
                 str(video_path),
                 mimetype="video/mp4",
-                chunksize=-1,
+                chunksize=uploader._upload_chunk_size(),
                 resumable=True,
             )
             insert_kwargs = service.videos.return_value.insert.call_args.kwargs
