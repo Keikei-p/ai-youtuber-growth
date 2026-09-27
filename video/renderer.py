@@ -1,6 +1,7 @@
 from __future__ import annotations
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
@@ -11,6 +12,7 @@ from video.ffmpeg_encoder import run_video_encode
 WIDTH = 1080
 HEIGHT = 1920
 
+@lru_cache(maxsize=24)
 def _font(size: int):
     candidates = [
         Path(settings.font_path),
@@ -44,6 +46,7 @@ def _chunks(script: str, max_chars: int = 34) -> list[str]:
         out.append(buf)
     return out or [script[:max_chars]]
 
+@lru_cache(maxsize=8)
 def _gradient_background(seed: int) -> Image.Image:
     palettes = [
         ((16, 24, 45), (48, 38, 88)),
@@ -52,14 +55,20 @@ def _gradient_background(seed: int) -> Image.Image:
         ((22, 30, 42), (57, 67, 92)),
     ]
     top, bottom = palettes[seed % len(palettes)]
-    img = Image.new("RGB", (WIDTH, HEIGHT))
-    px = img.load()
-    for y in range(HEIGHT):
-        t = y / max(HEIGHT - 1, 1)
-        c = tuple(int(top[i] * (1 - t) + bottom[i] * t) for i in range(3))
-        for x in range(WIDTH):
-            px[x, y] = c
-    return img
+    # 1080x1920をPythonで200万pixel書くのをやめ、
+    # 1x1920の縦グラデーションをPillowで横へ拡張する。
+    column = Image.new("RGB", (1, HEIGHT))
+    column.putdata([
+        tuple(
+            int(
+                top[i] * (1 - (y / max(HEIGHT - 1, 1)))
+                + bottom[i] * (y / max(HEIGHT - 1, 1))
+            )
+            for i in range(3)
+        )
+        for y in range(HEIGHT)
+    ])
+    return column.resize((WIDTH, HEIGHT), Image.Resampling.NEAREST)
 
 def _cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
     target_w, target_h = size
@@ -71,6 +80,93 @@ def _cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
     left = (resized.width - target_w) // 2
     top = (resized.height - target_h) // 2
     return resized.crop((left, top, left + target_w, top + target_h))
+
+
+@lru_cache(maxsize=32)
+def _cached_background_asset(
+    path_raw: str,
+    mtime_ns: int,
+    blur_radius: float,
+    brightness: float,
+) -> Image.Image:
+    del mtime_ns  # cache keyとしてのみ使用
+    with Image.open(path_raw) as raw:
+        bg = _cover(raw.convert("RGB"), (WIDTH, HEIGHT))
+    bg = bg.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    return ImageEnhance.Brightness(bg).enhance(brightness)
+
+
+def _prepared_background(
+    path: Path,
+    *,
+    blur_radius: float,
+    brightness: float,
+) -> Image.Image:
+    try:
+        stamp = int(path.stat().st_mtime_ns)
+    except OSError:
+        stamp = 0
+    return _cached_background_asset(
+        str(path.resolve()),
+        stamp,
+        float(blur_radius),
+        float(brightness),
+    ).copy()
+
+
+@lru_cache(maxsize=24)
+def _cached_person_asset(
+    path_raw: str,
+    mtime_ns: int,
+    max_w: int,
+    max_h: int,
+) -> Image.Image:
+    del mtime_ns
+    with Image.open(path_raw) as raw:
+        raw.load()
+        image = raw.convert("RGBA")
+    ratio = min(
+        max_w / image.width,
+        max_h / image.height,
+        1.0,
+    )
+    if ratio < 1.0:
+        image = image.resize(
+            (
+                max(1, int(image.width * ratio)),
+                max(1, int(image.height * ratio)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+    return image
+
+
+def _prepared_person(
+    path: Path,
+    *,
+    max_w: int,
+    max_h: int,
+) -> Image.Image:
+    try:
+        stamp = int(path.stat().st_mtime_ns)
+    except OSError:
+        stamp = 0
+    return _cached_person_asset(
+        str(path.resolve()),
+        stamp,
+        int(max_w),
+        int(max_h),
+    )
+
+
+def _render_fps() -> int:
+    return max(
+        24,
+        min(
+            int(getattr(settings, "media_render_fps", 24)),
+            60,
+        ),
+    )
 
 def _backgrounds() -> list[Path]:
     folders = [
@@ -104,31 +200,31 @@ def _load_background(
     ]
     if candidates:
         explicit = candidates[index % len(candidates)]
-        with Image.open(explicit) as raw:
-            bg = _cover(raw.convert("RGB"), (WIDTH, HEIGHT))
-        bg = bg.filter(ImageFilter.GaussianBlur(radius=1.0))
-        return ImageEnhance.Brightness(bg).enhance(0.64)
+        return _prepared_background(
+            explicit,
+            blur_radius=1.0,
+            brightness=0.64,
+        )
 
     if background_image_path:
         explicit = Path(background_image_path)
         if explicit.exists():
-            with Image.open(explicit) as raw:
-                bg = _cover(raw.convert("RGB"), (WIDTH, HEIGHT))
-            bg = bg.filter(ImageFilter.GaussianBlur(radius=1.0))
-            return ImageEnhance.Brightness(bg).enhance(0.64)
+            return _prepared_background(
+                explicit,
+                blur_radius=1.0,
+                brightness=0.64,
+            )
 
     files = _backgrounds()
     if not files:
         return _gradient_background(index)
 
     path = files[index % len(files)]
-    with Image.open(path) as raw:
-        bg = _cover(raw.convert("RGB"), (WIDTH, HEIGHT))
-
-    # 字幕が読みやすいように少し暗く・ぼかす
-    bg = bg.filter(ImageFilter.GaussianBlur(radius=1.2))
-    bg = ImageEnhance.Brightness(bg).enhance(0.58)
-    return bg
+    return _prepared_background(
+        path,
+        blur_radius=1.2,
+        brightness=0.58,
+    )
 
 def _character_image_path() -> Path | None:
     configured = Path(settings.character_image)
@@ -160,22 +256,17 @@ def _paste_character(
         return
 
     try:
-        with Image.open(path) as raw:
-            raw.load()
-            char = raw.convert("RGBA")
+        char = _prepared_person(
+            path,
+            max_w=720,
+            max_h=1050,
+        )
     except (OSError, ValueError) as exc:
         print(
             "[RENDER] キャラクター画像を読み込めないため"
             f"スキップします: {path} / {exc}"
         )
         return
-
-    max_w, max_h = 720, 1050
-    ratio = min(max_w / char.width, max_h / char.height, 1.0)
-    char = char.resize(
-        (max(1, int(char.width * ratio)), max(1, int(char.height * ratio))),
-        Image.Resampling.LANCZOS,
-    )
 
     x = WIDTH - char.width - 25
     y = 500
@@ -189,14 +280,10 @@ def _paste_guest(canvas: Image.Image, guest_image_path: str | None) -> None:
     if not path.exists():
         return
 
-    with Image.open(path) as raw:
-        guest = raw.convert("RGBA")
-
-    max_w, max_h = 520, 900
-    ratio = min(max_w / guest.width, max_h / guest.height, 1.0)
-    guest = guest.resize(
-        (max(1, int(guest.width * ratio)), max(1, int(guest.height * ratio))),
-        Image.Resampling.LANCZOS,
+    guest = _prepared_person(
+        path,
+        max_w=520,
+        max_h=900,
     )
 
     x = 20
@@ -302,7 +389,13 @@ def _make_frame(
     )
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    base.convert("RGB").save(path, quality=94)
+    # 一時frameは可逆PNGのまま、圧縮CPUコストだけ最小化する。
+    base.convert("RGB").save(
+        path,
+        format="PNG",
+        compress_level=1,
+        optimize=False,
+    )
 
 def _audio_duration(audio_path: Path) -> float:
     if not shutil.which("ffprobe"):
@@ -331,7 +424,8 @@ def _render_motion_segment(
     AI動画より圧倒的に軽く、Shortsの静止画感を減らす。
     """
     duration = max(float(duration), 0.35)
-    frames = max(1, int(duration * 30))
+    fps = _render_fps()
+    frames = max(1, int(duration * fps))
 
     selected = motion or (
         "push_in" if index % 3 == 0
@@ -361,7 +455,7 @@ def _render_motion_segment(
 
     vf = (
         f"zoompan=z='{zoom}':x='{x}':y='{y}':"
-        f"d=1:s={WIDTH}x{HEIGHT}:fps=30,"
+        f"d=1:s={WIDTH}x{HEIGHT}:fps={fps},"
         "format=yuv420p"
     )
 
@@ -372,7 +466,7 @@ def _render_motion_segment(
             "-loop",
             "1",
             "-framerate",
-            "30",
+            str(fps),
             "-i",
             str(frame_path),
             "-vf",
@@ -404,9 +498,10 @@ def _render_ai_background_segment(
     字幕・キャラ・タイトルを残しつつ、AI動画の動きを見せる。
     """
     duration = max(float(duration), 0.35)
+    fps = _render_fps()
     filter_complex = (
         f"[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={WIDTH}:{HEIGHT},fps=30,format=yuv420p[bg];"
+        f"crop={WIDTH}:{HEIGHT},fps={fps},format=yuv420p[bg];"
         f"[1:v]scale={WIDTH}:{HEIGHT},format=rgba,"
         "colorchannelmixer=aa=0.64[fg];"
         "[bg][fg]overlay=0:0:shortest=1,format=yuv420p[outv]"
@@ -423,7 +518,7 @@ def _render_ai_background_segment(
             "-loop",
             "1",
             "-framerate",
-            "30",
+            str(fps),
             "-i",
             str(frame_path),
             "-filter_complex",
