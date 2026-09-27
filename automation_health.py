@@ -109,7 +109,7 @@ def windows_task_status(
         shutil.which("powershell.exe")
         or shutil.which("powershell")
     )
-    script = root / "automation" / "check_windows_task.ps1"
+    script = root / "automation" / "windows_task_status.ps1"
     if not powershell:
         return {
             "supported": True,
@@ -134,6 +134,7 @@ def windows_task_status(
                 "Bypass",
                 "-File",
                 str(script),
+                "-Json",
             ],
             cwd=root,
             capture_output=True,
