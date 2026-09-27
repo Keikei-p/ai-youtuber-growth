@@ -342,6 +342,7 @@ def _generate_ai_video_asset(item: dict) -> str | None:
     if (
         mirai_identity_video_enabled()
         and identity_ready
+        and backend != "google"
         and bool(getattr(settings, "media_fast_mode", True))
     ):
         # 本編renderer自身が同じ固定ミライ画像へカメラモーションを
