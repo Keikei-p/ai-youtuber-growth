@@ -259,6 +259,11 @@ class GoogleVeoVideoTests(unittest.TestCase):
             patch.object(video_generator, "settings", settings),
             patch.object(
                 video_generator,
+                "ai_video_backend_name",
+                return_value="google",
+            ),
+            patch.object(
+                video_generator,
                 "generate_google_veo_clip",
                 return_value="google.mp4",
             ) as google,
@@ -274,6 +279,32 @@ class GoogleVeoVideoTests(unittest.TestCase):
             reference_images=None,
         )
 
+    def test_runtime_backend_selector_accepts_google(self) -> None:
+        import runtime_control
+        import storage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_db = storage.DB_PATH
+            try:
+                storage.DB_PATH = Path(tmp) / "provider.db"
+                storage.init_db()
+                runtime_control.set_ai_video_backend_name("google")
+                self.assertEqual(
+                    runtime_control.ai_video_backend_name(),
+                    "google",
+                )
+                runtime_control.set_ai_video_backend_name("native")
+                self.assertEqual(
+                    runtime_control.ai_video_backend_name(),
+                    "native",
+                )
+                with self.assertRaises(ValueError):
+                    runtime_control.set_ai_video_backend_name(
+                        "unknown-provider"
+                    )
+            finally:
+                storage.DB_PATH = old_db
+
     def test_google_failure_falls_back_to_identity_motion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             identity = Path(tmp) / "mirai.png"
@@ -284,6 +315,11 @@ class GoogleVeoVideoTests(unittest.TestCase):
 
             with (
                 patch.object(production_pipeline, "settings", settings),
+                patch.object(
+                    production_pipeline,
+                    "ai_video_backend_name",
+                    return_value="google",
+                ),
                 patch.object(
                     production_pipeline,
                     "ai_video_enabled",
@@ -370,6 +406,11 @@ class GoogleVeoVideoTests(unittest.TestCase):
 
         with (
             patch.object(production_pipeline, "settings", settings),
+            patch.object(
+                production_pipeline,
+                "ai_video_backend_name",
+                return_value="google",
+            ),
             patch.object(
                 production_pipeline,
                 "unload_ollama_model",
