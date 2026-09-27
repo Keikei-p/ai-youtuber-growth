@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from config import settings
 from runtime_control import post_times
 from storage import (
     connect,
@@ -462,7 +463,7 @@ def recover_upload_failure(
                 min(
                     int(
                         getattr(
-                            __import__("config").settings,
+                            settings,
                             "youtube_reconcile_grace_minutes",
                             3,
                         )
