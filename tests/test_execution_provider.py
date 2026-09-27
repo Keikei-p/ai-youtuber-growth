@@ -490,6 +490,32 @@ class CloudWorkerAutonomyTests(unittest.TestCase):
         self.assertEqual(event["status"], "succeeded")
         self.assertEqual(event["repairs"], ["repaired"])
 
+    def test_cloud_due_poll_only_runs_due_upload_check(self) -> None:
+        with (
+            patch(
+                "delivery_supervisor.self_heal_delivery_controls",
+                return_value={"repairs": []},
+            ),
+            patch(
+                "runtime_control.runtime_cancel_requested",
+                return_value=False,
+            ),
+            patch(
+                "runtime_control.automation_enabled",
+                return_value=True,
+            ),
+            patch("scheduler.tick") as scheduler_tick,
+            patch("scheduler.run_due") as run_due,
+        ):
+            event = cloud_worker._run_autonomy_cycle(
+                full_cycle=False,
+            )
+
+        scheduler_tick.assert_not_called()
+        run_due.assert_called_once_with()
+        self.assertEqual(event["status"], "due_checked")
+        self.assertEqual(event["cycle"], "due")
+
     def test_cloud_cycle_respects_safety_stop(self) -> None:
         with (
             patch(
