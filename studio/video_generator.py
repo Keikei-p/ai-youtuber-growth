@@ -27,6 +27,7 @@ from studio.google_video_generator import (
     google_video_status,
 )
 from studio.models import NEGATIVE_PROMPT
+from video.ffmpeg_encoder import run_video_encode
 
 
 def ai_video_status() -> dict:
@@ -106,7 +107,7 @@ def _frames_to_mp4(
                 "PNG",
             )
 
-        subprocess.run(
+        run_video_encode(
             [
                 ffmpeg,
                 "-y",
@@ -114,17 +115,15 @@ def _frames_to_mp4(
                 str(max(1, fps)),
                 "-i",
                 str(tmp_dir / "frame_%03d.png"),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
+            ],
+            [
                 "-pix_fmt",
                 "yuv420p",
                 "-movflags",
                 "+faststart",
                 str(output_path),
             ],
-            check=True,
+            crf=20,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -159,7 +158,7 @@ def generate_motion_clip(
         f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
         f"d={frames}:s=720x1280:fps={fps}"
     )
-    subprocess.run(
+    run_video_encode(
         [
             ffmpeg,
             "-y",
@@ -172,15 +171,13 @@ def generate_motion_clip(
             "-t",
             f"{float(duration):.2f}",
             "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
+        ],
+        [
             "-pix_fmt",
             "yuv420p",
             str(output),
         ],
-        check=True,
+        crf=20,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
