@@ -213,14 +213,24 @@ def ai_video_backend_name() -> str:
         # CLIの単体処理などDB初期化前でもprovider確認は可能にする。
         value = ""
     if value in {"google", "animatediff", "native"}:
+        if (
+            value == "google"
+            and not bool(getattr(settings, "google_video_enabled", False))
+        ):
+            return "native"
         return value
 
     configured = str(
-        settings.ai_video_backend or "google"
+        settings.ai_video_backend or "native"
     ).strip().lower()
+    if (
+        configured == "google"
+        and not bool(getattr(settings, "google_video_enabled", False))
+    ):
+        return "native"
     if configured in {"google", "animatediff", "native"}:
         return configured
-    return "google"
+    return "native"
 
 
 def set_ai_video_backend_name(value: str) -> None:
