@@ -207,7 +207,7 @@ def _fallback_metadata(written: dict, idea: dict, guest: dict | None) -> dict:
         _clean_title(f"{idea.get('idea', title)}｜AIの成長記録"),
         _clean_title(f"AIが自分で改善したらどうなる？ {idea.get('idea', '')}"),
         _clean_title(f"{idea.get('idea', title)}、ミライが自分で検証"),
-        _clean_title(f"第{max(1, len(str(idea.get('idea', '')))) % 9 + 1}回 AI成長実験：{idea.get('idea', title)}"),
+        _clean_title(f"AI成長実験：{idea.get('idea', title)}"),
     ]
     selected, scored = _select_title(
         fallback_candidates,
