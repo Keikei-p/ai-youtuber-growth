@@ -66,6 +66,7 @@ from youtube.post_verifier import (
     verify_uploaded_video,
 )
 from youtube.thumbnail import set_custom_thumbnail
+from youtube.market_research import maybe_refresh_market_research
 from youtube.uploader import upload_video
 
 def _tz() -> ZoneInfo:
@@ -1501,6 +1502,17 @@ def _tick_unlocked() -> None:
         return
 
     # 第1話投稿後だけ通常の成長ループへ進む。
+    try:
+        market = maybe_refresh_market_research(min_hours=24)
+        if market.get("status") == "refreshed":
+            print(
+                "[MARKET] YouTube市場パターンを更新: "
+                f"sample={market.get('sample_size', 0)}"
+            )
+    except Exception as exc:
+        record_failure("market.research", exc)
+        print(f"[MARKET] 市場調査は次回へ延期: {exc}")
+
     run_growth_cycle()
     try:
         maybe_run_improvement_review(min_hours=12)
