@@ -58,6 +58,7 @@ from storage import (
     set_upload_receipt_thumbnail,
     update_queue_schedule,
     update_upload_receipt_verification,
+    uploaded_videos,
     video_by_id,
 )
 from voice.provider import voice_attribution_status, voice_provider_status
@@ -101,6 +102,84 @@ def _slot_datetimes(day) -> list[datetime]:
 
 def _parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+def _production_armed() -> bool:
+    return (
+        get_channel_state(
+            "production_autonomy_armed",
+            "false",
+        ).strip().lower()
+        == "true"
+    )
+
+
+def _uploads_today(now: datetime) -> int:
+    count = 0
+    for row in uploaded_videos(limit=100):
+        raw = str(row.get("uploaded_at") or "").strip()
+        if not raw:
+            continue
+        try:
+            uploaded = datetime.fromisoformat(raw)
+            if uploaded.tzinfo is None:
+                uploaded = uploaded.replace(tzinfo=_tz())
+            uploaded = uploaded.astimezone(_tz())
+        except Exception:
+            continue
+        if uploaded.date() == now.date():
+            count += 1
+    return count
+
+
+def _catchup_slot(now: datetime, queued: list[dict]) -> datetime | None:
+    """
+    本番arm中に今日の投稿時刻を過ぎたのに、投稿対象のqueue自体が
+    存在しない場合の救済枠。
+
+    既存queueがある場合はrun_due()へ任せ、余計な動画を増やさない。
+    今日すでに必要本数を投稿済みならcatch-upしない。
+    """
+    if not _production_armed():
+        return None
+    if runtime_cancel_requested():
+        return None
+    due_queued = [
+        item
+        for item in queued
+        if _parse_iso(str(item.get("scheduled_for") or "")) <= now
+    ]
+    if due_queued:
+        # 既存の期限到来queueを新規生成で追い越さない。
+        return None
+
+    passed_slots = [
+        slot
+        for slot in _slot_datetimes(now.date())
+        if slot <= now
+    ]
+    if not passed_slots:
+        return None
+
+    expected_by_now = min(
+        len(passed_slots),
+        max(1, posts_per_day()),
+    )
+    uploaded_today = _uploads_today(now)
+    if uploaded_today >= expected_by_now:
+        return None
+
+    latest = passed_slots[-1]
+    max_age = timedelta(
+        hours=max(
+            int(settings.post_sleep_catchup_hours),
+            1,
+        )
+    )
+    if now - latest > max_age:
+        return None
+
+    return now.replace(second=0, microsecond=0)
+
 
 def _next_free_slots(start: datetime, count: int, days: int = 14) -> list[datetime]:
     occupied = occupied_schedule_times()
@@ -544,10 +623,12 @@ def reschedule_missed() -> int:
             continue
         scheduled = _parse_iso(item["scheduled_for"])
         attempts = int(item.get("attempts") or 0)
-        # 未試行の単純な取りこぼしは従来どおり次枠へ。
-        # ただし一度でも投稿を試した動画は、スリープ復帰や一時的な
-        # ネット断から回復できるようcatch-up期間内はその場に残す。
-        if attempts <= 0 and scheduled < grace_cutoff:
+        # 本番完全自動運用中は、未試行でもcatch-up期間内なら
+        # 次枠へ逃がさない。起動後run_due()がその場で回収する。
+        if _production_armed():
+            if scheduled < retry_cutoff:
+                overdue.append(item)
+        elif attempts <= 0 and scheduled < grace_cutoff:
             overdue.append(item)
         elif attempts > 0 and scheduled < retry_cutoff:
             overdue.append(item)
@@ -737,7 +818,12 @@ def prepare_upcoming() -> None:
 
     # 初回は第1話だけ。投稿成功後に通常の日次本数へ戻す。
     target = 1 if first_episode_bootstrap else posts_per_day()
+    catchup = _catchup_slot(now, queued)
     missing = max(target - len(future_queued), 0)
+    if catchup is not None:
+        # 明日分など未来queueが目標数そろっていても、
+        # 今日の未投稿枠は別件として1本だけ即時回収する。
+        missing = max(missing, 1)
 
     if missing <= 0:
         print(
@@ -746,7 +832,35 @@ def prepare_upcoming() -> None:
         )
         return
 
-    free_slots = _next_free_slots(now, missing)
+    free_slots: list[datetime] = []
+    if catchup is not None:
+        free_slots.append(catchup)
+        set_channel_state(
+            "autopost_catchup_last",
+            json.dumps(
+                {
+                    "status": "scheduled_immediate",
+                    "scheduled_for": catchup.isoformat(
+                        timespec="minutes"
+                    ),
+                    "reason": (
+                        "今日の投稿時刻を過ぎた状態で"
+                        "投稿queueが空だったため即時回収"
+                    ),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        print(
+            "[AUTO-CATCHUP] 今日の未投稿枠を検出。"
+            "新規生成後すぐ投稿する救済枠を追加します。"
+        )
+
+    remaining = max(missing - len(free_slots), 0)
+    if remaining:
+        free_slots.extend(
+            _next_free_slots(now, remaining)
+        )
     if not free_slots:
         print("[SCHEDULE] 空いている投稿時刻を確保できませんでした。")
         return
@@ -1391,6 +1505,10 @@ def _upload_runtime_block_reason() -> str:
 
 def run_due() -> None:
     init_db()
+    set_channel_state(
+        "scheduler_last_run_due_at",
+        _now().isoformat(timespec="seconds"),
+    )
     delivery_state = self_heal_delivery_controls()
     if delivery_state.get("repairs"):
         print(
@@ -1865,6 +1983,10 @@ def _tick_unlocked() -> None:
 
 def tick() -> None:
     init_db()
+    set_channel_state(
+        "scheduler_last_tick_at",
+        _now().isoformat(timespec="seconds"),
+    )
     owner = f"pid={os.getpid()} / {_now().isoformat(timespec='seconds')}"
     if not acquire_runtime_lock(
         "scheduler_tick",

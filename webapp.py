@@ -812,7 +812,7 @@ def _platform_autonomy_repair(*, force: bool = False) -> list[str]:
             and task.get("enabled", True)
         )
         if not task_ok:
-            repairs.append(_install_wake_task(60))
+            repairs.append(_install_wake_task(15))
     except Exception as exc:
         _append_log(
             "[AUTOPILOT] Wakeタスクの自己修復失敗: "
@@ -844,7 +844,7 @@ def _start_full_autopilot() -> dict:
                 "PC自動起動の登録は要確認: " + str(exc)
             )
         try:
-            notes.append(_install_wake_task(60))
+            notes.append(_install_wake_task(15))
         except Exception as exc:
             notes.append(
                 "スリープ復帰タスクは要確認: " + str(exc)
@@ -1891,6 +1891,11 @@ async function refresh(){
       +(postEvent.video_id?' / #'+Number(postEvent.video_id):'')
       +(postEvent.code?' / '+escapeHtml(postEvent.code):'')
       +(postEvent.detail?' / '+escapeHtml(postEvent.detail):'')
+      +'<br><b>最終投稿チェック</b>: '+escapeHtml(aph.scheduler_last_run_due_at||'未実行')
+      +' / <b>最終フルサイクル</b>: '+escapeHtml(aph.scheduler_last_tick_at||'未実行')
+      +((aph.catchup_last||{}).scheduled_for
+        ? ('<br><b>直近catch-up</b>: '+escapeHtml((aph.catchup_last||{}).scheduled_for)+' / '+escapeHtml((aph.catchup_last||{}).reason||''))
+        : '')
       +'<br><b>次のキュー</b>: '+(next.video_id?('#'+Number(next.video_id)+' / '+escapeHtml(next.scheduled_for||'')+' / '+escapeHtml(next.title||'')):'なし');
     automationLogs.textContent=aph.automation_log_tail||'まだスリープ復帰ログはありません。';
     const remoteOn=state.remote_access_status==='enabled';
@@ -2612,7 +2617,7 @@ class Handler(BaseHTTPRequestHandler):
                 wake_note = ""
                 if os.name == "nt":
                     try:
-                        _install_wake_task(60)
+                        _install_wake_task(15)
                         wake_note = " / Windows起床タスクも同期済み"
                     except Exception as exc:
                         wake_note = " / 起床タスク同期は要確認"
@@ -2748,7 +2753,7 @@ class Handler(BaseHTTPRequestHandler):
                     and auto_upload_enabled()
                 ):
                     try:
-                        _install_wake_task(60)
+                        _install_wake_task(15)
                         wake_note = " Windows起床タスクも最新時刻へ同期しました。"
                     except Exception as exc:
                         wake_note = (
@@ -2984,7 +2989,7 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                     "wake_task_on": (
                         "スリープ復帰自動運転登録",
-                        lambda: print(_install_wake_task(60)),
+                        lambda: print(_install_wake_task(15)),
                     ),
                     "wake_task_check": (
                         "自動投稿・スリープ診断",
