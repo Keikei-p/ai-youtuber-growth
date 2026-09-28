@@ -143,7 +143,13 @@ def _catchup_slot(now: datetime, queued: list[dict]) -> datetime | None:
         return None
     if runtime_cancel_requested():
         return None
-    if queued:
+    due_queued = [
+        item
+        for item in queued
+        if _parse_iso(str(item.get("scheduled_for") or "")) <= now
+    ]
+    if due_queued:
+        # 既存の期限到来queueを新規生成で追い越さない。
         return None
 
     passed_slots = [
@@ -812,7 +818,12 @@ def prepare_upcoming() -> None:
 
     # 初回は第1話だけ。投稿成功後に通常の日次本数へ戻す。
     target = 1 if first_episode_bootstrap else posts_per_day()
+    catchup = _catchup_slot(now, queued)
     missing = max(target - len(future_queued), 0)
+    if catchup is not None:
+        # 明日分など未来queueが目標数そろっていても、
+        # 今日の未投稿枠は別件として1本だけ即時回収する。
+        missing = max(missing, 1)
 
     if missing <= 0:
         print(
@@ -821,7 +832,6 @@ def prepare_upcoming() -> None:
         )
         return
 
-    catchup = _catchup_slot(now, queued)
     free_slots: list[datetime] = []
     if catchup is not None:
         free_slots.append(catchup)
