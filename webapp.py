@@ -1891,6 +1891,11 @@ async function refresh(){
       +(postEvent.video_id?' / #'+Number(postEvent.video_id):'')
       +(postEvent.code?' / '+escapeHtml(postEvent.code):'')
       +(postEvent.detail?' / '+escapeHtml(postEvent.detail):'')
+      +'<br><b>最終投稿チェック</b>: '+escapeHtml(aph.scheduler_last_run_due_at||'未実行')
+      +' / <b>最終フルサイクル</b>: '+escapeHtml(aph.scheduler_last_tick_at||'未実行')
+      +((aph.catchup_last||{}).scheduled_for
+        ? ('<br><b>直近catch-up</b>: '+escapeHtml((aph.catchup_last||{}).scheduled_for)+' / '+escapeHtml((aph.catchup_last||{}).reason||''))
+        : '')
       +'<br><b>次のキュー</b>: '+(next.video_id?('#'+Number(next.video_id)+' / '+escapeHtml(next.scheduled_for||'')+' / '+escapeHtml(next.title||'')):'なし');
     automationLogs.textContent=aph.automation_log_tail||'まだスリープ復帰ログはありません。';
     const remoteOn=state.remote_access_status==='enabled';
