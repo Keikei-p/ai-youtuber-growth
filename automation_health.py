@@ -304,15 +304,7 @@ def collect_auto_post_health(
 
     if production_armed:
         heartbeat_raw = scheduler_last_due or scheduler_last_tick
-        if not heartbeat_raw:
-            warnings.append({
-                "code": "scheduler_heartbeat_missing",
-                "detail": (
-                    "完全自動運用はONですが、"
-                    "スケジューラ実行履歴がまだありません。"
-                ),
-            })
-        else:
+        if heartbeat_raw:
             try:
                 heartbeat = datetime.fromisoformat(heartbeat_raw)
                 now = datetime.now().astimezone()
