@@ -100,7 +100,7 @@ class Settings:
     post_times: str = os.getenv("POST_TIMES", "09:00,15:00,21:00")
     post_grace_minutes: int = int(os.getenv("POST_GRACE_MINUTES", "20"))
     post_sleep_catchup_hours: int = int(
-        os.getenv("POST_SLEEP_CATCHUP_HOURS", "6")
+        os.getenv("POST_SLEEP_CATCHUP_HOURS", "24")
     )
     auto_upload_enabled: bool = os.getenv("AUTO_UPLOAD_ENABLED", "false").lower() == "true"
     auto_upload_privacy: str = os.getenv("AUTO_UPLOAD_PRIVACY", "private")
