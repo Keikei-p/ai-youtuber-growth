@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -232,6 +233,24 @@ def collect_auto_post_health(
         ).strip().lower()
         == "true"
     )
+    scheduler_last_due = get_channel_state(
+        "scheduler_last_run_due_at",
+        "",
+    ).strip()
+    scheduler_last_tick = get_channel_state(
+        "scheduler_last_tick_at",
+        "",
+    ).strip()
+    catchup_raw = get_channel_state(
+        "autopost_catchup_last",
+        "",
+    ).strip()
+    try:
+        catchup_last = json.loads(catchup_raw) if catchup_raw else {}
+        if not isinstance(catchup_last, dict):
+            catchup_last = {}
+    except Exception:
+        catchup_last = {}
 
     problems: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
@@ -281,6 +300,39 @@ def collect_auto_post_health(
                         "powercfgで有効なスリープ解除タイマーを"
                         "確認できません。PC/BIOS側設定の影響もあります。"
                     ),
+                })
+
+    if production_armed:
+        heartbeat_raw = scheduler_last_due or scheduler_last_tick
+        if not heartbeat_raw:
+            warnings.append({
+                "code": "scheduler_heartbeat_missing",
+                "detail": (
+                    "完全自動運用はONですが、"
+                    "スケジューラ実行履歴がまだありません。"
+                ),
+            })
+        else:
+            try:
+                heartbeat = datetime.fromisoformat(heartbeat_raw)
+                now = datetime.now().astimezone()
+                if heartbeat.tzinfo is None:
+                    heartbeat = heartbeat.replace(tzinfo=now.tzinfo)
+                age_minutes = (
+                    now - heartbeat.astimezone(now.tzinfo)
+                ).total_seconds() / 60
+                if age_minutes > 45:
+                    problems.append({
+                        "code": "scheduler_heartbeat_stale",
+                        "detail": (
+                            f"自動投稿スケジューラが約{int(age_minutes)}分"
+                            "動いていません。PC停止/Wakeタスク停止の可能性があります。"
+                        ),
+                    })
+            except Exception:
+                warnings.append({
+                    "code": "scheduler_heartbeat_invalid",
+                    "detail": "自動投稿スケジューラの時刻記録を解析できません。",
                 })
 
     cycle_status = str(cycle.get("status") or "")
@@ -344,6 +396,9 @@ def collect_auto_post_health(
         "cycle": cycle,
         "last_post_event": event,
         "windows_task": task,
+        "scheduler_last_run_due_at": scheduler_last_due,
+        "scheduler_last_tick_at": scheduler_last_tick,
+        "catchup_last": catchup_last,
         "problems": problems,
         "warnings": warnings,
         "recent_recoveries": recoveries,
