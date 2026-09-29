@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,7 +80,11 @@ class StaleVideoOutputRecoveryTests(unittest.TestCase):
             f"video_output_path_repaired_{video_id}",
             "",
         )
-        self.assertIn(str(current), state)
+        payload = json.loads(state)
+        self.assertEqual(
+            Path(payload["to"]),
+            current,
+        )
 
     def test_missing_output_is_found_by_video_id_scan(self) -> None:
         video_id = self._video()
