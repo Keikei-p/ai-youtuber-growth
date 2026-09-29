@@ -13,6 +13,7 @@ from growth_engine import run_growth_cycle
 from delivery_supervisor import self_heal_delivery_controls
 from legal_guard import publish_gate
 from main import load_character, render_results, run_generation
+from paths import VIDEO_DIR
 from native_models.auto_train import maybe_run_native_retraining
 from resource_governor import background_production_decision
 from resilience_learning import record_stage_success
@@ -58,6 +59,7 @@ from storage import (
     set_upload_receipt_thumbnail,
     update_queue_schedule,
     update_upload_receipt_verification,
+    update_video_output,
     uploaded_videos,
     video_by_id,
 )
@@ -1057,8 +1059,94 @@ def regenerate_saved_video(video_id: int) -> dict:
     return refreshed or row
 
 
+def _repair_legacy_video_output_path(row: dict) -> dict:
+    """
+    旧バージョンで残った
+      output/videos/YYYYMMDD/_35.mp4
+    のようなパスを、現行の
+      output/videos/YYYYMMDD_35.mp4
+    へ自動修復する。
+
+    それ以外でも同じvideo_idの完成MP4がVIDEO_DIR直下に1つ見つかれば
+    DBのoutput_pathを現物へ合わせる。
+    """
+    video_id = int(row.get("video_id") or row.get("id") or 0)
+    raw = str(row.get("output_path") or "").strip()
+    if video_id <= 0 or not raw:
+        return row
+
+    original = Path(raw)
+    if original.is_file():
+        return row
+
+    candidates: list[Path] = []
+
+    # 旧形式: .../videos/20260928/_35.mp4
+    parent_name = original.parent.name
+    if (
+        len(parent_name) == 8
+        and parent_name.isdigit()
+        and original.name.startswith("_")
+    ):
+        candidates.append(
+            original.parent.parent
+            / f"{parent_name}{original.name}"
+        )
+
+    # 現行形式の同一IDファイルを安全に探索。
+    try:
+        candidates.extend(
+            sorted(
+                VIDEO_DIR.glob(f"*_{video_id}.mp4"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        )
+    except OSError:
+        pass
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        if not candidate.is_file():
+            continue
+
+        status = str(row.get("status") or "rendered")
+        update_video_output(
+            video_id,
+            str(candidate),
+            status=status,
+        )
+        repaired = dict(row)
+        repaired["output_path"] = str(candidate)
+        set_channel_state(
+            f"video_output_path_repaired_{video_id}",
+            json.dumps(
+                {
+                    "from": raw,
+                    "to": str(candidate),
+                    "repaired_at": _now().isoformat(
+                        timespec="seconds"
+                    ),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        print(
+            f"[AUTO-RECOVERY] #{video_id} 古い動画パスを修復: "
+            f"{raw} -> {candidate}"
+        )
+        return repaired
+
+    return row
+
+
 def _ensure_video_output(row: dict) -> dict:
     video_id = int(row.get("video_id") or row.get("id") or 0)
+    row = _repair_legacy_video_output_path(row)
     regeneration_requested = (
         get_channel_state(
             f"video_regeneration_requested_{video_id}",
@@ -1073,6 +1161,26 @@ def _ensure_video_output(row: dict) -> dict:
     ):
         return row
     return regenerate_saved_video(video_id)
+
+
+def _ensure_upload_file_now(row: dict) -> dict:
+    """
+    _ensure_video_output()後に別処理や旧データ不整合でファイルが消えても、
+    YouTubeへ渡す直前にもう一度確認して自動再生成する。
+    """
+    row = _ensure_video_output(row)
+    output = str(row.get("output_path") or "").strip()
+    if output and Path(output).is_file():
+        return row
+
+    video_id = int(row.get("video_id") or row.get("id") or 0)
+    refreshed = regenerate_saved_video(video_id)
+    output = str(refreshed.get("output_path") or "").strip()
+    if not output or not Path(output).is_file():
+        raise RuntimeError(
+            f"動画 #{video_id} の投稿直前MP4を復旧できませんでした"
+        )
+    return refreshed
 
 
 def _try_set_thumbnail(
@@ -1743,6 +1851,10 @@ def run_due() -> None:
                 )
 
             if not receipt:
+                # metadata/gate/reconcile処理の間にファイルが消える競合も
+                # 最後の瞬間に検知して復旧する。
+                row = _ensure_upload_file_now(row)
+                output_path = str(row.get("output_path") or "")
                 _save_upload_intent(
                     video_id,
                     title=title,

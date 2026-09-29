@@ -159,7 +159,9 @@ def upload_video(
     contains_synthetic_media: bool = True,
 ) -> str:
     if not video_path.exists():
-        raise FileNotFoundError(video_path)
+        raise FileNotFoundError(
+            f"動画ファイルが見つかりません: {video_path}"
+        )
 
     # 自動投稿ではブラウザ認証を絶対に待たない。
     # tokenが失効していれば明示エラーにして、次回の再認証へ回す。
