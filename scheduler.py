@@ -59,6 +59,7 @@ from storage import (
     set_upload_receipt_thumbnail,
     update_queue_schedule,
     update_upload_receipt_verification,
+    update_video_output,
     uploaded_videos,
     video_by_id,
 )
