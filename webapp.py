@@ -90,6 +90,7 @@ from runtime_control import (
     web_interval_seconds,
 )
 from resource_governor import resource_snapshot
+from runtime_bootstrap import bootstrap_runtime
 from scheduler import (
     abort_full_test,
     full_test_status,
@@ -302,46 +303,27 @@ def _candidate_voicevox_paths() -> list[Path]:
     return [p for p in candidates if str(p) and p.exists()]
 
 def _ensure_local_services() -> None:
-    if not OllamaClient().available():
-        ollama = shutil.which("ollama")
-        if ollama:
-            try:
-                subprocess.Popen(
-                    [ollama, "serve"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=(
-                        subprocess.CREATE_NO_WINDOW
-                        if os.name == "nt" else 0
-                    ),
+    try:
+        result = bootstrap_runtime()
+        blockers = list(result.get("blockers") or [])
+        if blockers:
+            _append_log(
+                "[SERVICE] 自動復旧後も未準備: "
+                + ", ".join(blockers)
+            )
+        else:
+            actions = []
+            for key in ("ollama", "voice"):
+                value = result.get(key) or {}
+                action = str(value.get("action") or "")
+                if action and action not in {"already_running", "not_required"}:
+                    actions.append(f"{key}={action}")
+            if actions:
+                _append_log(
+                    "[SERVICE] 自動復旧: " + " / ".join(actions)
                 )
-                time.sleep(2)
-                _append_log("[SERVICE] Ollama自動起動を実行")
-            except Exception as exc:
-                _append_log(f"[SERVICE] Ollama自動起動失敗: {exc}")
-
-    voice_status = voice_provider_status()
-    if (
-        execution_mode() == "local"
-        and not voice_status["available"]
-        and voice_provider_name() == "voicevox"
-    ):
-        paths = _candidate_voicevox_paths()
-        if paths:
-            try:
-                subprocess.Popen(
-                    [str(paths[0])],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=(
-                        subprocess.CREATE_NO_WINDOW
-                        if os.name == "nt" else 0
-                    ),
-                )
-                time.sleep(6)
-                _append_log(f"[SERVICE] VOICEVOX自動起動: {paths[0]}")
-            except Exception as exc:
-                _append_log(f"[SERVICE] VOICEVOX自動起動失敗: {exc}")
+    except Exception as exc:
+        _append_log(f"[SERVICE] runtime bootstrap失敗: {exc}")
 
 def _cycle_worker() -> None:
     global _last_cycle_at, _last_cycle_result

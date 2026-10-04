@@ -245,12 +245,27 @@ def collect_auto_post_health(
         "autopost_catchup_last",
         "",
     ).strip()
+    bootstrap_raw = get_channel_state(
+        "runtime_bootstrap_last",
+        "",
+    ).strip()
     try:
         catchup_last = json.loads(catchup_raw) if catchup_raw else {}
         if not isinstance(catchup_last, dict):
             catchup_last = {}
     except Exception:
         catchup_last = {}
+
+    try:
+        runtime_bootstrap = (
+            json.loads(bootstrap_raw)
+            if bootstrap_raw
+            else {}
+        )
+        if not isinstance(runtime_bootstrap, dict):
+            runtime_bootstrap = {}
+    except Exception:
+        runtime_bootstrap = {}
 
     problems: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
@@ -293,6 +308,15 @@ def collect_auto_post_health(
                     "code": "wake_task_disabled",
                     "detail": "Windowsタスク自体が無効です。",
                 })
+            last_result = task.get("last_task_result")
+            if last_result not in {None, 0, 267009}:
+                problems.append({
+                    "code": "wake_task_last_run_failed",
+                    "detail": (
+                        "Windows自動タスクの直近実行が失敗しています。"
+                        f" 終了コード={last_result}"
+                    ),
+                })
             if not task.get("wake_timer_present"):
                 warnings.append({
                     "code": "wake_timer_not_visible",
@@ -326,6 +350,17 @@ def collect_auto_post_health(
                     "code": "scheduler_heartbeat_invalid",
                     "detail": "自動投稿スケジューラの時刻記録を解析できません。",
                 })
+
+    if production_armed and runtime_bootstrap:
+        blockers = list(runtime_bootstrap.get("blockers") or [])
+        if blockers:
+            problems.append({
+                "code": "runtime_services_not_ready",
+                "detail": (
+                    "自動生成に必要なサービスが未準備です: "
+                    + ", ".join(str(x) for x in blockers)
+                ),
+            })
 
     cycle_status = str(cycle.get("status") or "")
     if cycle_status == "failed":
@@ -391,6 +426,7 @@ def collect_auto_post_health(
         "scheduler_last_run_due_at": scheduler_last_due,
         "scheduler_last_tick_at": scheduler_last_tick,
         "catchup_last": catchup_last,
+        "runtime_bootstrap": runtime_bootstrap,
         "problems": problems,
         "warnings": warnings,
         "recent_recoveries": recoveries,

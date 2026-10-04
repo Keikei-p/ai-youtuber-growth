@@ -1,5 +1,5 @@
 param(
-    [int]$IntervalMinutes = 60,
+    [int]$IntervalMinutes = 15,
     [int]$PrepareMinutes = 90,
     [int[]]$RecoveryMinutes = @(5, 15, 30, 60),
     [switch]$DryRun
