@@ -34,6 +34,50 @@ function Write-CycleStatus {
     Move-Item -Force -Path $Temp -Destination $StatusFile
 }
 
+
+function Resolve-MiraiPython {
+    $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    if (Test-Path $VenvPython) {
+        return $VenvPython
+    }
+
+    $Py = Get-Command py.exe -ErrorAction SilentlyContinue
+    $PythonCmd = Get-Command python.exe -ErrorAction SilentlyContinue
+    if (-not $Py -and -not $PythonCmd) {
+        throw "Python runtime not found. .venv / py.exe / python.exe are all unavailable."
+    }
+
+    Write-CycleStatus -Status "running" -Stage "python_repair" -Detail ".venvが無いため自動作成しています。"
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] .venv missing; creating automatically")
+
+    if ($Py) {
+        & $Py.Source -3 -m venv (Join-Path $RepoRoot ".venv") *>> $LogFile
+    }
+    else {
+        & $PythonCmd.Source -m venv (Join-Path $RepoRoot ".venv") *>> $LogFile
+    }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $VenvPython)) {
+        throw "Failed to create .venv Python runtime."
+    }
+    return $VenvPython
+}
+
+function Ensure-MiraiDependencies {
+    param([string]$PythonPath)
+
+    & $PythonPath -c "import dotenv, requests" *> $null
+    if ($LASTEXITCODE -eq 0) {
+        return
+    }
+
+    Write-CycleStatus -Status "running" -Stage "dependency_repair" -Detail "Python依存関係を自動修復しています。"
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] Python dependencies missing; repairing")
+    & $PythonPath -m pip install -r (Join-Path $RepoRoot "requirements.txt") *>> $LogFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip install -r requirements.txt failed."
+    }
+}
+
 $mutex = New-Object System.Threading.Mutex($false, "AIYoutuberGrowthCycle")
 if (-not $mutex.WaitOne(0)) {
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] another cycle is already running; skip")
@@ -55,10 +99,8 @@ $ES_SYSTEM_REQUIRED = [uint32]0x00000001
 [MiraiPowerState]::SetThreadExecutionState($ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED) | Out-Null
 
 try {
-    $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
-    if (-not (Test-Path $Python)) {
-        throw "venv python not found: $Python"
-    }
+    $Python = Resolve-MiraiPython
+    Ensure-MiraiDependencies -PythonPath $Python
 
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] wake/cycle start")
     Write-CycleStatus -Status "running" -Stage "wake_start" -Detail "Windowsタスクが起動しました。"
@@ -105,32 +147,14 @@ try {
         Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check end")
     }
 
-    try {
-        Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 2 | Out-Null
-    }
-    catch {
-        $ollama = Get-Command ollama -ErrorAction SilentlyContinue
-        if ($ollama) {
-            Start-Process -FilePath $ollama.Source -ArgumentList "serve" -WindowStyle Hidden
-            Start-Sleep -Seconds 3
-        }
-    }
+    # 自己更新後に依存関係が増えた場合もその場で修復。
+    Ensure-MiraiDependencies -PythonPath $Python
 
-    try {
-        Invoke-RestMethod -Uri "http://127.0.0.1:50021/version" -TimeoutSec 2 | Out-Null
-    }
-    catch {
-        $envFile = Join-Path $RepoRoot ".env"
-        if (Test-Path $envFile) {
-            $line = Get-Content $envFile | Where-Object { $_ -match "^VOICEVOX_EXE=" } | Select-Object -First 1
-            if ($line) {
-                $voicevoxExe = ($line -replace "^VOICEVOX_EXE=", "").Trim().Trim('"')
-                if ($voicevoxExe -and (Test-Path $voicevoxExe)) {
-                    Start-Process -FilePath $voicevoxExe
-                    Start-Sleep -Seconds 8
-                }
-            }
-        }
+    # Ollama / VOICEVOX / FFmpegをPython側で統一診断・自動起動。
+    if (Test-Path (Join-Path $RepoRoot "runtime_bootstrap.py")) {
+        Write-CycleStatus -Status "running" -Stage "runtime_bootstrap" -Detail "AIサービスを自動点検・復旧しています。"
+        & $Python "runtime_bootstrap.py" *>> $LogFile
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] runtime bootstrap exit=" + $LASTEXITCODE)
     }
 
     Write-CycleStatus -Status "running" -Stage "tick" -Detail "通常の生成・分析サイクルを実行しています。"
