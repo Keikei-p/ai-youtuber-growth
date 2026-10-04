@@ -29,11 +29,39 @@ class DailyAutoAndVoiceModelTests(unittest.TestCase):
         self.assertEqual(state["posts_per_day"], 2)
         self.assertEqual(state["post_times"], "12:00,20:00")
         self.assertEqual(state["preset"], 2)
+        self.assertEqual(
+            storage.get_channel_state(
+                "production_autonomy_armed",
+                "",
+            ),
+            "true",
+        )
+        self.assertEqual(
+            storage.get_channel_state(
+                "full_autopilot_enabled",
+                "",
+            ),
+            "true",
+        )
 
         off = runtime_control.disable_daily_auto()
         self.assertFalse(off["enabled"])
         self.assertFalse(runtime_control.automation_enabled())
         self.assertFalse(runtime_control.auto_upload_enabled())
+        self.assertEqual(
+            storage.get_channel_state(
+                "production_autonomy_armed",
+                "",
+            ),
+            "false",
+        )
+        self.assertEqual(
+            storage.get_channel_state(
+                "full_autopilot_enabled",
+                "",
+            ),
+            "false",
+        )
 
     def test_daily_auto_rejects_unknown_preset(self) -> None:
         with self.assertRaises(ValueError):
