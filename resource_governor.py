@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from config import settings
 from gpu_manager import gpu_snapshot
+from storage import get_channel_state
 
 
 @dataclass(frozen=True)
@@ -120,8 +121,17 @@ def background_production_decision(
     minimum_idle = int(settings.resource_min_idle_seconds)
     minimum_gpu = int(settings.resource_min_gpu_free_mb)
 
+    production_armed = (
+        get_channel_state(
+            "production_autonomy_armed",
+            "false",
+        ).strip().lower()
+        == "true"
+    )
+
     if (
         not urgent
+        and not production_armed
         and idle is not None
         and idle < minimum_idle
     ):
@@ -168,10 +178,22 @@ def background_production_decision(
             snapshot,
         )
 
-    mode = "urgent" if urgent else "eco"
+    if urgent:
+        mode = "urgent"
+        reason = "投稿時刻が近いため優先制作します"
+    elif production_armed:
+        mode = "autopilot"
+        reason = (
+            "完全自動運用中のため、メモリ/GPU安全条件を満たす範囲で"
+            "PC操作中でも高速モード制作を継続します"
+        )
+    else:
+        mode = "eco"
+        reason = "省負荷条件を満たしています"
+
     return ResourceDecision(
         True,
         mode,
-        "省負荷条件を満たしています",
+        reason,
         snapshot,
     )
