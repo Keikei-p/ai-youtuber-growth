@@ -115,12 +115,21 @@ def apply_daily_auto_preset(count: int) -> dict:
         raise ValueError("daily auto preset must be 1, 2, or 3")
     set_posts_per_day(count)
     set_post_times(DAILY_AUTO_PRESETS[count])
+    # 「毎日自動投稿ON」は本番運用の明示操作として扱う。
+    # 以前は個別スイッチだけONになりproduction armが立たず、
+    # DRY_RUN保護や省負荷判定で実運用へ進まない状態があった。
+    set_channel_state("production_autonomy_armed", "true")
+    set_channel_state("full_autopilot_enabled", "true")
     set_automation_enabled(True)
     set_auto_upload_enabled(True)
     return daily_auto_status()
 
 
 def disable_daily_auto() -> dict:
+    # OFF操作時にarmを残すとheal_autopilotが再度ONへ戻してしまうため、
+    # 停止操作はproduction armまで明示的に解除する。
+    set_channel_state("production_autonomy_armed", "false")
+    set_channel_state("full_autopilot_enabled", "false")
     set_auto_upload_enabled(False)
     set_automation_enabled(False)
     return daily_auto_status()
