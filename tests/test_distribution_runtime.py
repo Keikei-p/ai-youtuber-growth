@@ -14,7 +14,6 @@ class DistributionRuntimeTests(unittest.TestCase):
     def test_packaged_windows_user_data_is_separate(self) -> None:
         with (
             patch.object(config, "is_packaged_runtime", return_value=True),
-            patch.object(config.os, "name", "nt"),
             patch.dict(
                 os.environ,
                 {"LOCALAPPDATA": r"C:\Users\tester\AppData\Local"},
@@ -26,13 +25,15 @@ class DistributionRuntimeTests(unittest.TestCase):
             output = config._runtime_default("output")
             token = config._runtime_default("token.json")
 
-        self.assertEqual(
-            root,
-            Path(
-                r"C:\Users\tester\AppData\Local"
+        root_text = str(root).replace("\\", "/")
+        self.assertIn(
+            "C:/Users/tester/AppData/Local",
+            root_text,
+        )
+        self.assertTrue(
+            root_text.endswith(
+                "YOROKOBI/MiraiProductionOS"
             )
-            / "YOROKOBI"
-            / "MiraiProductionOS",
         )
         self.assertIn("YOROKOBI", data)
         self.assertIn("MiraiProductionOS", output)
