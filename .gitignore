@@ -8,6 +8,9 @@ client_secret.json
 token.json
 .DS_Store
 logs/
+build/
+dist/
+*.spec
 assets/guests/*.png
 assets/generated/
 assets/studio_index.json
