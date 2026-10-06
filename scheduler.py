@@ -767,7 +767,18 @@ def _generation_runtime_ready() -> bool:
     """
     動画生成が本当に必要になった時だけAIサービスを起動・確認する。
     待機中のtickでは呼ばない。
+
+    Cloud制作ではメディア依存はWorker側が持つため、
+    ローカルは企画用Ollamaだけ確認する。
     """
+    if execution_mode() == "cloud":
+        if OllamaClient().available():
+            return True
+        print(
+            "[SCHEDULE] Cloud制作の企画用Ollamaへ接続できません。"
+        )
+        return False
+
     try:
         runtime = bootstrap_runtime()
     except Exception as exc:
