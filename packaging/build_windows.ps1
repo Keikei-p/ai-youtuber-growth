@@ -15,20 +15,18 @@ if (Test-Path $VenvPython) {
     if (-not $PythonCommand) {
         $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
     }
-    if (-not $PythonCommand) {
-        throw "Pythonが見つかりません。"
-    }
+    if (-not $PythonCommand) { throw "Python is unavailable." }
     $Python = $PythonCommand.Source
 }
 Write-Host "[PACKAGING] Python: $Python"
 
 & $Python -m pip install -r requirements-packaging.txt
-if ($LASTEXITCODE -ne 0) { throw "packaging依存の導入に失敗しました。" }
+if ($LASTEXITCODE -ne 0) { throw "Packaging dependencies failed." }
 
 if ($Studio) {
-    Write-Host "[PACKAGING] Studio Pack依存を追加します。"
+    Write-Host "[PACKAGING] Installing optional Studio Pack dependencies."
     & $Python -m pip install -r requirements-studio.txt
-    if ($LASTEXITCODE -ne 0) { throw "Studio Pack依存の導入に失敗しました。" }
+    if ($LASTEXITCODE -ne 0) { throw "Studio Pack dependencies failed." }
 }
 
 $Args = @(
@@ -59,33 +57,31 @@ if ($Studio) {
     )
 }
 
-Write-Host "[PACKAGING] Mirai Production OS をビルドします。"
+Write-Host "[PACKAGING] Building Mirai Production OS."
 & $Python @Args
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
 $Target = Join-Path $RepoRoot ($OutputDir + "\MiraiProductionOS")
-if (-not (Test-Path $Target)) { throw "出力フォルダを確認できません: $Target" }
+if (-not (Test-Path $Target)) { throw "Build output not found: $Target" }
 
 @"
 Mirai Production OS - Beta
 
-ユーザーデータ:
-- DB / 動画 / YouTube認証 / .env は配布版では
-  %LOCALAPPDATA%\YOROKOBI\MiraiProductionOS に保存します。
-- アプリ更新・再インストールでユーザーデータを上書きしません。
+User data:
+- Database, generated media, YouTube authentication, and .env are stored under
+  %LOCALAPPDATA%\YOROKOBI\MiraiProductionOS in packaged Windows builds.
+- Updating or reinstalling the application must not overwrite user data.
 
-初回起動前:
-1. YouTube連携を使う場合は client_secret.json をユーザーデータ側へ設定
-2. YouTube初回認証
-3. Local Studio利用時は Ollama / VOICEVOX / FFmpeg を準備
-4. APIキーやtokenを配布物へ同梱しない
+Before first use:
+1. Put client_secret.json in the user-data directory when using YouTube.
+2. Complete the first YouTube authorization.
+3. Install Ollama / VOICEVOX / FFmpeg when using Local Studio features.
+4. Never distribute API keys or tokens inside the application package.
 
-販売公開前:
-- コード署名
-- インストーラー化
-- 自動更新署名
-- 利用規約/プライバシーポリシー確定
-- 第三者ライセンス最終確認
+Before commercial release:
+- Code-sign the installer and binaries.
+- Finalize Terms and Privacy Policy.
+- Recheck all third-party commercial licenses.
 "@ | Set-Content -Path (Join-Path $Target "RELEASE_NOTES.txt") -Encoding UTF8
 
-Write-Host "[PACKAGING] 完了: $Target"
+Write-Host "[PACKAGING] Done: $Target"
