@@ -194,6 +194,19 @@ def record_failure(
         ),
     )
 
+    preferred_next_action = str(
+        playbook.get("preferred_next_action") or ""
+    ).strip()
+    set_channel_state(
+        "autonomous_recovery_requested",
+        "true",
+    )
+    if preferred_next_action:
+        set_channel_state(
+            "autonomous_recovery_preferred_action",
+            preferred_next_action[:2000],
+        )
+
     return {
         "fingerprint": fingerprint,
         "occurrences": occurrences,
@@ -202,10 +215,7 @@ def record_failure(
         "diagnosis": diagnosis,
         "code_repair": code_repair,
         "playbook": playbook,
-        "preferred_next_action": playbook.get(
-            "preferred_next_action",
-            "",
-        ),
+        "preferred_next_action": preferred_next_action,
     }
 
 
@@ -377,11 +387,18 @@ def _process_improvement_actions(data: dict) -> tuple[list[str], list[int], list
             elif action_type == "disable_ai_video":
                 set_channel_state("ai_video_enabled", "false")
                 applied.append("AI動画を自動OFFして負荷を軽減")
+            elif action_type == "retry_tuning":
+                set_channel_state(
+                    "autonomous_retry_profile",
+                    "adaptive",
+                )
+                applied.append(
+                    "投稿再試行をadaptive profileへ自動調整"
+                )
             elif action_type in {
                 "knowledge_note",
                 "prompt_tuning",
                 "quality_analysis",
-                "retry_tuning",
                 "reduce_ai_video_load",
             }:
                 notes_raw = get_channel_state(

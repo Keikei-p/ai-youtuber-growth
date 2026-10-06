@@ -8,6 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from ai_client import OllamaClient
+from autonomous_recovery import run_autonomous_recovery
 from config import settings
 from growth_engine import run_growth_cycle
 from delivery_supervisor import self_heal_delivery_controls
@@ -2022,6 +2023,66 @@ def _tick_unlocked() -> None:
         print(
             "[DELIVERY-SUPERVISOR] "
             + " / ".join(delivery_state["repairs"])
+        )
+
+    # 失敗学習を「メモ」で終わらせず、次の実行前に安全修復と
+    # failed queue復活まで実行する。第1話未投稿でも必ず通る。
+    recovery_requested = (
+        get_channel_state(
+            "autonomous_recovery_requested",
+            "false",
+        ).strip().lower()
+        == "true"
+    )
+    try:
+        recovery = run_autonomous_recovery(now=_now())
+        if recovery.get("status") not in {
+            "healthy",
+            "idle",
+            "not_armed",
+        }:
+            print(
+                "[AUTONOMOUS-RECOVERY] "
+                + json.dumps(recovery, ensure_ascii=False)
+            )
+
+        if (
+            recovery_requested
+            or recovery.get("status")
+            in {"recovered", "attention", "improved"}
+        ):
+            try:
+                review = maybe_run_improvement_review(
+                    min_hours=1
+                )
+                if review:
+                    print(
+                        "[IMPROVEMENT] 失敗直後レビューを反映: "
+                        + str(review.get("summary") or "")
+                    )
+            except Exception as improvement_exc:
+                print(
+                    "[IMPROVEMENT] 失敗直後レビューは次回へ: "
+                    f"{improvement_exc}"
+                )
+
+        if recovery.get("status") in {
+            "recovered",
+            "improved",
+            "healthy",
+        }:
+            set_channel_state(
+                "autonomous_recovery_requested",
+                "false",
+            )
+    except Exception as recovery_exc:
+        record_failure(
+            "scheduler.autonomous_recovery",
+            recovery_exc,
+        )
+        print(
+            "[AUTONOMOUS-RECOVERY] 復旧処理は次回へ延期: "
+            f"{recovery_exc}"
         )
 
     full_test = _full_test_state()

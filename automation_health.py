@@ -16,6 +16,7 @@ from runtime_control import (
     upload_privacy,
 )
 from storage import (
+    failed_queue_items,
     get_channel_state,
     init_db,
     queued_items,
@@ -249,6 +250,10 @@ def collect_auto_post_health(
         "runtime_bootstrap_last",
         "",
     ).strip()
+    recovery_raw = get_channel_state(
+        "autonomous_recovery_last",
+        "",
+    ).strip()
     try:
         catchup_last = json.loads(catchup_raw) if catchup_raw else {}
         if not isinstance(catchup_last, dict):
@@ -266,6 +271,19 @@ def collect_auto_post_health(
             runtime_bootstrap = {}
     except Exception:
         runtime_bootstrap = {}
+
+    try:
+        autonomous_recovery = (
+            json.loads(recovery_raw)
+            if recovery_raw
+            else {}
+        )
+        if not isinstance(autonomous_recovery, dict):
+            autonomous_recovery = {}
+    except Exception:
+        autonomous_recovery = {}
+
+    failed_rows = failed_queue_items(limit=20)
 
     problems: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
@@ -362,6 +380,23 @@ def collect_auto_post_health(
                 ),
             })
 
+    if failed_rows:
+        recoverable = [
+            row
+            for row in failed_rows
+            if "publish_guard" not in str(
+                row.get("error") or ""
+            ).lower()
+        ]
+        if recoverable:
+            problems.append({
+                "code": "failed_queue_waiting_recovery",
+                "detail": (
+                    f"YouTube未投稿のfailedキューが{len(recoverable)}件あります。"
+                    " 自動復旧ループで再試行対象を確認します。"
+                ),
+            })
+
     cycle_status = str(cycle.get("status") or "")
     if cycle_status == "failed":
         problems.append({
@@ -427,6 +462,8 @@ def collect_auto_post_health(
         "scheduler_last_tick_at": scheduler_last_tick,
         "catchup_last": catchup_last,
         "runtime_bootstrap": runtime_bootstrap,
+        "autonomous_recovery": autonomous_recovery,
+        "failed_queue_count": len(failed_rows),
         "problems": problems,
         "warnings": warnings,
         "recent_recoveries": recoveries,
