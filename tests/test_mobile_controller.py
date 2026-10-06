@@ -167,8 +167,14 @@ class MobileControllerTests(unittest.TestCase):
             "8.5.2",
         )
         self.assertEqual(
+            package["dependencies"][
+                "@aparajita/capacitor-secure-storage"
+            ],
+            "8.0.1",
+        )
+        self.assertEqual(
             config["webDir"],
-            "www",
+            "dist",
         )
         self.assertFalse(
             config["android"]["allowMixedContent"]
@@ -193,6 +199,31 @@ class MobileControllerTests(unittest.TestCase):
         self.assertNotIn(
             "api_key",
             source.lower(),
+        )
+
+        self.assertIn(
+            "@aparajita/capacitor-secure-storage",
+            source,
+        )
+        self.assertIn(
+            "SecureStorage.setItem",
+            source,
+        )
+        self.assertIn(
+            "SecureStorage.getItem",
+            source,
+        )
+        self.assertIn(
+            "SecureStorage.removeItem",
+            source,
+        )
+        self.assertNotIn(
+            "localStorage.setItem(KEY_TOKEN",
+            source,
+        )
+        self.assertNotIn(
+            "localStorage.getItem(KEY_TOKEN",
+            source,
         )
 
     def test_mobile_api_and_pairing_ui_are_wired(self) -> None:

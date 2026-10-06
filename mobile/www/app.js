@@ -1,5 +1,10 @@
+import { Capacitor } from '@capacitor/core';
+import { SecureStorage } from '@aparajita/capacitor-secure-storage';
+
 const KEY_URL='mirai-base-url';
-const KEY_TOKEN='mirai-pairing-token';
+const KEY_TOKEN='pairing-token';
+let secureReady=false;
+let cachedToken='';
 
 const $=id=>document.getElementById(id);
 const setupCard=$('setupCard');
@@ -16,10 +21,34 @@ function notify(message){
   setTimeout(()=>toast.classList.remove('show'),2600);
 }
 
+async function ensureSecureStorage(){
+  if(secureReady) return;
+  await SecureStorage.setKeyPrefix('mirai_');
+  secureReady=true;
+}
+
+async function loadSecureToken(){
+  await ensureSecureStorage();
+  cachedToken=(await SecureStorage.getItem(KEY_TOKEN))||'';
+  return cachedToken;
+}
+
+async function saveSecureToken(value){
+  await ensureSecureStorage();
+  await SecureStorage.setItem(KEY_TOKEN,String(value||''));
+  cachedToken=String(value||'');
+}
+
+async function removeSecureToken(){
+  await ensureSecureStorage();
+  await SecureStorage.removeItem(KEY_TOKEN);
+  cachedToken='';
+}
+
 function connection(){
   return {
     url:(localStorage.getItem(KEY_URL)||'').replace(/\/+$/,''),
-    token:localStorage.getItem(KEY_TOKEN)||''
+    token:cachedToken
   };
 }
 
@@ -89,9 +118,9 @@ $('saveConnection').addEventListener('click',async()=>{
   if(!/^https:\/\//i.test(url)){notify('HTTPSの接続URLを入力してください');return;}
   if(secret.length<20){notify('接続コードを確認してください');return;}
   localStorage.setItem(KEY_URL,url);
-  localStorage.setItem(KEY_TOKEN,secret);
+  await saveSecureToken(secret);
   try{showDashboard();await refresh();notify('ミライへ接続しました');}
-  catch(e){localStorage.removeItem(KEY_TOKEN);showSetup();notify('接続できません: '+e.message);}
+  catch(e){await removeSecureToken();showSetup();notify('接続できません: '+e.message);}
 });
 
 $('refreshButton').addEventListener('click',()=>refresh().catch(e=>notify(e.message)));
@@ -115,10 +144,10 @@ $('autopilotButton').addEventListener('click',async()=>{
   }catch(e){notify(e.message)}
 });
 
-$('disconnectButton').addEventListener('click',()=>{
+$('disconnectButton').addEventListener('click',async()=>{
   if(!confirm('この端末の接続設定を削除しますか？')) return;
   localStorage.removeItem(KEY_URL);
-  localStorage.removeItem(KEY_TOKEN);
+  await removeSecureToken();
   state=null;
   showSetup();
 });
@@ -128,6 +157,7 @@ document.addEventListener('visibilitychange',()=>{
 });
 
 async function boot(){
+  await loadSecureToken();
   const cfg=connection();
   if(!cfg.url||!cfg.token){showSetup();return;}
   showDashboard();
@@ -135,5 +165,8 @@ async function boot(){
     await refresh();
     timer=setInterval(()=>{if(!document.hidden) refresh().catch(()=>{});},30000);
   }catch(e){notify('再接続が必要です: '+e.message);showSetup();}
+}
+if(!Capacitor.isNativePlatform()){
+  console.warn('[MIRAI] Web preview uses browser storage; production tokens are protected only in native Android/iOS builds.');
 }
 boot();

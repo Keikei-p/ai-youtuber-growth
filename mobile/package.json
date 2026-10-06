@@ -1,22 +1,26 @@
 {
   "name": "mirai-mobile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Lightweight controller for Mirai Production OS",
   "scripts": {
-    "cap:add:android": "cap add android",
-    "cap:add:ios": "cap add ios",
-    "cap:sync": "cap sync",
+    "build": "node build.mjs",
+    "cap:add:android": "npm run build && cap add android",
+    "cap:add:ios": "npm run build && cap add ios",
+    "cap:sync": "npm run build && cap sync",
     "cap:open:android": "cap open android",
     "cap:open:ios": "cap open ios",
-    "check": "node --check www/app.js"
+    "check": "npm run build"
   },
   "dependencies": {
     "@capacitor/android": "8.5.2",
     "@capacitor/core": "8.5.2",
-    "@capacitor/ios": "8.5.2"
+    "@capacitor/ios": "8.5.2",
+    "@aparajita/capacitor-secure-storage": "8.0.1"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.2"
-  }
+    "@capacitor/cli": "8.5.2",
+    "esbuild": "0.25.10"
+  },
+  "type": "module"
 }

@@ -1,7 +1,7 @@
 {
   "appId": "com.yorokobi.miraiproduction",
   "appName": "Mirai",
-  "webDir": "www",
+  "webDir": "dist",
   "bundledWebRuntime": false,
   "android": {
     "allowMixedContent": false
