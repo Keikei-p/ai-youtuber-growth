@@ -83,6 +83,19 @@ class DistributionRuntimeTests(unittest.TestCase):
             script,
         )
 
+    def test_windows_builder_invokes_pyinstaller_arguments(self) -> None:
+        source = Path(
+            "packaging/build_windows.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "& $Python @PyInstallerArgs",
+            source,
+        )
+        self.assertNotIn(
+            "& $Python @Args",
+            source,
+        )
+
     def test_release_build_outputs_hash_manifest(self) -> None:
         source = Path(
             "packaging/build_release.ps1"
