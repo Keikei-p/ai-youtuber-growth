@@ -47,6 +47,7 @@ from main import run_cleanup_uploaded, run_generation, run_private_upload_test
 from maintenance import compact_runtime_storage, rotate_log, storage_snapshot
 from quick_test import run_quick_diagnostics
 from paths import VIDEO_DIR
+from product_core import product_status, safe_support_snapshot
 from runtime_control import (
     ai_video_backend_name,
     ai_video_enabled,
@@ -755,6 +756,11 @@ def _status_payload() -> dict:
             _growth_status,
         ),
         "full_test": full_test_status(),
+        "product": _cached_dashboard_block(
+            "product",
+            120,
+            lambda: product_status(ROOT),
+        ),
         "auto_post_health": auto_post_health,
         "last_cycle_at": last_cycle_at,
         "last_cycle_result": last_cycle_result,
@@ -1689,6 +1695,19 @@ body.app-ready .grid>.card.app-active{display:block}
     </section>
 
     <section class="card full">
+      <h2>製品化・販売準備</h2>
+      <div id="productStatus" class="studio-status small"></div>
+      <div id="productReadiness"></div>
+      <div class="actions" style="margin-top:12px">
+        <button onclick="copySupportSnapshot()">安全な診断情報をコピー</button>
+      </div>
+      <div class="small" style="margin-top:8px">
+        診断情報にはAPIキー、OAuth token、client_secret、.env本文を含めません。
+        正式販売前は利用規約・プライバシー・署名・決済・ストア審査を別途完了します。
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>ログ</h2>
       <div class="actions" style="margin-bottom:10px">
         <button onclick="runAction('cleanup')">投稿済み動画をPCから掃除</button>
@@ -1720,6 +1739,7 @@ const appPageMap={
   '軽量・再起動なし運用':'settings',
   'スマホ・外出先リモート管理':'settings',
   'PC自動起動':'settings',
+  '製品化・販売準備':'settings',
   'ログ':'settings'
 };
 const appPageLabels={home:'ホーム',posts:'投稿',create:'制作',growth:'成長',settings:'設定'};
@@ -1804,6 +1824,15 @@ async function refresh(){
     homeLastPostDetail.textContent=lastHome.video_id?('#'+Number(lastHome.video_id)+' '+String(lastHome.detail||'')):String(lastHome.detail||'');
     homeLearning.textContent=Number(resilience.learned_patterns||0)+'件 学習済み';
     homeLearningDetail.textContent='未解決 '+Number(resilience.unresolved_patterns||0)+' / 復旧成功 '+Number(resilience.learned_successes||0);
+
+    const product=state.product||{};
+    const readiness=product.readiness||{};
+    productStatus.textContent=(product.name||'Mirai Production OS')+' '+(product.version||'')+' / 販売基盤 '+Number(readiness.score||0)+'%';
+    const productChecks=(readiness.checks||[]);
+    productReadiness.innerHTML=productChecks.map(item=>
+      '<div class="row"><span>'+escapeHtml(item.label||item.key||'')+'</span>'+
+      '<span>'+badge(Boolean(item.ok))+'</span></div>'
+    ).join('');
     document.title=(state.system_ready?'✓ ':'⚠ ')+'ミライ';
     services.innerHTML=[
       ['文章AI',state.services.ollama],
@@ -2405,6 +2434,21 @@ async function smartUpdate(){
     },1000);
   }catch(e){alert(e.message)}
 }
+async function copySupportSnapshot(){
+  try{
+    const data=await api('/api/support-snapshot');
+    const raw=JSON.stringify(data,null,2);
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(raw);
+      alert('安全な診断情報をコピーしました。');
+    }else{
+      alert(raw);
+    }
+  }catch(e){
+    alert('診断情報の取得に失敗しました: '+e.message);
+  }
+}
+
 async function runAction(action){
   const data=await api('/api/action',{action});
   alert(data.message);
@@ -2460,6 +2504,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/status":
             self._json(_status_payload())
+            return
+
+        if path == "/api/product":
+            self._json(product_status(ROOT))
+            return
+
+        if path == "/api/support-snapshot":
+            self._json(safe_support_snapshot(ROOT))
             return
 
         if path.startswith("/media/videos/"):
