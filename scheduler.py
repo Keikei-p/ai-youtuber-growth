@@ -764,26 +764,30 @@ def ensure_first_episode_delivery() -> dict:
 
 
 def _generation_runtime_ready() -> bool:
-    problems: list[str] = []
-    if not OllamaClient().available():
-        problems.append("Ollama")
-
-    # cloudでは画像/音声/FFmpeg/品質検査をWorker側で実行する。
-    # 現段階の企画・台本はローカルOllamaを使うためOllamaだけ確認する。
-    if execution_mode() == "local":
-        voice_status = voice_provider_status()
-        if not voice_status["available"]:
-            problems.append(f"Voice({voice_status['name']})")
-        if not shutil.which("ffmpeg"):
-            problems.append("FFmpeg")
-
-    if problems:
+    """
+    動画生成が本当に必要になった時だけAIサービスを起動・確認する。
+    待機中のtickでは呼ばない。
+    """
+    try:
+        runtime = bootstrap_runtime()
+    except Exception as exc:
         print(
-            "[SCHEDULE] 動画生成を見送ります。未起動/未検出: "
-            + ", ".join(problems)
+            "[SCHEDULE] 制作runtimeの自動起動に失敗: "
+            + str(exc)
         )
         return False
-    return True
+
+    if bool(runtime.get("ready")):
+        return True
+
+    print(
+        "[SCHEDULE] 制作runtimeが未準備のため今回は延期: "
+        + ", ".join(
+            str(x)
+            for x in (runtime.get("blockers") or [])
+        )
+    )
+    return False
 
 def prepare_upcoming() -> None:
     """
@@ -906,16 +910,8 @@ def prepare_upcoming() -> None:
     )
 
     # 本当に不足分を生成する時だけAIサービスを起動する。
-    # 以前はキューが十分でも毎tick Ollama/VOICEVOX/FFmpeg確認が走っていた。
-    runtime = bootstrap_runtime()
-    if not bool(runtime.get("ready")):
-        print(
-            "[SCHEDULE] 制作runtimeが未準備のため今回は延期: "
-            + ", ".join(
-                str(x)
-                for x in (runtime.get("blockers") or [])
-            )
-        )
+    # 既存のruntime gateを維持し、内部でbootstrapする。
+    if not _generation_runtime_ready():
         set_channel_state(
             "runtime_resource_mode",
             "",
