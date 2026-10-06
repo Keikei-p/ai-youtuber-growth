@@ -9,6 +9,7 @@ from config import settings
 from runtime_control import post_times
 from storage import (
     connect,
+    get_channel_state,
     set_channel_state,
     set_queue_failed,
     set_queue_recovery,
@@ -333,6 +334,32 @@ def _failure_knowledge(code: str) -> dict[str, str]:
     })
 
 
+def _adaptive_retry_delay(
+    code: str,
+    default_minutes: int,
+    previous_count: int,
+) -> int:
+    """
+    Improvement Engineのretry_tuningを実際の再試行へ反映する。
+    adaptive時は同じ失敗を短時間連打せず、回数に応じてbackoffする。
+    """
+    profile = get_channel_state(
+        "autonomous_retry_profile",
+        "",
+    ).strip().lower()
+    if profile != "adaptive":
+        return max(1, int(default_minutes))
+
+    multiplier = min(
+        3.0,
+        1.0 + (max(0, int(previous_count)) * 0.5),
+    )
+    return max(
+        1,
+        int(round(int(default_minutes) * multiplier)),
+    )
+
+
 def _tomorrow_first_slot(now: datetime) -> datetime:
     first = "09:00"
     values = [
@@ -496,6 +523,11 @@ def recover_upload_failure(
             )
         else:
             delay = 10
+        delay = _adaptive_retry_delay(
+            code,
+            delay,
+            previous_count,
+        )
         retry_at = now + timedelta(minutes=delay)
         set_queue_recovery(
             queue_id,
@@ -537,7 +569,12 @@ def recover_upload_failure(
             scheduled_for=retry_at.isoformat(timespec="minutes"),
         )
     elif code == "youtube_processing_failed":
-        retry_at = now + timedelta(minutes=30)
+        retry_delay = _adaptive_retry_delay(
+            code,
+            30,
+            previous_count,
+        )
+        retry_at = now + timedelta(minutes=retry_delay)
         set_channel_state(
             f"video_regeneration_requested_{video_id}",
             "true",
@@ -553,7 +590,12 @@ def recover_upload_failure(
             scheduled_for=retry_at.isoformat(timespec="minutes"),
         )
     elif code == "missing_file":
-        retry_at = now + timedelta(minutes=30)
+        retry_delay = _adaptive_retry_delay(
+            code,
+            30,
+            previous_count,
+        )
+        retry_at = now + timedelta(minutes=retry_delay)
         set_channel_state(
             f"video_regeneration_requested_{video_id}",
             "true",
@@ -569,7 +611,12 @@ def recover_upload_failure(
             scheduled_for=retry_at.isoformat(timespec="minutes"),
         )
     elif code == "metadata":
-        retry_at = now + timedelta(minutes=15)
+        retry_delay = _adaptive_retry_delay(
+            code,
+            15,
+            previous_count,
+        )
+        retry_at = now + timedelta(minutes=retry_delay)
         set_channel_state(
             f"metadata_sanitize_requested_{video_id}",
             "true",
@@ -585,7 +632,12 @@ def recover_upload_failure(
             scheduled_for=retry_at.isoformat(timespec="minutes"),
         )
     elif code == "publish_guard":
-        retry_at = now + timedelta(minutes=30)
+        retry_delay = _adaptive_retry_delay(
+            code,
+            30,
+            previous_count,
+        )
+        retry_at = now + timedelta(minutes=retry_delay)
         set_queue_recovery(
             queue_id,
             scheduled_for=retry_at.isoformat(timespec="minutes"),
