@@ -10,7 +10,7 @@ Set-Location $RepoRoot
 
 if (-not $Version) {
     $Version = python -c "from product_core import PRODUCT_VERSION; print(PRODUCT_VERSION)"
-    if ($LASTEXITCODE -ne 0) { throw "製品バージョン取得に失敗しました。" }
+    if ($LASTEXITCODE -ne 0) { throw "Product version lookup failed." }
     $Version = $Version.Trim()
 }
 
@@ -19,16 +19,15 @@ $BuildDir = Join-Path $RepoRoot "dist\windows"
 New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
 if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
 
-Write-Host "[RELEASE] Windows本体をビルド: $Version"
+Write-Host "[RELEASE] Building Windows app: $Version"
 $BuildArgs = @("-OutputDir", $BuildDir)
 if ($Studio) { $BuildArgs += "-Studio" }
 & (Join-Path $PSScriptRoot "build_windows.ps1") @BuildArgs
-if ($LASTEXITCODE -ne 0) { throw "Windows本体ビルドに失敗しました。" }
+if ($LASTEXITCODE -ne 0) { throw "Windows app build failed." }
 
 $SourceDir = Join-Path $BuildDir "MiraiProductionOS"
-if (-not (Test-Path (Join-Path $SourceDir "MiraiProductionOS.exe"))) {
-    throw "MiraiProductionOS.exeを確認できません。"
-}
+$Exe = Join-Path $SourceDir "MiraiProductionOS.exe"
+if (-not (Test-Path $Exe)) { throw "MiraiProductionOS.exe was not produced." }
 
 $Portable = Join-Path $ReleaseDir ("MiraiProductionOS-" + $Version + "-Portable.zip")
 if (Test-Path $Portable) { Remove-Item -Force $Portable }
@@ -44,9 +43,7 @@ if (-not $MakeNsis) {
         if (Test-Path $candidate) { $MakeNsis = Get-Item $candidate; break }
     }
 }
-if (-not $MakeNsis) {
-    throw "NSIS makensis.exe が見つかりません。NSIS 3.xを導入してください。"
-}
+if (-not $MakeNsis) { throw "NSIS makensis.exe is unavailable." }
 
 $InstallerScript = Join-Path $PSScriptRoot "MiraiProductionOS.nsi"
 & $MakeNsis.Source `
@@ -57,7 +54,7 @@ $InstallerScript = Join-Path $PSScriptRoot "MiraiProductionOS.nsi"
 if ($LASTEXITCODE -ne 0) { throw "NSIS installer build failed." }
 
 $Installer = Join-Path $ReleaseDir ("MiraiProductionOS-" + $Version + "-Setup.exe")
-if (-not (Test-Path $Installer)) { throw "Installerを確認できません: $Installer" }
+if (-not (Test-Path $Installer)) { throw "Installer was not produced: $Installer" }
 
 $Artifacts = @($Installer, $Portable)
 $Manifest = @{}
@@ -82,8 +79,8 @@ $ManifestPayload = @{
 $ManifestPath = Join-Path $ReleaseDir "release-manifest.json"
 $ManifestPayload | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 -Path $ManifestPath
 
-Write-Host "[RELEASE] 完了"
+Write-Host "[RELEASE] Done."
 Write-Host "  Installer: $Installer"
 Write-Host "  Portable : $Portable"
 Write-Host "  Manifest : $ManifestPath"
-Write-Warning "コード署名は未実施です。正式販売前に署名証明書を設定してください。"
+Write-Warning "Code signing is not configured yet. Do not treat this as a signed commercial release."
