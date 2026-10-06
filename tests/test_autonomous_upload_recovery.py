@@ -534,9 +534,10 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
 
         run_start = source.index("def run(open_browser")
         run_block = source[run_start:]
-        self.assertLess(
-            run_block.index("worker.start()"),
-            run_block.index("if not automation_enabled():"),
+        self.assertIn("worker.start()", run_block)
+        self.assertNotIn(
+            "_ensure_local_services()",
+            run_block,
         )
 
     def test_web_worker_restarts_before_running_stale_code(self) -> None:
