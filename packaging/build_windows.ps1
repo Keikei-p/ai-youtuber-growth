@@ -43,16 +43,16 @@ $PyInstallerArgs = @(
     "--windowed",
     "--name", "MiraiProductionOS",
     "--distpath", $ResolvedOutputDir,
-    "--workpath", "build\pyinstaller",
-    "--specpath", "build\pyinstaller",
-    "--add-data", "assets;assets",
-    "--add-data", "character;character",
-    "--add-data", "automation;automation",
-    "--add-data", "docs;docs",
-    "--add-data", "THIRD_PARTY_NOTICES.md;.",
+    "--workpath", (Join-Path $RepoRoot "build\pyinstaller"),
+    "--specpath", (Join-Path $RepoRoot "build\pyinstaller"),
+    "--add-data", ((Join-Path $RepoRoot "assets") + ";assets"),
+    "--add-data", ((Join-Path $RepoRoot "character") + ";character"),
+    "--add-data", ((Join-Path $RepoRoot "automation") + ";automation"),
+    "--add-data", ((Join-Path $RepoRoot "docs") + ";docs"),
+    "--add-data", ((Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md") + ";."),
     "--hidden-import", "googleapiclient.discovery",
     "--hidden-import", "google_auth_oauthlib.flow",
-    "web_launcher.pyw"
+    (Join-Path $RepoRoot "web_launcher.pyw")
 )
 
 if ($Studio) {
