@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import os
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
 
 def _configure_console_encoding() -> None:
@@ -16,7 +17,46 @@ def _configure_console_encoding() -> None:
 
 
 _configure_console_encoding()
-load_dotenv()
+
+
+def is_packaged_runtime() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def default_user_data_root() -> Path:
+    """
+    開発中は従来どおりrepo相対。
+    Windows配布版だけユーザー書込み領域へ分離する。
+    """
+    explicit = os.getenv("MIRAI_USER_DATA_ROOT", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+
+    if is_packaged_runtime() and os.name == "nt":
+        local = os.getenv("LOCALAPPDATA", "").strip()
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        return base / "YOROKOBI" / "MiraiProductionOS"
+
+    return Path(".")
+
+
+def _runtime_default(relative: str) -> str:
+    root = default_user_data_root()
+    if root == Path("."):
+        return relative
+    return str(root / relative)
+
+
+def _load_runtime_env() -> None:
+    # 開発repoは従来の.env。配布版はAppData側.envを優先する。
+    if is_packaged_runtime():
+        env_file = default_user_data_root() / ".env"
+        load_dotenv(env_file)
+    else:
+        load_dotenv()
+
+
+_load_runtime_env()
 
 @dataclass(frozen=True)
 class Settings:
@@ -44,8 +84,8 @@ class Settings:
     )
 
     app_root: str = os.getenv("APP_ROOT", ".")
-    data_dir: str = os.getenv("DATA_DIR", "data")
-    output_dir: str = os.getenv("OUTPUT_DIR", "output")
+    data_dir: str = os.getenv("DATA_DIR", _runtime_default("data"))
+    output_dir: str = os.getenv("OUTPUT_DIR", _runtime_default("output"))
 
     # 制作実行場所。localは従来PC、cloudはHTTP Execution Worker。
     execution_mode: str = os.getenv("EXECUTION_MODE", "local")
@@ -70,8 +110,14 @@ class Settings:
         os.getenv("CLOUD_AUTONOMY_POLL_SECONDS", "60")
     )
     character_file: str = os.getenv("CHARACTER_FILE", "character/character.json")
-    youtube_client_secret_file: str = os.getenv("YOUTUBE_CLIENT_SECRET_FILE", "client_secret.json")
-    youtube_token_file: str = os.getenv("YOUTUBE_TOKEN_FILE", "token.json")
+    youtube_client_secret_file: str = os.getenv(
+        "YOUTUBE_CLIENT_SECRET_FILE",
+        _runtime_default("client_secret.json"),
+    )
+    youtube_token_file: str = os.getenv(
+        "YOUTUBE_TOKEN_FILE",
+        _runtime_default("token.json"),
+    )
 
     character_image: str = os.getenv(
         "CHARACTER_IMAGE",
