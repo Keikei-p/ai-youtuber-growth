@@ -366,7 +366,9 @@ def run_autonomous_recovery(
                 "true",
             )
 
-        retry_at = now + timedelta(minutes=2)
+        # runtime bootstrap/修復直後の同じtickでrun_due()へ渡す。
+        # 次の15分heartbeatまで不要に待たせない。
+        retry_at = now.replace(second=0, microsecond=0)
         learned = result["learned_action"]
         reason = (
             f"[AUTONOMOUS-REVIVE:{code}] "
