@@ -1069,6 +1069,64 @@ def queued_items() -> list[dict[str, Any]]:
         ).fetchall()
     return [dict(r) for r in rows]
 
+
+def failed_queue_items(limit: int = 20) -> list[dict[str, Any]]:
+    """
+    自動復旧対象を探すため、YouTube未投稿のfailedキューを取得する。
+    due_queue()はfailedを見ないため、ここが無いと一度circuit breakerへ
+    入った動画はコード修正後も永久に再試行されない。
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                q.id AS queue_id, q.video_id, q.scheduled_for, q.status,
+                q.attempts, q.error, q.created_at,
+                v.title, v.description, v.tags_json, v.guest_id,
+                v.script, v.output_path, v.thumbnail_path,
+                v.youtube_video_id
+            FROM posting_queue q
+            JOIN videos v ON v.id = q.video_id
+            WHERE q.status = 'failed'
+              AND v.youtube_video_id IS NULL
+            ORDER BY q.id ASC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 100)),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def revive_failed_queue(
+    queue_id: int,
+    scheduled_for: str,
+    *,
+    reason: str = "",
+) -> None:
+    """
+    修復済みのfailedキューを新しい試行として復活させる。
+    attempts=5のままqueuedへ戻してもdue_queue()のattempts < 5条件で
+    永久に実行されないため、必ず0へリセットする。
+    """
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE posting_queue
+            SET scheduled_for = ?,
+                status = 'queued',
+                uploaded_at = NULL,
+                error = ?,
+                attempts = 0
+            WHERE id = ?
+              AND status = 'failed'
+            """,
+            (
+                str(scheduled_for),
+                str(reason)[:1000],
+                int(queue_id),
+            ),
+        )
+
 def occupied_schedule_times() -> set[str]:
     with connect() as conn:
         rows = conn.execute(
