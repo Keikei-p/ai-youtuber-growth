@@ -36,20 +36,28 @@ $Portable = Join-Path $ReleaseDir ("MiraiProductionOS-" + $Version + "-Portable.
 if (Test-Path $Portable) { Remove-Item -Force $Portable }
 Compress-Archive -Path (Join-Path $SourceDir "*") -DestinationPath $Portable -CompressionLevel Optimal
 
-$MakeNsis = Get-Command makensis.exe -ErrorAction SilentlyContinue
-if (-not $MakeNsis) {
+$MakeNsisCommand = Get-Command makensis.exe -ErrorAction SilentlyContinue
+$MakeNsisPath = ""
+if ($MakeNsisCommand) {
+    $MakeNsisPath = $MakeNsisCommand.Source
+}
+if (-not $MakeNsisPath) {
     $Candidates = @(
         "C:\Program Files (x86)\NSIS\makensis.exe",
         "C:\Program Files\NSIS\makensis.exe"
     )
     foreach ($candidate in $Candidates) {
-        if (Test-Path $candidate) { $MakeNsis = Get-Item $candidate; break }
+        if (Test-Path $candidate) {
+            $MakeNsisPath = $candidate
+            break
+        }
     }
 }
-if (-not $MakeNsis) { throw "NSIS makensis.exe is unavailable." }
+if (-not $MakeNsisPath) { throw "NSIS makensis.exe is unavailable." }
 
 $InstallerScript = Join-Path $PSScriptRoot "MiraiProductionOS.nsi"
-& $MakeNsis.Source `
+Write-Host "[RELEASE] NSIS: $MakeNsisPath"
+& $MakeNsisPath `
     "/DPRODUCT_VERSION=$Version" `
     "/DSOURCE_DIR=$SourceDir" `
     "/DOUTPUT_DIR=$ReleaseDir" `
