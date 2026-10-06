@@ -53,7 +53,7 @@ Section "Mirai Production OS" SEC_MAIN
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiraiProductionOS" "DisplayVersion" "${PRODUCT_VERSION}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiraiProductionOS" "Publisher" "${PRODUCT_PUBLISHER}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiraiProductionOS" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiraiProductionOS" "UninstallString" ' "$INSTDIR\Uninstall.exe" '
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiraiProductionOS" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiraiProductionOS" "NoModify" 1
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\MiraiProductionOS" "NoRepair" 1
 
