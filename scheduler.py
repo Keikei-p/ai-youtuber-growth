@@ -17,6 +17,7 @@ from main import load_character, render_results, run_generation
 from paths import VIDEO_DIR
 from native_models.auto_train import maybe_run_native_retraining
 from resource_governor import background_production_decision
+from runtime_bootstrap import bootstrap_runtime
 from resilience_learning import record_stage_success
 from self_improvement import (
     maybe_run_improvement_review,
@@ -808,9 +809,6 @@ def prepare_upcoming() -> None:
         )
         return
 
-    if not _generation_runtime_ready():
-        return
-
     now = _now()
     queued = queued_items()
     future_queued = [
@@ -906,6 +904,23 @@ def prepare_upcoming() -> None:
         f"[RESOURCE] 制作開始 mode={decision.mode}: "
         f"{decision.reason}"
     )
+
+    # 本当に不足分を生成する時だけAIサービスを起動する。
+    # 以前はキューが十分でも毎tick Ollama/VOICEVOX/FFmpeg確認が走っていた。
+    runtime = bootstrap_runtime()
+    if not bool(runtime.get("ready")):
+        print(
+            "[SCHEDULE] 制作runtimeが未準備のため今回は延期: "
+            + ", ".join(
+                str(x)
+                for x in (runtime.get("blockers") or [])
+            )
+        )
+        set_channel_state(
+            "runtime_resource_mode",
+            "",
+        )
+        return
 
     try:
         results = run_generation(
