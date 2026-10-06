@@ -153,6 +153,60 @@ jobs:
             if (-not $entry) { throw "manifest entry missing: $name" }
             if ($actual -ne $entry.sha256) { throw "hash mismatch: $name" }
           }
+      - name: Install launch uninstall lifecycle smoke
+        shell: pwsh
+        run: |
+          $installer = Resolve-Path "dist/release/MiraiProductionOS-0.12.0-ci-Setup.exe"
+          $installRoot = Join-Path $env:RUNNER_TEMP "MiraiInstalled"
+          $userRoot = Join-Path $env:LOCALAPPDATA "YOROKOBI\MiraiProductionOS"
+          New-Item -ItemType Directory -Force -Path $userRoot | Out-Null
+          $sentinel = Join-Path $userRoot "ci-preserve-test.txt"
+          "preserve-me" | Set-Content -Encoding ascii -Path $sentinel
+
+          $install = Start-Process -FilePath $installer -ArgumentList @(
+            "/S",
+            "/D=$installRoot"
+          ) -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "silent installer failed: $($install.ExitCode)"
+          }
+
+          $appExe = Join-Path $installRoot "MiraiProductionOS.exe"
+          if (-not (Test-Path $appExe)) {
+            throw "installed executable missing: $appExe"
+          }
+
+          $env:MIRAI_USER_DATA_ROOT = Join-Path $env:RUNNER_TEMP "mirai-runtime-smoke"
+          $process = Start-Process -FilePath $appExe -PassThru
+          Start-Sleep -Seconds 5
+          if ($process.HasExited) {
+            throw "installed executable exited during startup smoke: $($process.ExitCode)"
+          }
+          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+
+          $uninstaller = Join-Path $installRoot "Uninstall.exe"
+          if (-not (Test-Path $uninstaller)) {
+            throw "uninstaller missing: $uninstaller"
+          }
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) {
+            throw "silent uninstall failed: $($uninstall.ExitCode)"
+          }
+          Start-Sleep -Seconds 2
+
+          if (Test-Path $installRoot) {
+            $remaining = Get-ChildItem -Force $installRoot -ErrorAction SilentlyContinue
+            if ($remaining) {
+              throw "install directory still contains files after uninstall"
+            }
+          }
+          if (-not (Test-Path $sentinel)) {
+            throw "user data was removed by uninstall"
+          }
+          if ((Get-Content -Raw $sentinel).Trim() -ne "preserve-me") {
+            throw "user data was modified by uninstall"
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: mirai-windows-package-smoke
