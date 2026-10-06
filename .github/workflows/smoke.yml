@@ -40,6 +40,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_disable.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_status.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw packaging/build_windows.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw packaging/build_release.ps1)) | Out-Null
       - run: python main.py --show
         env:
           POSTS_PER_DAY: "3"
@@ -114,3 +115,47 @@ jobs:
         run: |
           python -c "import webapp; print('webapp import ok')"
           python main.py --show
+
+  windows-package-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install packaging tools
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg -y --no-progress
+          }
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+          }
+      - name: Build real Windows distributables
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging/build_release.ps1 -Version "0.12.0-ci"
+      - name: Verify installer, portable zip and hashes
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw dist/release/release-manifest.json | ConvertFrom-Json
+          $expected = @(
+            "MiraiProductionOS-0.12.0-ci-Setup.exe",
+            "MiraiProductionOS-0.12.0-ci-Portable.zip"
+          )
+          foreach ($name in $expected) {
+            $path = Join-Path "dist/release" $name
+            if (-not (Test-Path $path)) { throw "missing artifact: $name" }
+            if (-not (Test-Path ($path + ".sha256"))) { throw "missing hash: $name" }
+            $actual = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
+            $entry = $manifest.artifacts.$name
+            if (-not $entry) { throw "manifest entry missing: $name" }
+            if ($actual -ne $entry.sha256) { throw "hash mismatch: $name" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mirai-windows-package-smoke
+          path: dist/release/*
+          if-no-files-found: error
+
