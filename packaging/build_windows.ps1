@@ -7,6 +7,12 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
+if ([System.IO.Path]::IsPathRooted($OutputDir)) {
+    $ResolvedOutputDir = $OutputDir
+} else {
+    $ResolvedOutputDir = Join-Path $RepoRoot $OutputDir
+}
+
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (Test-Path $VenvPython) {
     $Python = $VenvPython
@@ -36,7 +42,7 @@ $PyInstallerArgs = @(
     "--onedir",
     "--windowed",
     "--name", "MiraiProductionOS",
-    "--distpath", $OutputDir,
+    "--distpath", $ResolvedOutputDir,
     "--workpath", "build\pyinstaller",
     "--specpath", "build\pyinstaller",
     "--add-data", "assets;assets",
@@ -61,7 +67,7 @@ Write-Host "[PACKAGING] Building Mirai Production OS."
 & $Python @Args
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
-$Target = Join-Path $RepoRoot ($OutputDir + "\MiraiProductionOS")
+$Target = Join-Path $ResolvedOutputDir "MiraiProductionOS"
 if (-not (Test-Path $Target)) { throw "Build output not found: $Target" }
 
 @"
