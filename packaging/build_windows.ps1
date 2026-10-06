@@ -29,7 +29,7 @@ if ($Studio) {
     if ($LASTEXITCODE -ne 0) { throw "Studio Pack dependencies failed." }
 }
 
-$Args = @(
+$PyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
     "--clean",
@@ -50,7 +50,7 @@ $Args = @(
 )
 
 if ($Studio) {
-    $Args += @(
+    $PyInstallerArgs += @(
         "--hidden-import", "torch",
         "--collect-submodules", "diffusers",
         "--collect-submodules", "transformers"
