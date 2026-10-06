@@ -48,6 +48,12 @@ from maintenance import compact_runtime_storage, rotate_log, storage_snapshot
 from quick_test import run_quick_diagnostics
 from paths import VIDEO_DIR
 from product_core import product_status, safe_support_snapshot
+from onboarding import (
+    connect_youtube_interactive,
+    disconnect_youtube,
+    onboarding_status,
+    save_youtube_client_secret,
+)
 from mobile_pairing import (
     bearer_token,
     create_pairing_token,
@@ -180,6 +186,15 @@ def _cached_dashboard_block(
     with _dashboard_cache_lock:
         _dashboard_cache[key] = (now, value)
     return value
+
+
+def _invalidate_dashboard_cache(*keys: str) -> None:
+    with _dashboard_cache_lock:
+        if keys:
+            for key in keys:
+                _dashboard_cache.pop(key, None)
+        else:
+            _dashboard_cache.clear()
 
 
 def _cached_auto_post_health(*, force: bool = False) -> dict:
@@ -763,6 +778,11 @@ def _status_payload() -> dict:
             _growth_status,
         ),
         "full_test": full_test_status(),
+        "onboarding": _cached_dashboard_block(
+            "onboarding",
+            45,
+            onboarding_status,
+        ),
         "product": _cached_dashboard_block(
             "product",
             120,
@@ -1466,6 +1486,46 @@ body.app-ready .grid>.card.app-active{display:block}
   <div class="page-title"><h2 id="currentPageTitle">ホーム</h2></div>
 
   <div class="grid">
+    <section class="card full">
+      <h2>初回セットアップ</h2>
+      <div id="setupOverall" class="studio-status small"></div>
+      <div class="row">
+        <span>1. YouTube OAuth設定</span>
+        <span id="setupClientSecret" class="badge"></span>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        <input id="youtubeClientSecretFile" type="file" accept=".json,application/json" style="flex:1;min-width:220px">
+        <button onclick="saveYouTubeClientSecret()">OAuth JSONを登録</button>
+      </div>
+      <div class="small" style="margin-top:8px">
+        Google Cloudで「デスクトップアプリ」のOAuthクライアントを作成し、ダウンロードしたJSONを選択します。
+        ファイルの中身は画面やログへ表示しません。
+      </div>
+
+      <div class="row" style="margin-top:16px">
+        <span>2. YouTube認証</span>
+        <span id="setupYoutubeAuth" class="badge"></span>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        <button class="primary" onclick="connectYouTube()">YouTubeへ接続</button>
+        <button onclick="disconnectYouTube()">YouTube認証を解除</button>
+      </div>
+
+      <div class="row" style="margin-top:16px">
+        <span>3. 制作環境</span>
+        <span id="setupRuntime" class="badge"></span>
+      </div>
+      <div id="setupRuntimeDetail" class="small" style="margin-top:8px"></div>
+      <div class="actions" style="margin-top:10px">
+        <button onclick="runAction('services')">必要サービスを起動/再確認</button>
+      </div>
+
+      <div class="small" style="margin-top:12px">
+        ミライは起動しただけではOllama・VOICEVOXなどの重いAIサービスを立ち上げません。
+        動画制作が必要な時、または上の確認ボタンを押した時だけ起動します。
+      </div>
+    </section>
+
     <section class="card">
       <h2>自動運転</h2>
       <div class="row"><span>Web自動運転</span><button id="automationBtn" onclick="toggleAutomation()"></button></div>
@@ -1802,6 +1862,7 @@ body.app-ready .grid>.card.app-active{display:block}
 let state=null;
 let currentAppPage='home';
 const appPageMap={
+  '初回セットアップ':'home',
   '自動運転':'settings',
   '毎日自動投稿':'settings',
   'システム状態':'home',
@@ -1862,6 +1923,28 @@ function badge(ok){return '<span class="badge '+(ok?'ok':'ng')+'">'+(ok?'OK':'NG
 async function refresh(){
   try{
     state=await api('/api/status');
+    const onboarding=state.onboarding||{};
+    const onboardingYoutube=onboarding.youtube||{};
+    const onboardingClient=onboardingYoutube.client_secret||{};
+    setupClientSecret.textContent=onboardingClient.valid?'OK':'未設定';
+    setupClientSecret.className='badge '+(onboardingClient.valid?'ok':'ng');
+    setupYoutubeAuth.textContent=onboardingYoutube.ready?'接続済み':'未接続';
+    setupYoutubeAuth.className='badge '+(onboardingYoutube.ready?'ok':'ng');
+    const setupServices=state.services||{};
+    const setupExecution=state.execution||{};
+    const setupRuntimeOk=setupExecution.mode==='cloud'
+      ? Boolean(setupServices.ollama&&setupExecution.cloud_configured)
+      : Boolean(setupServices.ollama&&setupServices.voice&&setupServices.ffmpeg);
+    setupRuntime.textContent=setupRuntimeOk?'準備OK':'要確認';
+    setupRuntime.className='badge '+(setupRuntimeOk?'ok':'ng');
+    setupRuntimeDetail.textContent=setupExecution.mode==='cloud'
+      ? ('Cloud制作 / Ollama '+(setupServices.ollama?'OK':'未起動')+' / Cloud '+(setupExecution.cloud_configured?'OK':'未設定'))
+      : ('このPC / Ollama '+(setupServices.ollama?'OK':'未起動')+' / Voice '+(setupServices.voice?'OK':'未起動')+' / FFmpeg '+(setupServices.ffmpeg?'OK':'未検出'));
+    const setupReady=Boolean(onboardingYoutube.ready&&setupRuntimeOk);
+    setupOverall.textContent=setupReady
+      ? '✅ 初回セットアップ完了。完全自動運用を開始できます。'
+      : ('あと少しです。'+String(onboardingYoutube.detail||'上から順に設定してください。'));
+    setupOverall.className='studio-status small '+(setupReady?'ok':'');
     automationBtn.textContent=state.automation_enabled?'ON':'OFF';
     automationBtn.className=state.automation_enabled?'primary':'';
     uploadBtn.textContent=state.auto_upload_enabled?'ON':'OFF';
@@ -2520,6 +2603,50 @@ async function smartUpdate(){
     },1000);
   }catch(e){alert(e.message)}
 }
+async function saveYouTubeClientSecret(){
+  const input=youtubeClientSecretFile;
+  const file=input.files&&input.files[0];
+  if(!file){alert('Google CloudからダウンロードしたOAuth JSONを選択してください。');return;}
+  if(file.size>1024*1024){alert('OAuth JSONのサイズが大きすぎます。');return;}
+  try{
+    const raw=await file.text();
+    const parsed=JSON.parse(raw);
+    const data=await api('/api/onboarding/client-secret',{client_secret:parsed});
+    input.value='';
+    alert(data.message);
+    await refresh();
+  }catch(e){
+    alert('OAuth JSONを登録できません: '+e.message);
+  }
+}
+async function connectYouTube(){
+  if(!confirm('Googleの認証画面を開いて、このミライが使用するYouTubeチャンネルへ接続します。続けますか？')) return;
+  try{
+    const data=await api('/api/onboarding/youtube-connect',{});
+    alert(data.message);
+    let tries=0;
+    const poll=setInterval(async()=>{
+      tries++;
+      try{
+        await refresh();
+        if((state.onboarding?.youtube||{}).ready||tries>=60){
+          clearInterval(poll);
+        }
+      }catch(e){
+        if(tries>=60) clearInterval(poll);
+      }
+    },2000);
+  }catch(e){alert(e.message)}
+}
+async function disconnectYouTube(){
+  if(!confirm('保存済みYouTube認証を解除しますか？\nOAuth設定ファイル自体は残します。')) return;
+  try{
+    const data=await api('/api/onboarding/disconnect',{});
+    alert(data.message);
+    await refresh();
+  }catch(e){alert(e.message)}
+}
+
 async function createMobilePairing(){
   try{
     const data=await api('/api/mobile/pairing',{action:'create'});
@@ -2649,6 +2776,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/support-snapshot":
             self._json(safe_support_snapshot(ROOT))
+            return
+
+        if path == "/api/onboarding":
+            self._json(onboarding_status())
             return
 
         if path == "/api/mobile/pairing-status":
@@ -2782,6 +2913,85 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = self._read_json()
+
+            if path == "/api/onboarding/client-secret":
+                payload = body.get("client_secret")
+                if not isinstance(payload, dict):
+                    self._json(
+                        {"message": "OAuth JSONが必要です。"},
+                        400,
+                    )
+                    return
+                try:
+                    save_youtube_client_secret(payload)
+                except ValueError as exc:
+                    self._json({"message": str(exc)}, 400)
+                    return
+                _invalidate_dashboard_cache(
+                    "onboarding",
+                    "services",
+                )
+                self._json({
+                    "ok": True,
+                    "message": (
+                        "YouTube OAuth設定を安全に保存しました。"
+                        " 次に「YouTubeへ接続」を押してください。"
+                    ),
+                })
+                return
+
+            if path == "/api/onboarding/youtube-connect":
+                current = onboarding_status()
+                if not bool(
+                    (current.get("youtube") or {})
+                    .get("client_secret", {})
+                    .get("valid")
+                ):
+                    self._json(
+                        {"message": "先にOAuth JSONを登録してください。"},
+                        400,
+                    )
+                    return
+
+                def youtube_connect_runner():
+                    result = _run_captured(
+                        "YouTube初回認証",
+                        lambda: connect_youtube_interactive(),
+                    )
+                    _invalidate_dashboard_cache(
+                        "onboarding",
+                        "services",
+                    )
+                    _append_log(
+                        result.get("message", "")
+                    )
+
+                threading.Thread(
+                    target=youtube_connect_runner,
+                    daemon=True,
+                ).start()
+                self._json({
+                    "ok": True,
+                    "message": (
+                        "YouTube認証を開始しました。"
+                        " Googleの認証画面で接続を完了してください。"
+                    ),
+                })
+                return
+
+            if path == "/api/onboarding/disconnect":
+                disconnect_youtube(
+                    remove_client_secret=False,
+                )
+                _invalidate_dashboard_cache(
+                    "onboarding",
+                    "services",
+                )
+                self._json({
+                    "ok": True,
+                    "message": "YouTube認証を解除しました。",
+                })
+                return
 
             if path == "/api/mobile/pairing":
                 action = str(
@@ -3421,11 +3631,8 @@ def run(open_browser: bool = True) -> None:
     )
     worker.start()
 
-    # 自動運転中はworkerが「投稿判定→サービス起動」の順で行う。
-    # 自動運転OFF時だけ、手動スタジオ利用のためここでサービスを準備する。
-    if not automation_enabled():
-        _ensure_local_services()
-
+    # 起動直後は常に軽量。AIサービスは動画生成が必要になった時、
+    # またはユーザーが明示的に「AIサービスを起動/再確認」を押した時だけ準備する。
     _consume_full_test_request()
 
     print(f"[WEB] ミライ管理画面: {url}")
