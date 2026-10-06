@@ -64,7 +64,7 @@ if ($Studio) {
 }
 
 Write-Host "[PACKAGING] Building Mirai Production OS."
-& $Python @Args
+& $Python @PyInstallerArgs
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
 $Target = Join-Path $ResolvedOutputDir "MiraiProductionOS"
