@@ -521,15 +521,16 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
         self.assertIn("MIRAI_RECOVERY_TRIGGERS", install)
         self.assertIn("@(5, 15, 30, 60)", install)
 
-    def test_web_cycle_runs_due_before_service_startup(self) -> None:
+    def test_web_cycle_runs_due_before_heavy_generation_cycle(self) -> None:
         source = Path("webapp.py").read_text(encoding="utf-8")
         worker_start = source.index("def _cycle_worker")
         worker_end = source.index("def _read_log_tail", worker_start)
         worker = source[worker_start:worker_end]
         self.assertLess(
             worker.index('期限投稿優先'),
-            worker.index("_ensure_local_services()"),
+            worker.index('自動サイクル'),
         )
+        self.assertNotIn("_ensure_local_services()", worker)
 
         run_start = source.index("def run(open_browser")
         run_block = source[run_start:]
