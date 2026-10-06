@@ -36,4 +36,9 @@ iOSはmacOS + Xcode環境で `npm run cap:add:ios` / `npm run cap:open:ios` を�
 
 ## セキュリティ
 
-モバイルAPIはBearer接続コード必須です。接続コードはPC側にはSHA-256のみ保存します。端末紛失時はPC版から「接続を解除」で即時無効化できます。
+モバイルAPIはBearer接続コード必須です。接続コードはPC側にはSHA-256のみ保存します。スマホ側はAndroid Keystore / iOS Keychainへ保存し、通常のlocalStorageへは保存しません。端末紛失時はPC版から「接続を解除」で即時無効化できます。
+
+
+## CIでのAndroid実ビルド
+
+Pull RequestごとにNode 24 + Java 21 + Android SDK 36でCapacitor Androidプロジェクトを生成し、`assembleDebug` まで実行します。生成されたdebug APKはCI artifactとして保存します。本番販売には別途release署名が必要です。
