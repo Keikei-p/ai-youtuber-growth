@@ -323,6 +323,31 @@ def run_autonomous_recovery(
             )
             continue
 
+        if (
+            code in {
+                "missing_file",
+                "youtube_processing_failed",
+            }
+            and not bool(
+                (result.get("runtime") or {}).get(
+                    "ready",
+                    False,
+                )
+            )
+        ):
+            result["blocked"].append(
+                {
+                    "queue_id": queue_id,
+                    "video_id": video_id,
+                    "code": code,
+                    "detail": (
+                        "動画再生成が必要ですが、"
+                        "Ollama/音声/FFmpegの復旧待ちです"
+                    ),
+                }
+            )
+            continue
+
         if code == "quota":
             scheduled_raw = str(
                 row.get("scheduled_for") or ""
