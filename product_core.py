@@ -14,7 +14,7 @@ from storage import get_channel_state, init_db
 
 
 PRODUCT_NAME = "Mirai Production OS"
-PRODUCT_VERSION = "0.11.0-beta"
+PRODUCT_VERSION = "0.12.0-beta"
 PRODUCT_CHANNEL = "beta"
 PRODUCT_EDITION = "creator"
 
@@ -80,7 +80,12 @@ def product_readiness(root: Path) -> dict[str, Any]:
         _check(
             "windows_packaging",
             "Windows配布ビルド",
-            (root / "packaging" / "build_windows.ps1").is_file(),
+            (
+                (root / "packaging" / "build_windows.ps1").is_file()
+                and (root / "packaging" / "build_release.ps1").is_file()
+                and (root / "packaging" / "MiraiProductionOS.nsi").is_file()
+            ),
+            "NSIS installer / Portable ZIP / SHA-256 manifest",
         ),
         _check(
             "support_diagnostics",
