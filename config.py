@@ -32,10 +32,18 @@ def default_user_data_root() -> Path:
     if explicit:
         return Path(explicit).expanduser()
 
-    if is_packaged_runtime() and os.name == "nt":
+    if is_packaged_runtime():
         local = os.getenv("LOCALAPPDATA", "").strip()
-        base = Path(local) if local else Path.home() / "AppData" / "Local"
-        return base / "YOROKOBI" / "MiraiProductionOS"
+        if local:
+            return Path(local) / "YOROKOBI" / "MiraiProductionOS"
+        if os.name == "nt":
+            return (
+                Path.home()
+                / "AppData"
+                / "Local"
+                / "YOROKOBI"
+                / "MiraiProductionOS"
+            )
 
     return Path(".")
 
