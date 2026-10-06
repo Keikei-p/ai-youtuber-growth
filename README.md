@@ -183,6 +183,21 @@ Tailscale Serveを使い、同じtailnet内のスマホからのみ状態確認�
 
 `automation/install_windows_task.ps1` で WakeToRun / StartWhenAvailable / 多重起動防止を設定します。
 
+## 軽量製品モード / 販売準備
+
+Mirai Production OSは、待機中を軽く保ち、生成が必要な瞬間だけ重いAIサービスを起動する方針です。
+
+- 投稿キューが十分ならOllama / VOICEVOX / Studioを起動しない
+- 管理画面のGPU / Studio / Native状態は短時間キャッシュ
+- ブラウザがバックグラウンドなら状態更新頻度を下げる
+- 動画生成・品質検査は必要時のみ実行
+- 製品状態は管理画面の「製品化・販売準備」で確認
+- サポート診断はAPIキー、OAuth token、client_secret、.env本文を含めない
+- Windows配布ビルド入口は packaging/build_windows.ps1
+- 正式販売前チェックは docs/PRODUCT_RELEASE_CHECKLIST.md
+
+スマホ版は、重い生成処理をスマホ内へ移すのではなく、PC/Cloud側のMiraiを操作・監視するコントローラーとして設計します。これにより端末性能に依存しにくく、アプリを閉じてもサーバー側の自動運転を継続できる構成へ発展できます。
+
 ## テスト
 
 GitHub Actionsでは毎pushで以下を確認します。

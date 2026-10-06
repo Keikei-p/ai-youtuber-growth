@@ -17,6 +17,7 @@ from main import load_character, render_results, run_generation
 from paths import VIDEO_DIR
 from native_models.auto_train import maybe_run_native_retraining
 from resource_governor import background_production_decision
+from runtime_bootstrap import bootstrap_runtime
 from resilience_learning import record_stage_success
 from self_improvement import (
     maybe_run_improvement_review,
@@ -763,26 +764,41 @@ def ensure_first_episode_delivery() -> dict:
 
 
 def _generation_runtime_ready() -> bool:
-    problems: list[str] = []
-    if not OllamaClient().available():
-        problems.append("Ollama")
+    """
+    動画生成が本当に必要になった時だけAIサービスを起動・確認する。
+    待機中のtickでは呼ばない。
 
-    # cloudでは画像/音声/FFmpeg/品質検査をWorker側で実行する。
-    # 現段階の企画・台本はローカルOllamaを使うためOllamaだけ確認する。
-    if execution_mode() == "local":
-        voice_status = voice_provider_status()
-        if not voice_status["available"]:
-            problems.append(f"Voice({voice_status['name']})")
-        if not shutil.which("ffmpeg"):
-            problems.append("FFmpeg")
-
-    if problems:
+    Cloud制作ではメディア依存はWorker側が持つため、
+    ローカルは企画用Ollamaだけ確認する。
+    """
+    if execution_mode() == "cloud":
+        if OllamaClient().available():
+            return True
         print(
-            "[SCHEDULE] 動画生成を見送ります。未起動/未検出: "
-            + ", ".join(problems)
+            "[SCHEDULE] Cloud制作の企画用Ollamaへ接続できません。"
         )
         return False
-    return True
+
+    try:
+        runtime = bootstrap_runtime()
+    except Exception as exc:
+        print(
+            "[SCHEDULE] 制作runtimeの自動起動に失敗: "
+            + str(exc)
+        )
+        return False
+
+    if bool(runtime.get("ready")):
+        return True
+
+    print(
+        "[SCHEDULE] 制作runtimeが未準備のため今回は延期: "
+        + ", ".join(
+            str(x)
+            for x in (runtime.get("blockers") or [])
+        )
+    )
+    return False
 
 def prepare_upcoming() -> None:
     """
@@ -806,9 +822,6 @@ def prepare_upcoming() -> None:
             "[EPISODE-1] 第1話がYouTubeへ届くまで"
             "2話以降の自動生成を保留します。"
         )
-        return
-
-    if not _generation_runtime_ready():
         return
 
     now = _now()
@@ -906,6 +919,15 @@ def prepare_upcoming() -> None:
         f"[RESOURCE] 制作開始 mode={decision.mode}: "
         f"{decision.reason}"
     )
+
+    # 本当に不足分を生成する時だけAIサービスを起動する。
+    # 既存のruntime gateを維持し、内部でbootstrapする。
+    if not _generation_runtime_ready():
+        set_channel_state(
+            "runtime_resource_mode",
+            "",
+        )
+        return
 
     try:
         results = run_generation(

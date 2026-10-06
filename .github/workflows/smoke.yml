@@ -34,6 +34,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_enable.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_disable.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_status.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw packaging/build_windows.ps1)) | Out-Null
       - run: python main.py --show
         env:
           POSTS_PER_DAY: "3"
@@ -73,6 +74,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_enable.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_disable.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_status.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw packaging/build_windows.ps1)) | Out-Null
 
           if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) {
             throw "schtasks.exe is unavailable"
