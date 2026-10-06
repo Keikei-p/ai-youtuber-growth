@@ -14,7 +14,7 @@ from storage import get_channel_state, init_db
 
 
 PRODUCT_NAME = "Mirai Production OS"
-PRODUCT_VERSION = "0.10.0-beta"
+PRODUCT_VERSION = "0.11.0-beta"
 PRODUCT_CHANNEL = "beta"
 PRODUCT_EDITION = "creator"
 
@@ -89,10 +89,14 @@ def product_readiness(root: Path) -> dict[str, Any]:
             "APIキー・OAuth token・secret本文を返さない設計",
         ),
         _check(
-            "mobile_binary",
-            "iOS / Android実アプリ",
-            (root / "mobile" / "package.json").is_file(),
-            "スマホ操作API基盤はあるが、ストア提出用バイナリは未作成。",
+            "mobile_source",
+            "iOS / Androidアプリソース",
+            (
+                (root / "mobile" / "package.json").is_file()
+                and (root / "mobile" / "www" / "app.js").is_file()
+                and (root / "mobile" / "capacitor.config.json").is_file()
+            ),
+            "Capacitor 8の軽量コントローラー。ストア署名済みバイナリは未作成。",
             required_for_sale=False,
         ),
         _check(

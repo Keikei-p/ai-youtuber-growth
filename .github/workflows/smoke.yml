@@ -22,6 +22,11 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m compileall -q .
       - run: python -m unittest discover -s tests -v
+      - name: Check mobile controller source
+        run: |
+          node --check mobile/www/app.js
+          python -m json.tool mobile/package.json > /dev/null
+          python -m json.tool mobile/capacitor.config.json > /dev/null
       - name: Check Native Model Lab status
         run: python native_model_lab.py --status
       - name: PowerShell syntax check
@@ -62,6 +67,12 @@ jobs:
         run: python -m compileall -q .
       - name: Run all tests on Windows
         run: python -m unittest discover -s tests -v
+      - name: Check mobile controller source
+        shell: pwsh
+        run: |
+          node --check mobile/www/app.js
+          python -m json.tool mobile/package.json | Out-Null
+          python -m json.tool mobile/capacitor.config.json | Out-Null
       - name: Check Native Model Lab status
         run: python native_model_lab.py --status
       - name: Validate Windows automation scripts

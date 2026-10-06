@@ -51,13 +51,19 @@
 - [ ] ESET/Defender等で誤検知テスト
 
 ## 7. スマホ
-- [ ] モバイル専用UI
-- [ ] 認証
-- [ ] Androidパッケージ
-- [ ] iOSパッケージ
+- [x] モバイル専用の軽量コントローラーUI
+- [x] 端末ペアリングtoken認証（PC側はSHA-256のみ保存）
+- [x] Capacitor 8アプリソース
+- [ ] Androidネイティブプロジェクト生成・署名
+- [ ] Google Play提出時はAndroid 16 / API 36以上をtarget
+- [ ] iOSネイティブプロジェクト生成・Apple Signing
+- [ ] App Store ConnectへPrivacy Policy URLを設定
 - [ ] Push通知
 - [ ] App Store / Google Play用スクリーンショット・説明文・プライバシー申告
 - [ ] ストア審査
+- [ ] 将来Mirai独自アカウントを導入する場合、アプリ内アカウント削除を実装
+- [ ] Google Playでアカウントを導入する場合、アプリ外の削除申請導線も用意
+- [ ] 接続tokenの端末保存をKeychain / Android Keystoreへ移行（正式販売前）
 
 ## 8. リリース判定
 正式販売は「動く」だけではなく、導入・更新・復旧・権利・決済・サポートを含めて判断する。

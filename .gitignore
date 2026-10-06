@@ -11,6 +11,7 @@ logs/
 build/
 dist/
 *.spec
+mobile/node_modules/
 assets/guests/*.png
 assets/generated/
 assets/studio_index.json
