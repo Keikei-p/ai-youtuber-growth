@@ -153,6 +153,25 @@ _process_git_sha = ""
 _auto_post_health_cache_at = 0.0
 _auto_post_health_cache: dict = {}
 _last_platform_autonomy_heal_at = 0.0
+_dashboard_cache_lock = threading.Lock()
+_dashboard_cache: dict[str, tuple[float, object]] = {}
+
+
+def _cached_dashboard_block(
+    key: str,
+    ttl_seconds: float,
+    builder,
+):
+    now = time.time()
+    with _dashboard_cache_lock:
+        cached = _dashboard_cache.get(key)
+        if cached and now - cached[0] < max(1.0, ttl_seconds):
+            return cached[1]
+
+    value = builder()
+    with _dashboard_cache_lock:
+        _dashboard_cache[key] = (now, value)
+    return value
 
 
 def _cached_auto_post_health(*, force: bool = False) -> dict:
@@ -366,7 +385,8 @@ def _cycle_worker() -> None:
                         + str(due_result.get("message") or "")
                     )
 
-                _ensure_local_services()
+                # AIサービスはschedulerが「生成が必要」と判断した時だけ起動する。
+                # 常駐時は軽量な投稿確認・状態管理だけで待機する。
                 result = _run_captured("自動サイクル", tick)
                 with _state_lock:
                     _last_cycle_at = datetime.now().isoformat(timespec="seconds")
@@ -632,7 +652,11 @@ def _status_payload() -> dict:
         current_job = _current_job
         current_job_started_at = _current_job_started_at
 
-    services = _service_status()
+    services = _cached_dashboard_block(
+        "services",
+        20,
+        _service_status,
+    )
     auto_post_health = _cached_auto_post_health()
 
     execution = execution_status()
@@ -661,13 +685,33 @@ def _status_payload() -> dict:
         "guest_image_auto_enabled": guest_image_auto_enabled(),
         "ai_video_enabled": ai_video_enabled(),
         "ai_video_license_confirmed": ai_video_license_confirmed(),
-        "ai_video": ai_video_status(),
+        "ai_video": _cached_dashboard_block(
+            "ai_video",
+            90,
+            ai_video_status,
+        ),
         "improvement": improvement_state(),
         "autonomy": autonomy_state(),
-        "resource": resource_snapshot(),
-        "studio": studio_status(),
-        "gpu": gpu_snapshot(),
-        "studio_assets": _studio_assets(),
+        "resource": _cached_dashboard_block(
+            "resource",
+            15,
+            resource_snapshot,
+        ),
+        "studio": _cached_dashboard_block(
+            "studio",
+            90,
+            studio_status,
+        ),
+        "gpu": _cached_dashboard_block(
+            "gpu",
+            15,
+            gpu_snapshot,
+        ),
+        "studio_assets": _cached_dashboard_block(
+            "studio_assets",
+            45,
+            _studio_assets,
+        ),
         "visual_runtime": visual_runtime_settings(),
         "storage": _cached_storage_snapshot(),
         "quick_diagnostics_last": get_channel_state(
@@ -681,15 +725,35 @@ def _status_payload() -> dict:
         },
         "native_voice": _cached_native_voice_status(),
         "text_ai": text_ai_status(),
-        "native_models": migration_summary(),
-        "evolution": evolution_status(),
-        "engines": _engine_status(),
+        "native_models": _cached_dashboard_block(
+            "native_models",
+            120,
+            migration_summary,
+        ),
+        "evolution": _cached_dashboard_block(
+            "evolution",
+            60,
+            evolution_status,
+        ),
+        "engines": _cached_dashboard_block(
+            "engines",
+            60,
+            _engine_status,
+        ),
         "rights": _rights_status(),
         "system_ready": system_ready,
         "queue": _queue_status(),
-        "videos": _video_status(),
+        "videos": _cached_dashboard_block(
+            "videos",
+            30,
+            _video_status,
+        ),
         "guests": _guest_status(),
-        "growth": _growth_status(),
+        "growth": _cached_dashboard_block(
+            "growth",
+            60,
+            _growth_status,
+        ),
         "full_test": full_test_status(),
         "auto_post_health": auto_post_health,
         "last_cycle_at": last_cycle_at,
@@ -2346,8 +2410,20 @@ async function runAction(action){
   alert(data.message);
   setTimeout(refresh,500);
 }
+let dashboardRefreshTimer=null;
+async function scheduledDashboardRefresh(){
+  try{await refresh()}catch(e){}
+  const next=document.hidden?60000:20000;
+  dashboardRefreshTimer=setTimeout(scheduledDashboardRefresh,next);
+}
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden){
+    if(dashboardRefreshTimer) clearTimeout(dashboardRefreshTimer);
+    dashboardRefreshTimer=setTimeout(scheduledDashboardRefresh,500);
+  }
+});
 refresh();
-setInterval(refresh,15000);
+dashboardRefreshTimer=setTimeout(scheduledDashboardRefresh,20000);
 initAppShell();
 </script>
 </body></html>"""
