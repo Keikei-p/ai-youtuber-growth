@@ -96,6 +96,22 @@ class DistributionRuntimeTests(unittest.TestCase):
             source,
         )
 
+    def test_windows_builder_uses_repo_absolute_bundle_sources(self) -> None:
+        source = Path(
+            "packaging/build_windows.ps1"
+        ).read_text(encoding="utf-8")
+        for relative in (
+            "assets",
+            "character",
+            "automation",
+            "docs",
+            "THIRD_PARTY_NOTICES.md",
+        ):
+            self.assertIn(
+                'Join-Path $RepoRoot "' + relative,
+                source,
+            )
+
     def test_release_build_outputs_hash_manifest(self) -> None:
         source = Path(
             "packaging/build_release.ps1"
