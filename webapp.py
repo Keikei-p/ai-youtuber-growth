@@ -48,6 +48,13 @@ from maintenance import compact_runtime_storage, rotate_log, storage_snapshot
 from quick_test import run_quick_diagnostics
 from paths import VIDEO_DIR
 from product_core import product_status, safe_support_snapshot
+from mobile_pairing import (
+    bearer_token,
+    create_pairing_token,
+    pairing_status,
+    revoke_pairing_token,
+    verify_pairing_token,
+)
 from runtime_control import (
     ai_video_backend_name,
     ai_video_enabled,
@@ -795,7 +802,68 @@ def _status_payload() -> dict:
             "",
         ),
         "log_tail": _read_log_tail(),
+        "mobile_pairing": pairing_status(),
     }
+
+
+def _mobile_status_payload() -> dict:
+    health = _cached_auto_post_health()
+    next_queue = health.get("next_queue") or {}
+    last_post = health.get("last_post_event") or {}
+    problems = health.get("problems") or []
+    with _state_lock:
+        current_job = _current_job
+        current_job_started_at = _current_job_started_at
+    return {
+        "ok": True,
+        "product": product_status(ROOT),
+        "autopilot": autopilot_status(),
+        "automation_enabled": automation_enabled(),
+        "auto_upload_enabled": auto_upload_enabled(),
+        "privacy": upload_privacy(),
+        "posts_per_day": posts_per_day(),
+        "post_times": post_times(),
+        "execution": execution_status(),
+        "next_queue": next_queue,
+        "last_post": last_post,
+        "problems": problems[:5],
+        "current_job": current_job,
+        "current_job_started_at": current_job_started_at,
+        "pairing": pairing_status(),
+    }
+
+
+def _mobile_control(action: str) -> dict:
+    action = str(action or "").strip().lower()
+    if action == "start":
+        result = _start_full_autopilot()
+        return {
+            "ok": True,
+            "message": "完全自動運用を開始しました。",
+            "autopilot": result["status"],
+        }
+    if action == "stop":
+        result = _stop_full_autopilot()
+        return {
+            "ok": True,
+            "message": "完全自動運用を停止しました。",
+            "autopilot": result["status"],
+        }
+    if action == "due":
+        result = _run_captured("スマホ投稿判定", run_due)
+        _cached_auto_post_health(force=True)
+        return {
+            "ok": bool(result.get("ok")),
+            "message": str(result.get("message") or ""),
+            "status": _mobile_status_payload(),
+        }
+    if action == "wake":
+        _wake_event.set()
+        return {
+            "ok": True,
+            "message": "自動運転を今すぐ確認します。",
+        }
+    raise ValueError("unknown mobile action")
 
 
 def _install_windows_autostart() -> str:
@@ -1695,6 +1763,19 @@ body.app-ready .grid>.card.app-active{display:block}
     </section>
 
     <section class="card full">
+      <h2>スマホアプリ接続</h2>
+      <div id="mobilePairingStatus" class="studio-status small"></div>
+      <div class="actions" style="margin-top:12px">
+        <button class="primary" onclick="createMobilePairing()">スマホ接続コードを発行</button>
+        <button onclick="revokeMobilePairing()">接続を解除</button>
+      </div>
+      <div class="small" style="margin-top:8px">
+        接続コードは発行時に1回だけ表示します。PC側にはコード平文を保存しません。
+        スマホ版は重い生成をせず、このPC/Cloud上のミライを安全に操作します。
+      </div>
+    </section>
+
+    <section class="card full">
       <h2>製品化・販売準備</h2>
       <div id="productStatus" class="studio-status small"></div>
       <div id="productReadiness"></div>
@@ -1739,6 +1820,7 @@ const appPageMap={
   '軽量・再起動なし運用':'settings',
   'スマホ・外出先リモート管理':'settings',
   'PC自動起動':'settings',
+  'スマホアプリ接続':'settings',
   '製品化・販売準備':'settings',
   'ログ':'settings'
 };
@@ -1825,6 +1907,10 @@ async function refresh(){
     homeLearning.textContent=Number(resilience.learned_patterns||0)+'件 学習済み';
     homeLearningDetail.textContent='未解決 '+Number(resilience.unresolved_patterns||0)+' / 復旧成功 '+Number(resilience.learned_successes||0);
 
+    const mobilePairing=state.mobile_pairing||{};
+    mobilePairingStatus.textContent=mobilePairing.paired
+      ? ('接続コード発行済み / '+String(mobilePairing.created_at||''))
+      : '未接続';
     const product=state.product||{};
     const readiness=product.readiness||{};
     productStatus.textContent=(product.name||'Mirai Production OS')+' '+(product.version||'')+' / 販売基盤 '+Number(readiness.score||0)+'%';
@@ -2434,6 +2520,30 @@ async function smartUpdate(){
     },1000);
   }catch(e){alert(e.message)}
 }
+async function createMobilePairing(){
+  try{
+    const data=await api('/api/mobile/pairing',{action:'create'});
+    const token=String(data.token||'');
+    if(!token) throw new Error('接続コードを取得できませんでした');
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(token);
+    }
+    alert(
+      'スマホ接続コードを発行しました。\n\n'+token+
+      '\n\nこのコードは今だけ表示されます。スマホ版へ貼り付けてください。'
+    );
+    await refresh();
+  }catch(e){alert(e.message)}
+}
+async function revokeMobilePairing(){
+  if(!confirm('現在のスマホ接続を解除しますか？')) return;
+  try{
+    const data=await api('/api/mobile/pairing',{action:'revoke'});
+    alert(data.message||'接続を解除しました。');
+    await refresh();
+  }catch(e){alert(e.message)}
+}
+
 async function copySupportSnapshot(){
   try{
     const data=await api('/api/support-snapshot');
@@ -2475,6 +2585,31 @@ initAppShell();
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "MiraiWeb/1.0"
+    _mobile_origins = {
+        "capacitor://localhost",
+        "http://localhost",
+        "https://localhost",
+    }
+
+    def _mobile_cors(self) -> None:
+        origin = str(self.headers.get("Origin") or "").strip()
+        if origin in self._mobile_origins:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Authorization, Content-Type",
+            )
+            self.send_header(
+                "Access-Control-Allow-Methods",
+                "GET, POST, OPTIONS",
+            )
+
+    def _mobile_authorized(self) -> bool:
+        token = bearer_token(
+            self.headers.get("Authorization", "")
+        )
+        return bool(token and verify_pairing_token(token))
 
     def _json(self, payload: dict, status: int = 200) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -2482,6 +2617,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
+        if urlparse(self.path).path.startswith("/api/mobile/"):
+            self._mobile_cors()
         self.end_headers()
         self.wfile.write(raw)
 
@@ -2512,6 +2649,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/support-snapshot":
             self._json(safe_support_snapshot(ROOT))
+            return
+
+        if path == "/api/mobile/pairing-status":
+            self._json(pairing_status())
+            return
+
+        if path == "/api/mobile/status":
+            if not self._mobile_authorized():
+                self._json({"message": "unauthorized"}, 401)
+                return
+            self._json(_mobile_status_payload())
             return
 
         if path.startswith("/media/videos/"):
@@ -2634,6 +2782,42 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = self._read_json()
+
+            if path == "/api/mobile/pairing":
+                action = str(
+                    body.get("action") or ""
+                ).strip().lower()
+                if action == "create":
+                    result = create_pairing_token()
+                    self._json({
+                        "ok": True,
+                        "token": result["token"],
+                        "created_at": result["created_at"],
+                        "message": "スマホ接続コードを発行しました。",
+                    })
+                    return
+                if action == "revoke":
+                    revoke_pairing_token()
+                    self._json({
+                        "ok": True,
+                        "message": "スマホ接続を解除しました。",
+                    })
+                    return
+                self._json({"message": "invalid pairing action"}, 400)
+                return
+
+            if path == "/api/mobile/control":
+                if not self._mobile_authorized():
+                    self._json({"message": "unauthorized"}, 401)
+                    return
+                action = str(body.get("action") or "")
+                try:
+                    result = _mobile_control(action)
+                except (ValueError, RuntimeError) as exc:
+                    self._json({"message": str(exc)}, 400)
+                    return
+                self._json(result)
+                return
 
             if path == "/api/autopilot":
                 action = str(
@@ -3164,6 +3348,17 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"message": "not found"}, 404)
         except Exception as exc:
             self._json({"message": str(exc)}, 500)
+
+    def do_OPTIONS(self) -> None:
+        path = urlparse(self.path).path
+        if path.startswith("/api/mobile/"):
+            self.send_response(204)
+            self._mobile_cors()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def log_message(self, format: str, *args) -> None:
         return
