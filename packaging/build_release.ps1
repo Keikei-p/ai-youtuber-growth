@@ -20,9 +20,12 @@ New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
 if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
 
 Write-Host "[RELEASE] Building Windows app: $Version"
-$BuildArgs = @("-OutputDir", $BuildDir)
-if ($Studio) { $BuildArgs += "-Studio" }
-& (Join-Path $PSScriptRoot "build_windows.ps1") @BuildArgs
+$BuildScript = Join-Path $PSScriptRoot "build_windows.ps1"
+if ($Studio) {
+    & $BuildScript -OutputDir $BuildDir -Studio
+} else {
+    & $BuildScript -OutputDir $BuildDir
+}
 if ($LASTEXITCODE -ne 0) { throw "Windows app build failed." }
 
 $SourceDir = Join-Path $BuildDir "MiraiProductionOS"
