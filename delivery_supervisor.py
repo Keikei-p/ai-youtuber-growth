@@ -94,6 +94,10 @@ def self_heal_delivery_controls() -> dict[str, Any]:
         and auto_upload_enabled()
     ):
         set_channel_state("production_autonomy_armed", "true")
+        set_channel_state(
+            "production_autonomy_started_at",
+            datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
         set_channel_state("full_autopilot_enabled", "true")
         production_armed = True
         repairs.append("既存の自動投稿ON設定を本番配送arm状態へ移行")
@@ -131,6 +135,11 @@ def self_heal_delivery_controls() -> dict[str, Any]:
     return refreshed
 
 def arm_production_autonomy() -> dict[str, Any]:
+    # 過去の完了heartbeatを新しい運転開始の根拠に流用しない。
+    set_channel_state(
+        "production_autonomy_started_at",
+        datetime.now().astimezone().isoformat(timespec="seconds"),
+    )
     set_channel_state("production_autonomy_armed", "true")
     set_automation_enabled(True)
     set_auto_upload_enabled(True)
