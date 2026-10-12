@@ -41,6 +41,20 @@ class TrueLivenessAndEpisodeGateTests(unittest.TestCase):
         self.assertEqual(state["status"], "unverified")
         self.assertFalse(state["running"])
 
+    def test_new_start_does_not_inherit_previous_success(self) -> None:
+        storage.set_channel_state(
+            "production_autonomy_started_at", self._stamp(2)
+        )
+        storage.set_channel_state(
+            "scheduler_last_tick_at", self._stamp(5)
+        )
+        storage.set_channel_state(
+            "scheduler_cycle_completed_at", self._stamp(5)
+        )
+        state = runtime_liveness.operational_liveness(now=NOW)
+        self.assertEqual(state["status"], "unverified")
+        self.assertFalse(state["running"])
+
     def test_heartbeat_without_completed_cycle_is_not_running(self) -> None:
         storage.set_channel_state("scheduler_last_run_due_at", self._stamp())
         state = runtime_liveness.operational_liveness(now=NOW)
