@@ -65,7 +65,6 @@ jobs:
               if ($attempt -lt 3) { Start-Sleep -Seconds (10 * $attempt) }
             }
             if (-not $installed) { throw "FFmpeg installation failed after 3 attempts" }
-            refreshenv
           }
           ffmpeg -version
           ffprobe -version
@@ -184,7 +183,6 @@ jobs:
               if ($attempt -lt 3) { Start-Sleep -Seconds (10 * $attempt) }
             }
             if (-not $installed) { throw "FFmpeg installation failed after 3 attempts" }
-            refreshenv
           }
           if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) {
             choco install nsis -y --no-progress
