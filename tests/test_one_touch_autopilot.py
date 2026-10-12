@@ -41,7 +41,9 @@ class OneTouchAutopilotTests(unittest.TestCase):
             status = autopilot_controller.start_autopilot()
 
         self.assertTrue(status["armed"])
-        self.assertTrue(status["running"])
+        # 設定ONだけでは稼働中と判定しない。
+        self.assertFalse(status["running"])
+        self.assertEqual(status["operational_state"], "unverified")
         self.assertEqual(
             storage.get_channel_state(
                 "production_autonomy_armed",
@@ -103,7 +105,9 @@ class OneTouchAutopilotTests(unittest.TestCase):
         ):
             status = autopilot_controller.heal_autopilot()
 
-        self.assertTrue(status["running"])
+        # 設定ONだけでは稼働中と判定しない。
+        self.assertFalse(status["running"])
+        self.assertEqual(status["operational_state"], "unverified")
         self.assertEqual(
             storage.get_channel_state(
                 "automation_enabled",

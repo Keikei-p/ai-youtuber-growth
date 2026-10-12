@@ -22,6 +22,7 @@ from storage import (
     queued_items,
 )
 from upload_recovery import recent_recovery_events
+from runtime_liveness import operational_liveness
 
 
 ROOT = Path(__file__).resolve().parent
@@ -284,6 +285,7 @@ def collect_auto_post_health(
         autonomous_recovery = {}
 
     failed_rows = failed_queue_items(limit=20)
+    liveness = operational_liveness()
 
     problems: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
@@ -345,29 +347,21 @@ def collect_auto_post_health(
                 })
 
     if production_armed:
-        heartbeat_raw = scheduler_last_due or scheduler_last_tick
-        if heartbeat_raw:
-            try:
-                heartbeat = datetime.fromisoformat(heartbeat_raw)
-                now = datetime.now().astimezone()
-                if heartbeat.tzinfo is None:
-                    heartbeat = heartbeat.replace(tzinfo=now.tzinfo)
-                age_minutes = (
-                    now - heartbeat.astimezone(now.tzinfo)
-                ).total_seconds() / 60
-                if age_minutes > 45:
-                    problems.append({
-                        "code": "scheduler_heartbeat_stale",
-                        "detail": (
-                            f"自動投稿スケジューラが約{int(age_minutes)}分"
-                            "動いていません。PC停止/Wakeタスク停止の可能性があります。"
-                        ),
-                    })
-            except Exception:
-                warnings.append({
-                    "code": "scheduler_heartbeat_invalid",
-                    "detail": "自動投稿スケジューラの時刻記録を解析できません。",
-                })
+        state = str(liveness["status"])
+        if state in {"stale", "failed", "stalled", "degraded"}:
+            problems.append({
+                "code": (
+                    "scheduler_heartbeat_stale"
+                    if state == "stale"
+                    else "scheduler_" + state
+                ),
+                "detail": str(liveness["detail"]),
+            })
+        elif state in {"unverified", "starting"}:
+            warnings.append({
+                "code": "scheduler_" + state,
+                "detail": str(liveness["detail"]),
+            })
 
     if production_armed and runtime_bootstrap:
         blockers = list(runtime_bootstrap.get("blockers") or [])
@@ -438,7 +432,9 @@ def collect_auto_post_health(
 
     if problems:
         overall = "attention"
-    elif cycle_status == "running" or event_status == "attempting":
+    elif production_armed and liveness["status"] in {"unverified", "starting"}:
+        overall = "unverified"
+    elif production_armed and liveness["running"]:
         overall = "running"
     elif warnings:
         overall = "warning"
@@ -447,7 +443,7 @@ def collect_auto_post_health(
 
     return {
         "overall": overall,
-        "ready": overall in {"ready", "warning"},
+        "ready": overall in {"ready", "running", "warning"},
         "automation_enabled": automation_enabled(),
         "auto_upload_enabled": auto_upload_enabled(),
         "production_armed": production_armed,
@@ -460,6 +456,12 @@ def collect_auto_post_health(
         "windows_task": task,
         "scheduler_last_run_due_at": scheduler_last_due,
         "scheduler_last_tick_at": scheduler_last_tick,
+        "scheduler_cycle_started_at": liveness["cycle_started_at"],
+        "scheduler_cycle_completed_at": liveness["cycle_completed_at"],
+        "scheduler_cycle_failed_at": liveness["cycle_failed_at"],
+        "operational_state": liveness["status"],
+        "operational_detail": liveness["detail"],
+        "operational_running": liveness["running"],
         "catchup_last": catchup_last,
         "runtime_bootstrap": runtime_bootstrap,
         "autonomous_recovery": autonomous_recovery,

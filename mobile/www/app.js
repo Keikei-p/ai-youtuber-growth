@@ -74,8 +74,19 @@ function escapeHtml(v){
 
 function render(){
   const ap=state&&state.autopilot||{};
-  const running=Boolean(ap.armed&&state.automation_enabled&&state.auto_upload_enabled&&!ap.runtime_cancel_requested);
-  $('autopilotTitle').textContent=running?'🟢 完全自動運用中':(ap.armed?'🟡 復旧・確認中':'停止中');
+  const running=Boolean(ap.running);
+  const display={
+    running:'🟢 完全自動運用中',
+    processing:'🟢 動画処理中',
+    unverified:'🟠 起動未確認',
+    starting:'🟠 サイクル完了待ち',
+    stale:'🔴 実行停止の可能性',
+    failed:'🔴 直近サイクル失敗',
+    stalled:'🔴 長時間処理未完了',
+    degraded:'🟠 サイクル遅延',
+    safety_stop:'🔴 安全停止中'
+  };
+  $('autopilotTitle').textContent=ap.armed?(display[ap.operational_state]||'🟠 状態未確認'):'停止中';
   $('autopilotDetail').textContent=ap.armed
     ? ('毎日'+Number(ap.posts_per_day||state.posts_per_day||0)+'本 / '+String(ap.post_times||state.post_times||'-')+' / '+String(state.privacy||'-'))
     : '開始すると制作・投稿・分析・改善を自動で続けます。';

@@ -707,6 +707,27 @@ def ensure_first_episode_delivery() -> dict:
         "false",
     )
 
+    # failed/上限到達キューを毎tick無条件でresetする旧処理は、
+    # OAuth/権利確認/クォータの安全ゲートとcooldownを迂回していた。
+    # autonomous_recoveryだけが診断後に復活させる責務を持つ。
+    queue = queue_item_for_video(video_id)
+    if queue and (
+        queue.get("status") == "failed"
+        or int(queue.get("attempts") or 0) >= 5
+    ):
+        return {
+            "status": "recovery_required",
+            "video_id": video_id,
+            "queue_id": queue.get("queue_id"),
+            "error": str(queue.get("error") or ""),
+        }
+
+    if runtime_cancel_requested():
+        return {
+            "status": "safety_stop",
+            "video_id": video_id,
+        }
+
     output = str(row.get("output_path") or "").strip()
     if not output or not Path(output).is_file():
         try:
@@ -724,7 +745,6 @@ def ensure_first_episode_delivery() -> dict:
             }
 
     now = _now()
-    queue = queue_item_for_video(video_id)
     due_now = now.isoformat(timespec="minutes")
     recovery_backoff = (
         str((queue or {}).get("error") or "").startswith(
@@ -817,6 +837,8 @@ def prepare_upcoming() -> None:
     if first_episode.get("status") in {
         "queued_priority",
         "regeneration_failed",
+        "recovery_required",
+        "safety_stop",
     }:
         print(
             "[EPISODE-1] 第1話がYouTubeへ届くまで"
@@ -2178,24 +2200,40 @@ def _tick_unlocked() -> None:
 
 def tick() -> None:
     init_db()
-    set_channel_state(
-        "scheduler_last_tick_at",
-        _now().isoformat(timespec="seconds"),
-    )
     owner = f"pid={os.getpid()} / {_now().isoformat(timespec='seconds')}"
     if not acquire_runtime_lock(
         "scheduler_tick",
         owner=owner,
         ttl_minutes=180,
     ):
+        # ロック競合でスキップした処理は成功heartbeatとして数えない。
         print(
             "[SCHEDULE] 別プロセスの自動サイクルが実行中のため"
             "このtickはスキップします。"
         )
         return
 
+    started = _now().isoformat(timespec="seconds")
     try:
+        set_channel_state("scheduler_last_tick_at", started)
+        set_channel_state("scheduler_cycle_started_at", started)
         _tick_unlocked()
+    except Exception as exc:
+        set_channel_state(
+            "scheduler_cycle_failed_at",
+            _now().isoformat(timespec="seconds"),
+        )
+        set_channel_state(
+            "scheduler_cycle_last_outcome",
+            "failed:" + type(exc).__name__,
+        )
+        raise
+    else:
+        set_channel_state(
+            "scheduler_cycle_completed_at",
+            _now().isoformat(timespec="seconds"),
+        )
+        set_channel_state("scheduler_cycle_last_outcome", "completed")
     finally:
         release_runtime_lock("scheduler_tick")
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import tempfile
 import unittest
@@ -88,6 +89,10 @@ class AutomationHealthTests(unittest.TestCase):
         self.assertIn("-Json", command)
 
     def test_ready_health_requires_real_wake_task_and_no_post_blocker(self) -> None:
+        completed_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        storage.set_channel_state("scheduler_last_tick_at", completed_at)
+        storage.set_channel_state("scheduler_cycle_started_at", completed_at)
+        storage.set_channel_state("scheduler_cycle_completed_at", completed_at)
         task = {
             "supported": True,
             "registered": True,
@@ -135,7 +140,7 @@ class AutomationHealthTests(unittest.TestCase):
                 platform_name="nt",
             )
 
-        self.assertEqual(health["overall"], "ready")
+        self.assertEqual(health["overall"], "running")
         self.assertTrue(health["ready"])
         self.assertEqual(health["problems"], [])
 
