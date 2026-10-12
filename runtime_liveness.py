@@ -49,11 +49,21 @@ def operational_liveness(
         "cycle_started_at": get_channel_state("scheduler_cycle_started_at", ""),
         "cycle_completed_at": get_channel_state("scheduler_cycle_completed_at", ""),
         "cycle_failed_at": get_channel_state("scheduler_cycle_failed_at", ""),
+        "armed_since_at": get_channel_state("production_autonomy_started_at", ""),
     }
     parsed = {
         key: _read_time(value, now)
         for key, value in raw.items()
     }
+    # 過去の運転セッションの成功記録は、今回の稼働証明に使わない。
+    armed_since = parsed["armed_since_at"]
+    if armed_since is not None:
+        for key in (
+            "last_due_at", "last_tick_at", "cycle_started_at",
+            "cycle_completed_at", "cycle_failed_at",
+        ):
+            if parsed[key] is not None and parsed[key] < armed_since:
+                parsed[key] = None
     heartbeat = _latest(
         parsed["last_due_at"], parsed["last_tick_at"]
     )
