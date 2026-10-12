@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from config import settings
 from storage import get_channel_state, set_channel_state
 
@@ -118,6 +120,13 @@ def apply_daily_auto_preset(count: int) -> dict:
     # 「毎日自動投稿ON」は本番運用の明示操作として扱う。
     # 以前は個別スイッチだけONになりproduction armが立たず、
     # DRY_RUN保護や省負荷判定で実運用へ進まない状態があった。
+    if get_channel_state(
+        "production_autonomy_armed", "false"
+    ).strip().lower() != "true":
+        set_channel_state(
+            "production_autonomy_started_at",
+            datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
     set_channel_state("production_autonomy_armed", "true")
     set_channel_state("full_autopilot_enabled", "true")
     set_automation_enabled(True)
