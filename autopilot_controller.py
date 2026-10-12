@@ -25,6 +25,7 @@ from storage import (
     set_channel_state,
 )
 from youtube.auth import get_credentials
+from runtime_liveness import operational_liveness
 
 
 def production_autonomy_armed() -> bool:
@@ -90,14 +91,16 @@ def autopilot_status() -> dict[str, Any]:
             "それ以外の自動運転設定は維持します。"
         )
 
+    liveness = operational_liveness()
     return {
         "armed": armed,
-        "running": (
-            armed
-            and automation_enabled()
-            and auto_upload_enabled()
-            and not runtime_cancel_requested()
-        ),
+        "running": liveness["running"],
+        "operational_state": liveness["status"],
+        "operational_detail": liveness["detail"],
+        "configured": liveness["configured"],
+        "heartbeat_at": liveness["heartbeat_at"],
+        "cycle_completed_at": liveness["cycle_completed_at"],
+        "cycle_started_at": liveness["cycle_started_at"],
         "automation_enabled": automation_enabled(),
         "auto_upload_enabled": auto_upload_enabled(),
         "runtime_cancel_requested": runtime_cancel_requested(),
@@ -205,8 +208,9 @@ def heal_autopilot() -> dict[str, Any]:
             extra={"repairs": repairs},
         )
     else:
+        live = operational_liveness()
         _save_event(
-            "running",
-            detail="完全自動運用を継続中です。",
+            "running" if live["running"] else "armed_unverified",
+            detail=live["detail"],
         )
     return autopilot_status()
