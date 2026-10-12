@@ -1874,29 +1874,39 @@ async function refresh(){
     const lastHome=aphHome.last_post_event||{};
     const resilience=((state.improvement||{}).resilience)||{};
     const ap=state.autopilot||{};
-    const apRunning=Boolean(
-      ap.armed &&
-      state.automation_enabled &&
-      state.auto_upload_enabled &&
-      !ap.runtime_cancel_requested
-    );
-    const apRepairing=Boolean(ap.armed&&!apRunning&&!ap.runtime_cancel_requested);
+    // フラグONと「実際の稼働」を混同しない。スケジューラ完了実績を優先。
+    const apRunning=Boolean(ap.running);
+    const apState=String(ap.operational_state||'unverified');
+    const apNeedsCheck=Boolean(ap.armed&&!apRunning);
+    const apLabels={
+      running:'🟢 完全自動運用中',
+      processing:'🟢 動画処理中',
+      unverified:'🟠 起動未確認',
+      starting:'🟠 サイクル完了待ち',
+      stale:'🔴 実行停止の可能性',
+      failed:'🔴 直近サイクル失敗',
+      stalled:'🔴 長時間処理未完了',
+      degraded:'🟠 サイクル遅延',
+      safety_stop:'🔴 安全停止中',
+      not_configured:'設定未完了'
+    };
+    const apDisplay=ap.armed?(apLabels[apState]||'🟠 状態未確認'):'完全自動運用は停止中';
     const privacyLabelsHome={private:'非公開',unlisted:'限定公開',public:'公開'};
     const privacyHome=privacyLabelsHome[state.privacy]||state.privacy||'不明';
     autopilotTitle.textContent=ap.human_action_required
       ? '🟠 1つだけ確認が必要'
-      : (apRunning?'🟢 完全自動運用中':(apRepairing?'🟡 自動復旧中':'完全自動運用は停止中'));
+      : apDisplay;
     autopilotDetail.textContent=ap.armed
       ? ('毎日'+Number(ap.posts_per_day||state.posts_per_day||0)+'本 / '+String(ap.post_times||state.post_times||'')+' / '+privacyHome+' / 再起動後も自動復帰')
       : '開始後は企画・制作・品質確認・投稿・分析・改善までミライが自動で続けます。';
     const firstProblem=((aphHome.problems||[])[0]||{}).detail||'';
     autopilotAttention.textContent=ap.human_action_required
       ? String(ap.human_action||'確認が必要です。')
-      : (ap.armed&&firstProblem?String(firstProblem):'');
+      : (ap.armed ? (firstProblem || String(ap.operational_detail||'')) : '');
     autopilotMainBtn.textContent=ap.armed?'■ 完全自動運用を停止':'▶ 完全自動運用開始';
     autopilotMainBtn.className=(ap.armed?'danger':'primary')+' autopilot-main';
 
-    homeAutoState.textContent=apRunning?'完全自動運用中':(apRepairing?'自動復旧中':'停止中');
+    homeAutoState.textContent=ap.armed?(apLabels[apState]||'状態未確認'):'停止中';
     const exHome=state.execution||{};
     homeAutoDetail.textContent='自動運転 '+(state.automation_enabled?'ON':'OFF')+' / 投稿 '+(state.auto_upload_enabled?'ON':'OFF')+' / 制作 '+(exHome.mode==='cloud'?'Cloud':'PC');
     homeNextPost.textContent=nextHome.scheduled_for?String(nextHome.scheduled_for).replace('T',' ').slice(5,16):'予定なし';
@@ -2017,7 +2027,7 @@ async function refresh(){
     wakeTaskStatus.textContent=state.wake_task_enabled?'登録済み':'未登録';
     wakeTaskStatus.className='badge '+(state.wake_task_enabled?'ok':'');
     const aph=state.auto_post_health||{};
-    const overallLabels={ready:'準備OK',warning:'警告あり',running:'実行中',attention:'要確認'};
+    const overallLabels={ready:'準備OK',warning:'警告あり',running:'実行中',attention:'要確認',unverified:'運転未確認'};
     const overall=overallLabels[aph.overall]||aph.overall||'未確認';
     autoPostOverall.innerHTML='<b>総合: '+escapeHtml(overall)+'</b>'
       +' / 自動運転 '+(aph.automation_enabled?'ON':'OFF')
@@ -2053,7 +2063,7 @@ async function refresh(){
       +(postEvent.code?' / '+escapeHtml(postEvent.code):'')
       +(postEvent.detail?' / '+escapeHtml(postEvent.detail):'')
       +'<br><b>最終投稿チェック</b>: '+escapeHtml(aph.scheduler_last_run_due_at||'未実行')
-      +' / <b>最終フルサイクル</b>: '+escapeHtml(aph.scheduler_last_tick_at||'未実行')
+      +' / <b>最終フルサイクル完了</b>: '+escapeHtml(aph.scheduler_cycle_completed_at||'未完了')
       +((aph.catchup_last||{}).scheduled_for
         ? ('<br><b>直近catch-up</b>: '+escapeHtml((aph.catchup_last||{}).scheduled_for)+' / '+escapeHtml((aph.catchup_last||{}).reason||''))
         : '')
