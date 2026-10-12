@@ -350,7 +350,11 @@ def collect_auto_post_health(
         state = str(liveness["status"])
         if state in {"stale", "failed", "stalled", "degraded"}:
             problems.append({
-                "code": "scheduler_" + state,
+                "code": (
+                    "scheduler_heartbeat_stale"
+                    if state == "stale"
+                    else "scheduler_" + state
+                ),
                 "detail": str(liveness["detail"]),
             })
         elif state in {"unverified", "starting"}:
