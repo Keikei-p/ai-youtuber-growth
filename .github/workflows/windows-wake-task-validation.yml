@@ -1,0 +1,38 @@
+name: Windows wake-task PowerShell validation
+
+on:
+  pull_request:
+    paths:
+      - 'automation/install_windows_task.ps1'
+      - '.github/workflows/windows-wake-task-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'automation/install_windows_task.ps1'
+      - '.github/workflows/windows-wake-task-validation.yml'
+
+jobs:
+  validate-wake-task:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse wake-task script in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scriptPath = Join-Path $PWD 'automation\install_windows_task.ps1'
+          $tokens = $null
+          $parseErrors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            $scriptPath, [ref]$tokens, [ref]$parseErrors
+          )
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.ToString() }
+            exit 1
+          }
+          Write-Host 'PowerShell 5.1 syntax: OK'
+
+      - name: Dry-run wake task creation without registering task
+        shell: powershell
+        run: |
+          & .\automation\install_windows_task.ps1 -DryRun
