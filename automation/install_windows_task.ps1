@@ -30,7 +30,7 @@ if (-not (Test-Path $CycleScript)) {
 $PowerShell = (Get-Command powershell.exe).Source
 $Action = New-ScheduledTaskAction -Execute $PowerShell -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $CycleScript + '"') -WorkingDirectory $RepoRoot
 
-# 管理画面で保存した投稿時刻を優先して読み取る。
+# Prefer the post times saved in the dashboard.
 $PostTimesRaw = ""
 $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (Test-Path $Python) {
@@ -73,7 +73,7 @@ foreach ($Raw in ($PostTimesRaw -split ",")) {
         $PostAt = (Get-Date).Date.AddHours($Hour).AddMinutes($Minute)
         Add-DailyWakeTrigger $PostAt "post"
         Add-DailyWakeTrigger $PostAt.AddMinutes(-$PrepareMinutes) "prepare"
-        # MIRAI_RECOVERY_TRIGGERS: wake失敗/ネット復帰遅延に備え複数回復。
+        # MIRAI_RECOVERY_TRIGGERS: retry after missed wakes or delayed network recovery.
         foreach ($RecoveryMinute in $RecoveryMinutes) {
             Add-DailyWakeTrigger $PostAt.AddMinutes($RecoveryMinute) ("recovery-" + $RecoveryMinute)
         }
@@ -83,7 +83,7 @@ foreach ($Raw in ($PostTimesRaw -split ",")) {
     }
 }
 
-# 定期メンテナンスも残す。投稿時刻そのものは上の日次トリガーで保証する。
+# Keep periodic maintenance; daily triggers handle the scheduled post times.
 $MaintenanceStart = (Get-Date).AddMinutes(1)
 $Maintenance = New-ScheduledTaskTrigger -Once -At $MaintenanceStart -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
 $Triggers = @($Maintenance) + @($TriggerMap.Values)
@@ -122,7 +122,7 @@ if ($DryRun) {
 
 Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
 
-# 登録API成功だけで完了扱いにせず、Windowsから実体を読み戻して検証する。
+# Verify the task from Windows after registration; do not trust API success alone.
 $RegisteredTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
 $RegisteredInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction Stop
 if (-not $RegisteredTask.Settings.WakeToRun) {
@@ -138,7 +138,7 @@ if (@($RegisteredTask.Triggers).Count -lt 4) {
     throw "Registered task verification failed: too few triggers"
 }
 
-# AC/DCともWake Timerを有効化。デスクトップではAC設定が主に効く。
+# Enable wake timers for both AC and DC power (AC is most relevant for desktops).
 try {
     & powercfg.exe /SETACVALUEINDEX SCHEME_CURRENT SUB_SLEEP RTCWAKE 1 | Out-Null
     & powercfg.exe /SETDCVALUEINDEX SCHEME_CURRENT SUB_SLEEP RTCWAKE 1 | Out-Null
@@ -149,7 +149,7 @@ catch {
 }
 
 Write-Host ""
-Write-Host "[OK] Windowsスリープ復帰自動運転タスクを登録しました。"
+Write-Host "[OK] Windows wake task for autopilot registered and verified."
 Write-Host "Task: $TaskName"
 Write-Host "Maintenance: every $IntervalMinutes minutes"
 Write-Host "Post times: $PostTimesRaw"
@@ -162,6 +162,6 @@ Write-Host "Last run: $($RegisteredInfo.LastRunTime)"
 Write-Host "Next run: $($RegisteredInfo.NextRunTime)"
 Write-Host "Last task result: $($RegisteredInfo.LastTaskResult)"
 Write-Host ""
-Write-Host "確認: powercfg /waketimers"
-Write-Host "確認: Get-ScheduledTask -TaskName \"$TaskName\" | Select-Object -ExpandProperty Triggers"
-Write-Host "すぐ1回テスト: schtasks /Run /TN \"$TaskName\""
+Write-Host "Check wake timers: powercfg /waketimers"
+Write-Host ('Check triggers: Get-ScheduledTask -TaskName "{0}" | Select-Object -ExpandProperty Triggers' -f $TaskName)
+Write-Host ('Run one test now: schtasks /Run /TN "{0}"' -f $TaskName)
