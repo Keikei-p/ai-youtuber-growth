@@ -23,6 +23,28 @@ def _response(status_code: int, payload: dict | None = None, content: bytes = b"
 
 
 class GoogleVeoVideoTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Mock-network tests explicitly exercise the paid path; production stays locked.
+        paid_api_mock = patch.dict(
+            "os.environ", {"MIRAI_ALLOW_PAID_APIS": "I_ACCEPT_API_CHARGES"}
+        )
+        paid_api_mock.start()
+        self.addCleanup(paid_api_mock.stop)
+
+    def test_cost_guard_blocks_enabled_veo_without_network(self) -> None:
+        with (
+            patch.dict("os.environ", {"MIRAI_ALLOW_PAID_APIS": ""}),
+            patch.object(google_video_generator, "settings", self._settings()),
+            patch.object(google_video_generator.requests, "post") as post,
+        ):
+            status = google_video_generator.google_video_status()
+            self.assertFalse(status["available"])
+            self.assertTrue(status["cost_safety_locked"])
+            with self.assertRaises(google_video_generator.GoogleVideoGenerationError) as ctx:
+                google_video_generator.generate_google_veo_clip("must not be billed")
+            self.assertEqual(ctx.exception.code, "paid_api_cost_guard")
+            post.assert_not_called()
+
     def _settings(self, **overrides):
         values = {
             "google_ai_api_key": "test-key",
