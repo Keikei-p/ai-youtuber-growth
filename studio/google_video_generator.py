@@ -63,6 +63,15 @@ def _model() -> str:
     return model
 
 
+def paid_google_video_unlocked() -> bool:
+    """Fail closed: GOOGLE_VIDEO_ENABLED and an API key are not payment consent.
+
+    Explicitly unlock only during a separately approved paid operation.
+    No API-side hard spending cap is implied by this switch.
+    """
+    return os.getenv("MIRAI_ALLOW_PAID_APIS", "").strip() == "I_ACCEPT_API_CHARGES"
+
+
 def google_video_status() -> dict[str, Any]:
     key = _api_key()
     model = str(
@@ -86,7 +95,7 @@ def google_video_status() -> dict[str, Any]:
         getattr(settings, "google_video_enabled", False)
     )
     return {
-        "available": enabled and bool(key) and model in SUPPORTED_MODELS,
+        "available": enabled and paid_google_video_unlocked() and bool(key) and model in SUPPORTED_MODELS,
         "api_key_configured": bool(key),
         "google_video_enabled": enabled,
         "backend": "google",
@@ -96,9 +105,12 @@ def google_video_status() -> dict[str, Any]:
         "resolution": resolution,
         "aspect_ratio": aspect,
         "uses_paid_api": True,
+        "cost_safety_locked": not paid_google_video_unlocked(),
         "reason": (
             "初期運用ではGoogle有料動画生成を停止中です"
             if not enabled
+            else "有料APIの費用安全ロックが有効です（無料運用）"
+            if not paid_google_video_unlocked()
             else (
                 ""
                 if key
@@ -203,6 +215,15 @@ def generate_google_veo_clip(
             "Google有料動画生成は初期運用で無効です。"
             " GOOGLE_VIDEO_ENABLED=true を明示設定した時だけ利用できます。",
             code="google_video_disabled",
+            retryable=False,
+        )
+
+    # A separate, default-deny guard runs before every paid Veo request.
+    # Even an accidentally enabled GOOGLE_VIDEO_ENABLED cannot incur Veo cost.
+    if not paid_google_video_unlocked():
+        raise GoogleVideoGenerationError(
+            "有料Google Veo APIは費用安全ロックで停止中です。",
+            code="paid_api_cost_guard",
             retryable=False,
         )
 
