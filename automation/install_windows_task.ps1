@@ -95,7 +95,10 @@ foreach ($Raw in ($PostTimesRaw -split ",")) {
 # Keep periodic maintenance; daily triggers handle the scheduled post times.
 $MaintenanceStart = (Get-Date).AddMinutes(1)
 $Maintenance = New-ScheduledTaskTrigger -Once -At $MaintenanceStart -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
-$Triggers = @($Maintenance) + @($TriggerMap.Values)
+# Start one headless cycle when the user signs in after a reboot.
+# LogonType Interactive cannot execute before the user has signed in.
+$LogonTrigger = New-ScheduledTaskTrigger -AtLogOn -User ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
+$Triggers = @($Maintenance, $LogonTrigger) + @($TriggerMap.Values)
 
 $Settings = New-ScheduledTaskSettingsSet `
     -WakeToRun `
