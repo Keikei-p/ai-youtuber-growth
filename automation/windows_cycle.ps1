@@ -128,9 +128,8 @@ function Ensure-MiraiDependencies {
 
 $mutex = New-Object System.Threading.Mutex($false, "AIYoutuberGrowthCycle")
 if (-not $mutex.WaitOne(0)) {
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] another cycle is already running; skip")
-    $LastExitCode = 0
-    Write-CycleStatus -Status "skipped" -Stage "mutex_busy" -Detail "A previous cycle is still running; no duplicate process started."
+    # Do not overwrite the active cycle's status file from a rejected duplicate.
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] another cycle is already running; skip run_id=" + $RunId)
     $mutex.Dispose()
     exit 0
 }
