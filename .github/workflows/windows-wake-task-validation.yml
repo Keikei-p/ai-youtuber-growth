@@ -54,8 +54,9 @@ jobs:
       - name: Validate hidden runner propagates failure and writes logs
         shell: powershell
         run: |
-          & "$env:WINDIR\\System32\\wscript.exe" //B //Nologo ".\\automation\\hidden_task_runner.vbs" /selftest
-          if ($LASTEXITCODE -ne 7) { throw "Hidden launcher did not propagate error code 7: $LASTEXITCODE" }
+          $launcher = (Resolve-Path ".\automation\hidden_task_runner.vbs").Path
+          $child = Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList ('//B //Nologo "' + $launcher + '" /selftest') -Wait -PassThru
+          if ($child.ExitCode -ne 7) { throw "Hidden launcher did not propagate error code 7: $($child.ExitCode)" }
           $launcherLog = Get-ChildItem "logs/automation-launcher-*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $launcherLog -or -not (Select-String -Path $launcherLog.FullName -Pattern "END child exit_code=7")) {
             throw "Hidden launcher failed to log child error"
