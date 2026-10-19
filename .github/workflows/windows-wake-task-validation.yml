@@ -5,6 +5,7 @@ on:
     paths:
       - 'automation/install_windows_task.ps1'
       - 'automation/windows_cycle.ps1'
+      - 'automation/windows_task_status.ps1'
       - 'automation/hidden_task_runner.vbs'
       - '.github/workflows/windows-wake-task-validation.yml'
   push:
@@ -12,6 +13,7 @@ on:
     paths:
       - 'automation/install_windows_task.ps1'
       - 'automation/windows_cycle.ps1'
+      - 'automation/windows_task_status.ps1'
       - 'automation/hidden_task_runner.vbs'
       - '.github/workflows/windows-wake-task-validation.yml'
 
@@ -39,7 +41,7 @@ jobs:
       - name: Parse both automation PowerShell scripts
         shell: powershell
         run: |
-          foreach ($file in @('automation/install_windows_task.ps1', 'automation/windows_cycle.ps1')) {
+          foreach ($file in @('automation/install_windows_task.ps1', 'automation/windows_cycle.ps1', 'automation/windows_task_status.ps1')) {
             $tokens = $null
             $parseErrors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile(
