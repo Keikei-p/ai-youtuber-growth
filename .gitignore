@@ -19,3 +19,6 @@ assets/studio_index.json
 # Runtime sleep/wake status
 automation/last_cycle_status.json
 automation/last_cycle_status.json.tmp
+automation/cycle_failure_state.json
+automation/cycle_failure_state.json.*.tmp
+automation/last_cycle_status.json.*.tmp
