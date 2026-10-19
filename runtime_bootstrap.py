@@ -34,6 +34,20 @@ def _creationflags() -> int:
     )
 
 
+def _spawn_service(command: list[str], *, cwd: Path, name: str) -> subprocess.Popen:
+    """Start a local service without a console and preserve its stderr for diagnosis."""
+    log_path = ROOT / "logs" / ("runtime-" + name + ".log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab") as service_log:
+        return subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            stdout=service_log,
+            stderr=subprocess.STDOUT,
+            creationflags=_creationflags(),
+        )
+
+
 def _candidate_ollama_paths() -> list[Path]:
     values: list[Path] = []
     resolved = shutil.which("ollama")
@@ -98,13 +112,7 @@ def _start_ollama() -> dict[str, Any]:
         }
 
     try:
-        subprocess.Popen(
-            [str(candidates[0]), "serve"],
-            cwd=str(ROOT),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=_creationflags(),
-        )
+        _spawn_service([str(candidates[0]), "serve"], cwd=ROOT, name="ollama")
     except Exception as exc:
         return {
             "ready": False,
@@ -151,13 +159,7 @@ def _start_voicevox() -> dict[str, Any]:
         }
 
     try:
-        subprocess.Popen(
-            [str(candidates[0])],
-            cwd=str(candidates[0].parent),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=_creationflags(),
-        )
+        _spawn_service([str(candidates[0])], cwd=candidates[0].parent, name="voicevox")
     except Exception as exc:
         return {
             "ready": False,
