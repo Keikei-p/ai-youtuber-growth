@@ -58,6 +58,7 @@ def _git_clean(root: Path) -> bool:
         capture_output=True,
         text=True,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return completed.returncode == 0 and not completed.stdout.strip()
 
@@ -100,6 +101,7 @@ def _validate(root: Path) -> tuple[bool, str]:
             text=True,
             check=False,
             timeout=180,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         outputs.append(
             ((completed.stdout or "") + "\n" + (completed.stderr or ""))[-3000:]

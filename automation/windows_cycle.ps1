@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $RepoRoot
@@ -8,6 +8,47 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $LogFile = Join-Path $LogDir ("automation-" + (Get-Date -Format "yyyy-MM-dd") + ".log")
 
 $StatusFile = Join-Path $RepoRoot "automation\last_cycle_status.json"
+$FailureStateFile = Join-Path $RepoRoot "automation\cycle_failure_state.json"
+$RunStartedAt = (Get-Date).ToString("o")
+$RunId = [guid]::NewGuid().ToString("N")
+$LastExitCode = $null
+$CurrentStage = "initialize"
+
+function Read-FailureState {
+    if (Test-Path $FailureStateFile) {
+        try {
+            $state = Get-Content -Raw -Path $FailureStateFile | ConvertFrom-Json
+            return @{ failures = [int]$state.consecutive_failures; cooldown_until = [string]$state.cooldown_until }
+        }
+        catch {
+            Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] WARN invalid cycle_failure_state.json: " + $_.Exception.Message)
+        }
+    }
+    return @{ failures = 0; cooldown_until = "" }
+}
+
+function Save-FailureState {
+    param([int]$Failures, [string]$CooldownUntil = "")
+    $payload = [ordered]@{
+        consecutive_failures = $Failures
+        cooldown_until = $CooldownUntil
+        updated_at = (Get-Date).ToString("o")
+    }
+    $temp = $FailureStateFile + "." + $PID + ".tmp"
+    $payload | ConvertTo-Json | Set-Content -Path $temp -Encoding UTF8
+    Move-Item -Force -Path $temp -Destination $FailureStateFile
+}
+
+function Next-TaskRun {
+    try {
+        $info = Get-ScheduledTaskInfo -TaskName "AI YouTuber Growth" -ErrorAction Stop
+        if ($info.NextRunTime.Year -gt 1900) {
+            return $info.NextRunTime.ToString("o")
+        }
+    }
+    catch {}
+    return ""
+}
 
 function Write-CycleStatus {
     param(
@@ -17,10 +58,17 @@ function Write-CycleStatus {
         [hashtable]$Extra = @{}
     )
 
+    $script:CurrentStage = $Stage
     $Payload = [ordered]@{
         status = $Status
         stage = $Stage
         detail = $Detail
+        run_id = $RunId
+        started_at = $RunStartedAt
+        finished_at = $(if ($Status -in @("success", "failed", "retry_wait", "cooldown", "skipped")) { (Get-Date).ToString("o") } else { $null })
+        exit_code = $LastExitCode
+        consecutive_failures = (Read-FailureState).failures
+        next_run_at = Next-TaskRun
         updated_at = (Get-Date).ToString("o")
         pid = $PID
         log_file = $LogFile
@@ -29,7 +77,7 @@ function Write-CycleStatus {
         $Payload[$Key] = $Extra[$Key]
     }
 
-    $Temp = $StatusFile + ".tmp"
+    $Temp = $StatusFile + "." + $PID + ".tmp"
     $Payload | ConvertTo-Json -Depth 6 | Set-Content -Path $Temp -Encoding UTF8
     Move-Item -Force -Path $Temp -Destination $StatusFile
 }
@@ -80,13 +128,15 @@ function Ensure-MiraiDependencies {
 
 $mutex = New-Object System.Threading.Mutex($false, "AIYoutuberGrowthCycle")
 if (-not $mutex.WaitOne(0)) {
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] another cycle is already running; skip")
+    # Do not overwrite the active cycle's status file from a rejected duplicate.
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] another cycle is already running; skip run_id=" + $RunId)
+    $mutex.Dispose()
     exit 0
 }
 
-# WakeToRunで起きた直後にWindowsが再スリープしないよう、
-# このサイクルの実行中だけ画面を点けずにシステム起動を維持する。
-Add-Type @"
+# Keep the machine awake during a cycle, without activating the display.
+try {
+    Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public static class MiraiPowerState {
@@ -94,11 +144,21 @@ public static class MiraiPowerState {
     public static extern uint SetThreadExecutionState(uint esFlags);
 }
 "@
-$ES_CONTINUOUS = [uint32]0x80000000
-$ES_SYSTEM_REQUIRED = [uint32]0x00000001
-[MiraiPowerState]::SetThreadExecutionState($ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED) | Out-Null
+    $ES_CONTINUOUS = [uint32]0x80000000
+    $ES_SYSTEM_REQUIRED = [uint32]0x00000001
+    [MiraiPowerState]::SetThreadExecutionState($ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED) | Out-Null
 
-try {
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] cycle start run_id=" + $RunId)
+    $failureState = Read-FailureState
+    if ($failureState.cooldown_until) {
+        $until = [datetimeoffset]::MinValue
+        if ([datetimeoffset]::TryParse($failureState.cooldown_until, [ref]$until) -and (Get-Date) -lt $until.LocalDateTime) {
+            Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] cooldown: hold heavy tasks until " + $failureState.cooldown_until)
+            $LastExitCode = 0
+            Write-CycleStatus -Status "cooldown" -Stage "consecutive_failure_hold" -Detail ("Safety cooldown until " + $failureState.cooldown_until)
+            exit 0
+        }
+    }
     $Python = Resolve-MiraiPython
     Ensure-MiraiDependencies -PythonPath $Python
 
@@ -120,6 +180,7 @@ try {
     }
     if (-not $NetworkReady) {
         Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] network not ready after wake; keep queue and retry later")
+        $LastExitCode = 0
         Write-CycleStatus -Status "retry_wait" -Stage "network_wait" -Detail "スリープ復帰後90秒以内にGoogle APIへのHTTPS接続を確認できませんでした。キューは保持し、次の回復トリガーで再試行します。"
         exit 0
     }
@@ -162,6 +223,8 @@ try {
     $ExitCode = $LASTEXITCODE
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] cycle end exit=" + $ExitCode)
     if ($ExitCode -eq 0) {
+        $LastExitCode = 0
+        Save-FailureState -Failures 0
         Write-CycleStatus -Status "success" -Stage "complete" -Detail "スリープ復帰/自動投稿サイクルを正常終了しました。" -Extra @{ tick_exit_code = $ExitCode; due_exit_code = $DueExitCode }
     }
     if ($ExitCode -ne 0) {
@@ -169,13 +232,25 @@ try {
     }
 }
 catch {
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] ERROR: " + $_.Exception.Message)
+    $FailureStage = $CurrentStage
+    $FailureDetail = $_.Exception.Message
+    $LastExitCode = 1
+    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] ERROR stage=" + $FailureStage + " message=" + $FailureDetail)
+    $failureState = Read-FailureState
+    $Failures = [int]$failureState.failures + 1
+    $CooldownUntil = ""
+    if ($Failures -ge 3) {
+        $CooldownUntil = (Get-Date).AddMinutes(30).ToString("o")
+        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] SAFETY: 3+ failures, cooldown until " + $CooldownUntil)
+    }
+    try { Save-FailureState -Failures $Failures -CooldownUntil $CooldownUntil }
+    catch { Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] WARN could not save failure count: " + $_.Exception.Message) }
     try {
-        Write-CycleStatus -Status "failed" -Stage "error" -Detail $_.Exception.Message
+        Write-CycleStatus -Status "failed" -Stage $FailureStage -Detail $FailureDetail -Extra @{ failure_count = $Failures; cooldown_until = $CooldownUntil }
     }
     catch {}
     try {
-        if ($Python -and (Test-Path (Join-Path $RepoRoot "safe_code_repair.py"))) {
+        if ($Failures -lt 3 -and $Python -and (Test-Path (Join-Path $RepoRoot "safe_code_repair.py"))) {
             Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check start")
             & $Python "safe_code_repair.py" *>> $LogFile
             Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check end")
@@ -187,7 +262,10 @@ catch {
     throw
 }
 finally {
-    [MiraiPowerState]::SetThreadExecutionState($ES_CONTINUOUS) | Out-Null
+    try {
+        [MiraiPowerState]::SetThreadExecutionState($ES_CONTINUOUS) | Out-Null
+    }
+    catch {}
     $mutex.ReleaseMutex() | Out-Null
     $mutex.Dispose()
 }

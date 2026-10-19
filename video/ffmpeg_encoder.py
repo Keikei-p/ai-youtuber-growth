@@ -32,6 +32,7 @@ def _ffmpeg_has_nvenc() -> bool:
             errors="replace",
             check=False,
             timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return "h264_nvenc" in (
             (completed.stdout or "") + (completed.stderr or "")
@@ -125,6 +126,7 @@ def run_video_encode(
             check=True,
             stdout=stdout,
             stderr=stderr,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return
     except subprocess.CalledProcessError:
@@ -146,4 +148,5 @@ def run_video_encode(
         check=True,
         stdout=stdout,
         stderr=stderr,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
