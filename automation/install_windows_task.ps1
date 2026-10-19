@@ -21,14 +21,23 @@ foreach ($RecoveryMinute in $RecoveryMinutes) {
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $CycleScript = Join-Path $RepoRoot "automation\windows_cycle.ps1"
+$HiddenLauncher = Join-Path $RepoRoot "automation\hidden_task_runner.vbs"
 $TaskName = "AI YouTuber Growth"
 
 if (-not (Test-Path $CycleScript)) {
     throw "Cycle script not found: $CycleScript"
 }
+if (-not (Test-Path $HiddenLauncher)) {
+    throw "Hidden launcher not found: $HiddenLauncher"
+}
 
-$PowerShell = (Get-Command powershell.exe).Source
-$Action = New-ScheduledTaskAction -Execute $PowerShell -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $CycleScript + '"') -WorkingDirectory $RepoRoot
+# WScript runs without a visible console; it waits for the PowerShell cycle,
+# logs launch failures, and returns the exact exit code to Task Scheduler.
+$WScript = Join-Path $env:WINDIR "System32\wscript.exe"
+if (-not (Test-Path $WScript)) {
+    throw "Windows Script Host not found: $WScript"
+}
+$Action = New-ScheduledTaskAction -Execute $WScript -Argument ('//B //Nologo "' + $HiddenLauncher + '"') -WorkingDirectory $RepoRoot
 
 # Prefer the post times saved in the dashboard.
 $PostTimesRaw = ""
@@ -93,8 +102,7 @@ $Settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew `
     -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 3) `
+    -RestartCount 0 `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries
 
@@ -106,6 +114,9 @@ $Principal = New-ScheduledTaskPrincipal `
 $Task = New-ScheduledTask -Action $Action -Trigger $Triggers -Settings $Settings -Principal $Principal
 
 if ($DryRun) {
+    if ($Task.Actions.Execute -ne $WScript) {
+        throw "DryRun: scheduled action is not the hidden launcher."
+    }
     if (-not $Task.Settings.WakeToRun) {
         throw "DryRun: WakeToRun was not preserved."
     }
@@ -125,6 +136,9 @@ Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
 # Verify the task from Windows after registration; do not trust API success alone.
 $RegisteredTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
 $RegisteredInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction Stop
+if ($RegisteredTask.Actions.Execute -ne $WScript) {
+    throw "Registered task verification failed: hidden launcher action missing"
+}
 if (-not $RegisteredTask.Settings.WakeToRun) {
     throw "Registered task verification failed: WakeToRun=false"
 }
@@ -155,6 +169,8 @@ Write-Host "Maintenance: every $IntervalMinutes minutes"
 Write-Host "Post times: $PostTimesRaw"
 Write-Host "Prepare wake: $PrepareMinutes minutes before"
 Write-Host "Recovery wake: $($RecoveryMinutes -join ',') minutes after"
+Write-Host "Launcher: hidden_task_runner.vbs (no visible console)"
+Write-Host "Automatic task restarts: disabled (scheduled retries remain)"
 Write-Host "WakeToRun: enabled"
 Write-Host "StartWhenAvailable: enabled"
 Write-Host "Registered triggers: $(@($RegisteredTask.Triggers).Count)"
