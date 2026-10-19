@@ -12,7 +12,7 @@ from typing import Any
 
 from config import settings
 from runtime_control import execution_mode, voice_provider_name
-from storage import init_db, set_channel_state
+from storage import get_channel_state, init_db, set_channel_state
 
 
 ROOT = Path(__file__).resolve().parent
@@ -46,6 +46,33 @@ def _spawn_service(command: list[str], *, cwd: Path, name: str) -> subprocess.Po
             stderr=subprocess.STDOUT,
             creationflags=_creationflags(),
         )
+
+
+def _service_launch_guard(name: str) -> tuple[bool, str]:
+    """Bound repeated service startups when the backend never becomes healthy."""
+    key = "runtime_service_launch_" + name
+    now = int(time.time())
+    try:
+        previous = json.loads(get_channel_state(key, "{}") or "{}")
+        count = max(0, int(previous.get("attempts", 0)))
+        last = int(previous.get("last_attempt", 0))
+        # Retry once per 15m, then at most once per 6h after 3 failures.
+        cooldown = 6 * 3600 if count >= 3 else 15 * 60
+        if last and 0 <= now - last < cooldown:
+            return False, f"service launch backoff ({cooldown - (now - last)}s remaining)"
+        set_channel_state(key, json.dumps({
+            "attempts": min(count + 1, 3), "last_attempt": now,
+        }))
+    except Exception as exc:
+        return False, f"service launch guard unavailable: {type(exc).__name__}"
+    return True, ""
+
+
+def _service_ready(name: str) -> None:
+    try:
+        set_channel_state("runtime_service_launch_" + name, "{}")
+    except Exception:
+        pass
 
 
 def _candidate_ollama_paths() -> list[Path]:
@@ -101,6 +128,7 @@ def _candidate_voicevox_paths() -> list[Path]:
 def _start_ollama() -> dict[str, Any]:
     url = str(settings.ollama_url).rstrip("/") + "/api/tags"
     if _http_ok(url):
+        _service_ready("ollama")
         return {"ready": True, "action": "already_running"}
 
     candidates = _candidate_ollama_paths()
@@ -110,6 +138,10 @@ def _start_ollama() -> dict[str, Any]:
             "action": "not_found",
             "detail": "Ollama実行ファイルを検出できません。",
         }
+
+    allowed, guard_detail = _service_launch_guard("ollama")
+    if not allowed:
+        return {"ready": False, "action": "cooldown", "detail": guard_detail}
 
     try:
         _spawn_service([str(candidates[0]), "serve"], cwd=ROOT, name="ollama")
@@ -122,6 +154,7 @@ def _start_ollama() -> dict[str, Any]:
 
     for _ in range(12):
         if _http_ok(url):
+            _service_ready("ollama")
             return {
                 "ready": True,
                 "action": "started",
@@ -146,6 +179,7 @@ def _start_voicevox() -> dict[str, Any]:
 
     url = str(settings.voicevox_url).rstrip("/") + "/version"
     if _http_ok(url):
+        _service_ready("voicevox")
         return {"ready": True, "action": "already_running"}
 
     candidates = _candidate_voicevox_paths()
@@ -158,6 +192,10 @@ def _start_voicevox() -> dict[str, Any]:
             ),
         }
 
+    allowed, guard_detail = _service_launch_guard("voicevox")
+    if not allowed:
+        return {"ready": False, "action": "cooldown", "detail": guard_detail}
+
     try:
         _spawn_service([str(candidates[0])], cwd=candidates[0].parent, name="voicevox")
     except Exception as exc:
@@ -169,6 +207,7 @@ def _start_voicevox() -> dict[str, Any]:
 
     for _ in range(25):
         if _http_ok(url):
+            _service_ready("voicevox")
             return {
                 "ready": True,
                 "action": "started",
