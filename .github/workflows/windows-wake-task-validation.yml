@@ -4,11 +4,15 @@ on:
   pull_request:
     paths:
       - 'automation/install_windows_task.ps1'
+      - 'automation/windows_cycle.ps1'
+      - 'automation/hidden_task_runner.vbs'
       - '.github/workflows/windows-wake-task-validation.yml'
   push:
     branches: [main]
     paths:
       - 'automation/install_windows_task.ps1'
+      - 'automation/windows_cycle.ps1'
+      - 'automation/hidden_task_runner.vbs'
       - '.github/workflows/windows-wake-task-validation.yml'
 
 jobs:
@@ -31,6 +35,31 @@ jobs:
             exit 1
           }
           Write-Host 'PowerShell 5.1 syntax: OK'
+
+      - name: Parse both automation PowerShell scripts
+        shell: powershell
+        run: |
+          foreach ($file in @('automation/install_windows_task.ps1', 'automation/windows_cycle.ps1')) {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD $file), [ref]$tokens, [ref]$parseErrors
+            )
+            if ($parseErrors.Count -gt 0) {
+              $parseErrors | ForEach-Object { Write-Error $_.ToString() }
+              exit 1
+            }
+          }
+
+      - name: Validate hidden runner propagates failure and writes logs
+        shell: powershell
+        run: |
+          & "$env:WINDIR\\System32\\wscript.exe" //B //Nologo ".\\automation\\hidden_task_runner.vbs" /selftest
+          if ($LASTEXITCODE -ne 7) { throw "Hidden launcher did not propagate error code 7: $LASTEXITCODE" }
+          $launcherLog = Get-ChildItem "logs/automation-launcher-*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $launcherLog -or -not (Select-String -Path $launcherLog.FullName -Pattern "END child exit_code=7")) {
+            throw "Hidden launcher failed to log child error"
+          }
 
       - name: Dry-run wake task creation without registering task
         shell: powershell
