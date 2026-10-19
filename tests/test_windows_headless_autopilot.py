@@ -70,6 +70,7 @@ class WindowsHeadlessAutopilotTests(unittest.TestCase):
         self.assertIn('New-ScheduledTaskAction -Execute $WScript', install)
         self.assertIn("-RestartCount 0", install)
         self.assertIn("WakeToRun", install)
+        self.assertIn("New-ScheduledTaskTrigger -AtLogOn", install)
         self.assertIn('$PrepareMinutes = 90', install)
         self.assertIn("$RecoveryMinutes = @(5, 15, 30, 60)", install)
 
