@@ -31,6 +31,7 @@ def _run(args: list[str], *, cwd: Path = ROOT, timeout: int = 120) -> subprocess
         errors="replace",
         timeout=timeout,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
 
