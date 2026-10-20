@@ -24,7 +24,7 @@ InstallDir "$PROGRAMFILES64\Mirai Production OS"
 InstallDirRegKey HKLM "Software\YOROKOBI\MiraiProductionOS" "InstallDir"
 BrandingText "YOROKOBI"
 
-VIProductVersion "0.12.0.0"
+VIProductVersion "0.13.0.0"
 VIAddVersionKey /LANG=1041 "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey /LANG=1041 "CompanyName" "${PRODUCT_PUBLISHER}"
 VIAddVersionKey /LANG=1041 "FileDescription" "${PRODUCT_NAME} Installer"

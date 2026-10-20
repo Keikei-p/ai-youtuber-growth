@@ -14,7 +14,7 @@ from storage import get_channel_state, init_db
 
 
 PRODUCT_NAME = "Mirai Production OS"
-PRODUCT_VERSION = "0.12.0-beta"
+PRODUCT_VERSION = "0.13.0-beta"
 PRODUCT_CHANNEL = "beta"
 PRODUCT_EDITION = "creator"
 
@@ -92,6 +92,15 @@ def product_readiness(root: Path) -> dict[str, Any]:
             "安全な診断情報",
             True,
             "APIキー・OAuth token・secret本文を返さない設計",
+        ),
+        _check(
+            "first_run_onboarding",
+            "初回セットアップ",
+            (
+                (root / "onboarding.py").is_file()
+                and (root / "webapp.py").is_file()
+            ),
+            "OAuth登録・YouTube接続・制作環境確認",
         ),
         _check(
             "mobile_source",

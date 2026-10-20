@@ -153,7 +153,7 @@ class DistributionRuntimeTests(unittest.TestCase):
     def test_product_version_advanced(self) -> None:
         self.assertEqual(
             product_core.PRODUCT_VERSION,
-            "0.12.0-beta",
+            "0.13.0-beta",
         )
 
 
