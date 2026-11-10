@@ -5,7 +5,21 @@ Set-Location $RepoRoot
 
 $LogDir = Join-Path $RepoRoot "logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-$LogFile = Join-Path $LogDir ("automation-" + (Get-Date -Format "yyyy-MM-dd") + ".log")
+# Keep old daily logs untouched; old PowerShell 5.1 logs may mix ANSI/UTF-16.
+# A new UTF-8-only log also remains visible to the automation-*.log health reader.
+$LogFile = Join-Path $LogDir ("automation-" + (Get-Date -Format "yyyy-MM-dd") + "-utf8.log")
+if (-not (Test-Path -LiteralPath $LogFile)) {
+    [System.IO.File]::WriteAllBytes($LogFile, [byte[]]@(239, 187, 191))
+}
+# Windows PowerShell 5.1 otherwise appends redirected output as UTF-16LE.
+$PSDefaultParameterValues["Out-File:Encoding"] = "utf8"
+$env:PYTHONIOENCODING = "utf-8"
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+}
+catch {
+    # Scheduled tasks without a console may not allow this setter.
+}
 
 $StatusFile = Join-Path $RepoRoot "automation\last_cycle_status.json"
 
@@ -48,7 +62,7 @@ function Resolve-MiraiPython {
     }
 
     Write-CycleStatus -Status "running" -Stage "python_repair" -Detail ".venvが無いため自動作成しています。"
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] .venv missing; creating automatically")
+    Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] .venv missing; creating automatically")
 
     if ($Py) {
         & $Py.Source -3 -m venv (Join-Path $RepoRoot ".venv") *>> $LogFile
@@ -71,7 +85,7 @@ function Ensure-MiraiDependencies {
     }
 
     Write-CycleStatus -Status "running" -Stage "dependency_repair" -Detail "Python依存関係を自動修復しています。"
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] Python dependencies missing; repairing")
+    Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] Python dependencies missing; repairing")
     & $PythonPath -m pip install -r (Join-Path $RepoRoot "requirements.txt") *>> $LogFile
     if ($LASTEXITCODE -ne 0) {
         throw "pip install -r requirements.txt failed."
@@ -80,7 +94,7 @@ function Ensure-MiraiDependencies {
 
 $mutex = New-Object System.Threading.Mutex($false, "AIYoutuberGrowthCycle")
 if (-not $mutex.WaitOne(0)) {
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] another cycle is already running; skip")
+    Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] another cycle is already running; skip")
     exit 0
 }
 
@@ -102,7 +116,7 @@ try {
     $Python = Resolve-MiraiPython
     Ensure-MiraiDependencies -PythonPath $Python
 
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] wake/cycle start")
+    Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] wake/cycle start")
     Write-CycleStatus -Status "running" -Stage "wake_start" -Detail "Windowsタスクが起動しました。"
 
     # スリープ復帰直後はNIC/DNSが戻るまで時間がかかることがある。
@@ -119,7 +133,7 @@ try {
         Start-Sleep -Seconds 5
     }
     if (-not $NetworkReady) {
-        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] network not ready after wake; keep queue and retry later")
+        Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] network not ready after wake; keep queue and retry later")
         Write-CycleStatus -Status "retry_wait" -Stage "network_wait" -Detail "スリープ復帰後90秒以内にGoogle APIへのHTTPS接続を確認できませんでした。キューは保持し、次の回復トリガーで再試行します。"
         exit 0
     }
@@ -127,11 +141,11 @@ try {
     Write-CycleStatus -Status "running" -Stage "network_ready" -Detail "ネットワーク復旧を確認しました。"
 
     # MIRAI_DUE_FIRST: スリープ復帰後は重いAIサービスより投稿を最優先。
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] due-first start")
+    Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] due-first start")
     Write-CycleStatus -Status "running" -Stage "due_first" -Detail "AIサービス起動より先にYouTube投稿判定を実行しています。"
     & $Python "scheduler.py" "--run-due" *>> $LogFile
     $DueExitCode = $LASTEXITCODE
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] due-first end exit=" + $DueExitCode)
+    Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] due-first end exit=" + $DueExitCode)
     if ($DueExitCode -eq 0) {
         Write-CycleStatus -Status "running" -Stage "due_first_done" -Detail "期限投稿判定が終了しました。" -Extra @{ due_exit_code = $DueExitCode }
     }
@@ -141,10 +155,10 @@ try {
 
     # MIRAI_SAFE_SELF_UPDATE: 投稿判定を先に終えた後でだけ自己更新を確認。
     if (Test-Path (Join-Path $RepoRoot "safe_self_update.py")) {
-        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check")
+        Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] safe self-update check")
         Write-CycleStatus -Status "running" -Stage "self_update" -Detail "投稿判定後に安全な自己更新を確認しています。"
         & $Python "safe_self_update.py" *>> $LogFile
-        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] safe self-update check end")
+        Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] safe self-update check end")
     }
 
     # 自己更新後に依存関係が増えた場合もその場で修復。
@@ -154,13 +168,13 @@ try {
     if (Test-Path (Join-Path $RepoRoot "runtime_bootstrap.py")) {
         Write-CycleStatus -Status "running" -Stage "runtime_bootstrap" -Detail "AIサービスを自動点検・復旧しています。"
         & $Python "runtime_bootstrap.py" *>> $LogFile
-        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] runtime bootstrap exit=" + $LASTEXITCODE)
+        Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] runtime bootstrap exit=" + $LASTEXITCODE)
     }
 
     Write-CycleStatus -Status "running" -Stage "tick" -Detail "通常の生成・分析サイクルを実行しています。"
     & $Python "scheduler.py" "--tick" *>> $LogFile
     $ExitCode = $LASTEXITCODE
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] cycle end exit=" + $ExitCode)
+    Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] cycle end exit=" + $ExitCode)
     if ($ExitCode -eq 0) {
         Write-CycleStatus -Status "success" -Stage "complete" -Detail "スリープ復帰/自動投稿サイクルを正常終了しました。" -Extra @{ tick_exit_code = $ExitCode; due_exit_code = $DueExitCode }
     }
@@ -169,20 +183,20 @@ try {
     }
 }
 catch {
-    Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] ERROR: " + $_.Exception.Message)
+    Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] ERROR: " + $_.Exception.Message)
     try {
         Write-CycleStatus -Status "failed" -Stage "error" -Detail $_.Exception.Message
     }
     catch {}
     try {
         if ($Python -and (Test-Path (Join-Path $RepoRoot "safe_code_repair.py"))) {
-            Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check start")
+            Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] guarded code repair check start")
             & $Python "safe_code_repair.py" *>> $LogFile
-            Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded code repair check end")
+            Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] guarded code repair check end")
         }
     }
     catch {
-        Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] guarded repair failed: " + $_.Exception.Message)
+        Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] guarded repair failed: " + $_.Exception.Message)
     }
     throw
 }

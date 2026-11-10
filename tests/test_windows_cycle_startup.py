@@ -40,5 +40,17 @@ class WindowsCycleStartupTests(unittest.TestCase):
 
 
 
+    def test_cycle_uses_utf8_only_log_and_preserves_legacy_files(self) -> None:
+        source = CYCLE.read_text(encoding="utf-8-sig")
+        self.assertIn('"-utf8.log"', source)
+        self.assertIn('[System.IO.File]::WriteAllBytes($LogFile, [byte[]]@(239, 187, 191))', source)
+        self.assertIn('$PSDefaultParameterValues["Out-File:Encoding"] = "utf8"', source)
+        self.assertIn('$env:PYTHONIOENCODING = "utf-8"', source)
+        self.assertIn('[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)', source)
+        self.assertIn("Add-Content -Path $LogFile -Encoding UTF8 -Value", source)
+        self.assertNotIn("Add-Content -Path $LogFile -Value", source)
+
+
+
 if __name__ == "__main__":
     unittest.main()
