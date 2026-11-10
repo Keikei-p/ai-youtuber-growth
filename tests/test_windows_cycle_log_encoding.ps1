@@ -15,7 +15,9 @@ try {
     catch {}
 
     Add-Content -Path $LogFile -Encoding UTF8 -Value "日本語追加確認"
-    & python -c 'print("Python日本語出力")' *>> $LogFile
+    # Pass ASCII-only source to Windows PowerShell 5.1's native argument layer.
+    # The Python process still emits Japanese UTF-8, matching real scheduler.py calls.
+    & python -c 'print(chr(80)+chr(121)+chr(116)+chr(104)+chr(111)+chr(110)+chr(0x65E5)+chr(0x672C)+chr(0x8A9E)+chr(0x51FA)+chr(0x529B))' *>> $LogFile
     if ($LASTEXITCODE -ne 0) { throw "Python log probe failed" }
     Add-Content -Path $LogFile -Encoding UTF8 -Value "追記確認"
 
