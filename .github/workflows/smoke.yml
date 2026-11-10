@@ -185,7 +185,13 @@ jobs:
             if (-not $installed) { throw "FFmpeg installation failed after 3 attempts" }
           }
           if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) {
-            choco install nsis -y --no-progress
+            $installed = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              choco install nsis -y --no-progress
+              if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+              if ($attempt -lt 3) { Start-Sleep -Seconds (10 * $attempt) }
+            }
+            if (-not $installed) { throw "NSIS installation failed after 3 attempts" }
           }
       - name: Build real Windows distributables
         shell: pwsh
