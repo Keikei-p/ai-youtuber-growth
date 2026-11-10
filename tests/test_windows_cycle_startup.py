@@ -31,6 +31,15 @@ class WindowsCycleStartupTests(unittest.TestCase):
         self.assertIn("$mutex.ReleaseMutex()", source)
         self.assertIn("$mutex.Dispose()", source)
 
+    def test_unsigned_sleep_flag_avoids_signed_hex_conversion(self) -> None:
+        source = CYCLE.read_text(encoding="utf-8-sig")
+        # Windows PowerShell 5.1 parses 0x80000000 as a negative Int32;
+        # casting that value to UInt32 raises before cycle status/logging.
+        self.assertIn("$ES_CONTINUOUS = [uint32]2147483648", source)
+        self.assertNotIn("[uint32]0x80000000", source)
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
