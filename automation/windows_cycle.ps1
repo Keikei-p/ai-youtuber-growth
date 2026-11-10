@@ -78,7 +78,7 @@ function Ensure-MiraiDependencies {
     }
 }
 
-$mutex = [System.Threading.Mutex]::new($false, "AIYoutuberGrowthCycle")
+$mutex = New-Object System.Threading.Mutex($false, "AIYoutuberGrowthCycle")
 if (-not $mutex.WaitOne(0)) {
     Add-Content -Path $LogFile -Value ("[" + (Get-Date) + "] another cycle is already running; skip")
     exit 0
