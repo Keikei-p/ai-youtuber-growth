@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $LogFile)) {
 $PSDefaultParameterValues["Out-File:Encoding"] = "utf8"
 $env:PYTHONIOENCODING = "utf-8"
 try {
-    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 }
 catch {
     # Scheduled tasks without a console may not allow this setter.
