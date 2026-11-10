@@ -505,13 +505,58 @@ def _merge_unique(
     return result
 
 
+
+def _compact_resilience_review(baseline: dict) -> dict:
+    """Keep useful playbook scores without recursively copying stored contexts.
+
+    Original failure contexts remain intact in the database and are still
+    accessible through resilience_snapshot(); only the *review report*
+    deliberately omits arbitrarily nested latest_context payloads.
+    """
+    resilience = baseline.get("resilience")
+    if not isinstance(resilience, dict):
+        return baseline
+
+    summary_keys = (
+        "total_patterns",
+        "total_failures",
+        "learned_successes",
+        "learned_patterns",
+        "unresolved_patterns",
+        "recurring_patterns",
+    )
+    playbook_keys = (
+        "fingerprint",
+        "stage",
+        "category",
+        "status",
+        "occurrences",
+        "success_count",
+        "last_seen",
+        "last_success_at",
+        "preferred_next_action",
+        "prevention_note",
+    )
+    compact = {key: resilience.get(key) for key in summary_keys}
+    compact["playbooks"] = [
+        {
+            key: row[key]
+            for key in playbook_keys
+            if key in row and isinstance(row[key], (str, int, float, bool, type(None)))
+        }
+        for row in (resilience.get("playbooks") or [])[:12]
+        if isinstance(row, dict)
+    ]
+    return {**baseline, "resilience": compact}
+
+
 def run_improvement_review() -> dict:
     failures = failure_summary()
     analytics = analytics_history(12)
     strategy = get_channel_state("growth_strategy", "")
 
     # 中核は自作の決定論的エンジン。Ollamaが落ちても改善は止まらない。
-    baseline = MiraiImprovementEngine().review()
+    baseline = _compact_resilience_review(MiraiImprovementEngine().review())
     data = dict(baseline)
 
     client = OllamaClient()
