@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $RepoRoot
@@ -94,7 +94,7 @@ public static class MiraiPowerState {
     public static extern uint SetThreadExecutionState(uint esFlags);
 }
 "@
-$ES_CONTINUOUS = [uint32]0x80000000
+$ES_CONTINUOUS = [uint32]2147483648
 $ES_SYSTEM_REQUIRED = [uint32]0x00000001
 [MiraiPowerState]::SetThreadExecutionState($ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED) | Out-Null
 
