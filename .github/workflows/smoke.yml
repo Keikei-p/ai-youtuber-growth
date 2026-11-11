@@ -36,6 +36,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw automation/network_probe.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/apply_bounded_network_probe.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/enable_hidden_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/windows_task_status.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_enable.ps1)) | Out-Null
@@ -91,6 +92,7 @@ jobs:
           [scriptblock]::Create((Get-Content -Raw automation/network_probe.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/apply_bounded_network_probe.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/enable_hidden_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/windows_task_status.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remote_access_enable.ps1)) | Out-Null
@@ -127,6 +129,11 @@ jobs:
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_windows_network_probe.ps1
           if ($LASTEXITCODE -ne 0) { throw "PowerShell 5.1 bounded network probe test failed" }
+      - name: Test invisible Windows task migration with isolated task
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_hidden_windows_task.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Invisible Windows task migration failed" }
       - name: Import dashboard and run dry-run state command
         shell: pwsh
         env:
