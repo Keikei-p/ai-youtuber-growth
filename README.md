@@ -183,6 +183,11 @@ Tailscale Serveを使い、同じtailnet内のスマホからのみ状態確認�
 
 `automation/install_windows_task.ps1` で WakeToRun / StartWhenAvailable / 多重起動防止を設定します。
 
+- Windows Task Scheduler は `automation/hidden_cycle_runner.vbs` を `wscript.exe` で非表示実行し、既存の `windows_cycle.ps1` とログ、終了コードを維持します（新規登録時）。
+- 既存の `powershell.exe` 直接起動タスクは `automation/enable_hidden_windows_task.ps1` で **起動アクションだけ** 更新できます。事前にTask Schedulerの設定XMLを `%LOCALAPPDATA%\YOROKOBI\MiraiProductionOS\task-backups` へバックアップし、従来のトリガー・権限・スリープ復帰設定を比較検証します。
+- Windows Script Host が使用不可、実行中、ユーザー独自の起動アクションがある場合は安全停止します。動画・DB・OAuth・投稿予約には触れません。
+- 非表示化はコンソールの出現対策であり、別アプリ（Ollama/VOICEVOX等）の独立したGUIウィンドウまで非表示になる保証はありません。
+
 ## 軽量製品モード / 販売準備
 
 Mirai Production OSは、待機中を軽く保ち、生成が必要な瞬間だけ重いAIサービスを起動する方針です。
