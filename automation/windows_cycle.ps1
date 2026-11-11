@@ -121,16 +121,21 @@ try {
 
     # スリープ復帰直後はNIC/DNSが戻るまで時間がかかることがある。
     # 最大90秒待ち、戻らなければキューを消費せず次の回復トリガーへ回す。
+    . (Join-Path $RepoRoot "automation\network_probe.ps1")
     $NetworkReady = $false
+    $NetworkDeadline = [DateTime]::UtcNow.AddSeconds(90)
     for ($i = 0; $i -lt 18; $i++) {
-        try {
-            if (Test-NetConnection -ComputerName "www.googleapis.com" -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue) {
-                $NetworkReady = $true
-                break
-            }
+        $RemainingMs = [int]($NetworkDeadline - [DateTime]::UtcNow).TotalMilliseconds
+        if ($RemainingMs -le 0) { break }
+        $ProbeMs = [math]::Min(4000, $RemainingMs)
+        if (Test-MiraiTcpPort -ComputerName "www.googleapis.com" -Port 443 -TimeoutMilliseconds $ProbeMs) {
+            $NetworkReady = $true
+            break
         }
-        catch {}
-        Start-Sleep -Seconds 5
+        $RemainingMs = [int]($NetworkDeadline - [DateTime]::UtcNow).TotalMilliseconds
+        if ($RemainingMs -gt 0) {
+            Start-Sleep -Milliseconds ([math]::Min(5000, $RemainingMs))
+        }
     }
     if (-not $NetworkReady) {
         Add-Content -Path $LogFile -Encoding UTF8 -Value ("[" + (Get-Date) + "] network not ready after wake; keep queue and retry later")
