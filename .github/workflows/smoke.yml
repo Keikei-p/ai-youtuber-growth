@@ -33,6 +33,8 @@ jobs:
         shell: pwsh
         run: |
           [scriptblock]::Create((Get-Content -Raw automation/windows_cycle.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/network_probe.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/apply_bounded_network_probe.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/windows_task_status.ps1)) | Out-Null
@@ -86,6 +88,8 @@ jobs:
         shell: pwsh
         run: |
           [scriptblock]::Create((Get-Content -Raw automation/windows_cycle.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/network_probe.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/apply_bounded_network_probe.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/windows_task_status.ps1)) | Out-Null
