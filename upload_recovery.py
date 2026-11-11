@@ -385,6 +385,47 @@ def _tomorrow_first_slot(now: datetime) -> datetime:
     )
 
 
+
+def _is_channel_upload_limit(message: str) -> bool:
+    """Distinguish YouTube's rolling channel upload limit from API quota."""
+    raw = str(message or "").lower()
+    return any(marker in raw for marker in (
+        "uploadlimitexceeded",
+        "exceeded the number of videos",
+        "daily video upload limit",
+    ))
+
+
+def _channel_upload_retry_slot(now: datetime) -> datetime:
+    """Next configured posting slot at least 24 hours after the limit error.
+
+    The platform's channel upload cap does not reset at local midnight.
+    An extra five minutes avoids a retry right at the rolling boundary.
+    """
+    earliest = now + timedelta(hours=24, minutes=5)
+    slots: set[tuple[int, int]] = set()
+    for value in post_times().split(","):
+        try:
+            hour, minute = (int(part) for part in value.strip().split(":"))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                slots.add((hour, minute))
+        except (TypeError, ValueError):
+            continue
+    if not slots:
+        slots.add((9, 0))
+
+    for offset in range(3):
+        day = earliest.date() + timedelta(days=offset)
+        for hour, minute in sorted(slots):
+            candidate = earliest.replace(
+                year=day.year, month=day.month, day=day.day,
+                hour=hour, minute=minute, second=0, microsecond=0,
+            )
+            if candidate >= earliest:
+                return candidate
+    return earliest + timedelta(days=1)
+
+
 def recover_upload_failure(
     row: dict[str, Any],
     error: Exception | str,
@@ -540,7 +581,11 @@ def recover_upload_failure(
             scheduled_for=retry_at.isoformat(timespec="minutes"),
         )
     elif code == "quota":
-        retry_at = _tomorrow_first_slot(now)
+        retry_at = (
+            _channel_upload_retry_slot(now)
+            if _is_channel_upload_limit(message)
+            else _tomorrow_first_slot(now)
+        )
         set_queue_recovery(
             queue_id,
             scheduled_for=retry_at.isoformat(timespec="minutes"),
