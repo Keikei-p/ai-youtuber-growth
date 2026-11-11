@@ -95,7 +95,7 @@ Copy-Item -LiteralPath $Cycle -Destination $Backup -ErrorAction Stop
 
 $HelperCreated = $false
 try {
-    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     if (-not (Test-Path -LiteralPath $Helper)) {
         [System.IO.File]::WriteAllText($Helper, $HelperText, $Utf8NoBom)
         $HelperCreated = $true
