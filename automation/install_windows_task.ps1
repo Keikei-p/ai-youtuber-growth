@@ -27,8 +27,17 @@ if (-not (Test-Path $CycleScript)) {
     throw "Cycle script not found: $CycleScript"
 }
 
-$PowerShell = (Get-Command powershell.exe).Source
-$Action = New-ScheduledTaskAction -Execute $PowerShell -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $CycleScript + '"') -WorkingDirectory $RepoRoot
+# Run the same automation cycle via WSH with an invisible window.
+# Hidden task metadata alone does not hide console windows.
+$Runner = Join-Path $RepoRoot "automation\hidden_cycle_runner.vbs"
+$WScript = Join-Path $env:SystemRoot "System32\wscript.exe"
+if (-not (Test-Path -LiteralPath $Runner -PathType Leaf)) {
+    throw "Hidden cycle runner is missing: $Runner"
+}
+if (-not (Test-Path -LiteralPath $WScript -PathType Leaf)) {
+    throw "Windows Script Host is not available: $WScript"
+}
+$Action = New-ScheduledTaskAction -Execute $WScript -Argument ('//B //Nologo "' + $Runner + '"') -WorkingDirectory $RepoRoot
 
 # Prefer the post times saved in the dashboard.
 $PostTimesRaw = ""
@@ -108,6 +117,9 @@ $Task = New-ScheduledTask -Action $Action -Trigger $Triggers -Settings $Settings
 if ($DryRun) {
     if (-not $Task.Settings.WakeToRun) {
         throw "DryRun: WakeToRun was not preserved."
+    }
+    if ($Task.Actions[0].Execute -ine $WScript) {
+        throw "DryRun: invisible Windows Script Host action was not selected."
     }
     if (@($Task.Triggers).Count -lt 4) {
         throw "DryRun: expected maintenance + daily wake triggers."
