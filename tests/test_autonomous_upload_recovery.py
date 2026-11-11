@@ -482,6 +482,47 @@ class AutonomousUploadRecoveryTests(unittest.TestCase):
             "missing_file",
         )
 
+    def test_channel_upload_limit_waits_at_least_24_hours(self) -> None:
+        video_id, _ = self._video()
+        storage.queue_video(video_id, "2026-11-10T21:00+09:00")
+        row = storage.queue_item_for_video(video_id)
+        now = datetime(2026, 11, 10, 22, 5, tzinfo=JST)
+        with patch("upload_recovery.post_times", return_value="09:00,15:00,21:00"):
+            result = recover_upload_failure(
+                row,
+                'HttpError 400: The user has exceeded the number of videos they may upload',
+                now=now,
+            )
+
+        queue = storage.queue_item_for_video(video_id)
+        self.assertEqual(result["code"], "quota")
+        self.assertTrue(result["handled"])
+        self.assertEqual(queue["status"], "queued")
+        self.assertEqual(queue["attempts"], 0)
+        self.assertEqual(queue["scheduled_for"], "2026-11-12T09:00+09:00")
+        self.assertGreaterEqual(
+            datetime.fromisoformat(queue["scheduled_for"]),
+            now + timedelta(hours=24),
+        )
+
+    def test_api_quota_keeps_existing_next_day_behavior(self) -> None:
+        video_id, _ = self._video()
+        storage.queue_video(video_id, "2026-11-10T21:00+09:00")
+        row = storage.queue_item_for_video(video_id)
+        now = datetime(2026, 11, 10, 22, 5, tzinfo=JST)
+        with patch("upload_recovery.post_times", return_value="09:00,15:00"):
+            result = recover_upload_failure(
+                row,
+                "quotaExceeded",
+                now=now,
+            )
+
+        self.assertEqual(result["code"], "quota")
+        self.assertEqual(
+            storage.queue_item_for_video(video_id)["scheduled_for"],
+            "2026-11-11T09:00+09:00",
+        )
+
     def test_dry_run_blocks_real_auto_upload(self) -> None:
         video_id, _ = self._video(first_episode=True)
         now = datetime(2026, 9, 27, 0, 30, tzinfo=JST)
