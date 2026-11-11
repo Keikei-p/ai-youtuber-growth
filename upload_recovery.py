@@ -20,6 +20,12 @@ def classify_upload_failure(error: Exception | str) -> dict[str, Any]:
     message = str(error)
     text = message.lower()
 
+    if _is_channel_upload_limit(message):
+        return {
+            "code": "quota",
+            "retryable": True,
+            "safe_action": "reschedule_after_channel_cooldown",
+        }
     if any(x in text for x in (
         "invalid_grant", "unauthorized", "401", "refresh token",
         "credential", "token.json", "再認証", "oauth",
