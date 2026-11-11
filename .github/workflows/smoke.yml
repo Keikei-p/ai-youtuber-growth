@@ -33,6 +33,8 @@ jobs:
         shell: pwsh
         run: |
           [scriptblock]::Create((Get-Content -Raw automation/windows_cycle.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/network_probe.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/apply_bounded_network_probe.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/windows_task_status.ps1)) | Out-Null
@@ -86,6 +88,8 @@ jobs:
         shell: pwsh
         run: |
           [scriptblock]::Create((Get-Content -Raw automation/windows_cycle.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/network_probe.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw automation/apply_bounded_network_probe.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/install_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/remove_windows_task.ps1)) | Out-Null
           [scriptblock]::Create((Get-Content -Raw automation/windows_task_status.ps1)) | Out-Null
@@ -118,6 +122,11 @@ jobs:
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_windows_cycle_log_encoding.ps1
           if ($LASTEXITCODE -ne 0) { throw "PowerShell 5.1 UTF-8 log test failed" }
+      - name: Verify bounded network probe using Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_windows_network_probe.ps1
+          if ($LASTEXITCODE -ne 0) { throw "PowerShell 5.1 bounded network probe test failed" }
       - name: Import dashboard and run dry-run state command
         shell: pwsh
         env:
